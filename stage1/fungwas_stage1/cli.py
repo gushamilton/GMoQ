@@ -21,10 +21,10 @@ import logging
 import os
 import re
 import sqlite3
-from collections import Counter
 import struct
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Optional, List, Set
 
