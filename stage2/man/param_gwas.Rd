@@ -8,7 +8,7 @@ param_gwas(
   stage1,
   transform = c("custom_W", "two_normal"),
   transform_args = list(),
-  se_mode = c("diagonal", "plugin_cor", "dwls", "tau_cov"),
+  se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   plugin_R = NULL,
   cov_data = NULL,
   tau_cov_estimator = c("gls", "ols"),
@@ -30,27 +30,33 @@ param_gwas(
 
 \item{se_mode}{Standard error mode:
 \itemize{
-\item \code{"diagonal"} – assume independence across taus (fast).
+\item \code{"tau_cov"} – use per-SNP jackknife covariance from Stage 1 (most accurate).
+\item \code{"diagonal"} – assume independence across taus (fast fallback only).
 \item \code{"plugin_cor"} – plugin correlation with near-PD repair.
 \item \code{"dwls"} – diagonal weighted least squares (Q test calibrated).
-\item \code{"tau_cov"} – use per-SNP jackknife covariance from Stage 1 (most accurate).
 }}
 
 \item{plugin_R}{Optional T x T correlation matrix for \code{"plugin_cor"}.}
 
 \item{cov_data}{For \code{se_mode = "tau_cov"}: either a list with \code{cov_vec}
 (numeric vector of covariance data) and \code{offsets} (byte offsets per SNP),
-or NULL to use diagonal fallback.}
+\code{se_mode = "tau_cov"} requires covariance data; use
+\code{se_mode = "diagonal"} explicitly only for fallback/debug runs.}
 
 \item{tau_cov_estimator}{Estimator used when \code{se_mode = "tau_cov"} and
-covariance data are available. \code{"gls"} uses the per-SNP covariance for
-generalized least squares; \code{"ols"} preserves the fixed unweighted
-projection with covariance-propagated SEs.}
+covariance data are available. Defaults to \code{"gls"}: the per-SNP
+tau-by-tau covariance is used as the weight matrix for generalized least
+squares, which is the efficient (minimum-variance) estimator under the
+Stage 1 covariance and gives correctly calibrated SEs and Q statistics
+when the quantile estimates are strongly correlated across taus.
+\code{"ols"} remains fully available and preserves the fixed unweighted
+projection with covariance-propagated SEs; it is consistent but less
+efficient, and is retained for reproducing earlier runs.}
 
 \item{gls_ridge}{Relative diagonal ridge added only when a per-SNP covariance
 matrix cannot be inverted for GLS.}
 
-\item{n_threads}{Number of OpenMP threads for GLS tau-covariance estimation.}
+\item{n_threads}{Number of OpenMP threads for tau-covariance estimation.}
 
 \item{return_cov}{Optional output of parameter covariance derived from Stage 1
 tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle

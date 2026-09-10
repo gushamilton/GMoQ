@@ -151,9 +151,14 @@ quantile_gwas <- function(
 #'   \code{se_mode = "tau_cov"} requires covariance data; use
 #'   \code{se_mode = "diagonal"} explicitly only for fallback/debug runs.
 #' @param tau_cov_estimator Estimator used when \code{se_mode = "tau_cov"} and
-#'   covariance data are available. \code{"ols"} preserves the fixed unweighted
-#'   projection with covariance-propagated SEs; \code{"gls"} uses the per-SNP
-#'   covariance for generalized least squares.
+#'   covariance data are available. Defaults to \code{"gls"}: the per-SNP
+#'   tau-by-tau covariance is used as the weight matrix for generalized least
+#'   squares, which is the efficient (minimum-variance) estimator under the
+#'   Stage 1 covariance and gives correctly calibrated SEs and Q statistics
+#'   when the quantile estimates are strongly correlated across taus.
+#'   \code{"ols"} remains fully available and preserves the fixed unweighted
+#'   projection with covariance-propagated SEs; it is consistent but less
+#'   efficient, and is retained for reproducing earlier runs.
 #' @param gls_ridge Relative diagonal ridge added only when a per-SNP covariance
 #'   matrix cannot be inverted for GLS.
 #' @param n_threads Number of OpenMP threads for tau-covariance estimation.
@@ -177,7 +182,7 @@ param_gwas <- function(
   se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   plugin_R = NULL,
   cov_data = NULL,
-  tau_cov_estimator = c("ols", "gls"),
+  tau_cov_estimator = c("gls", "ols"),
   gls_ridge = 1e-8,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr")
@@ -297,6 +302,23 @@ if (se_mode == "diagonal") {
     rownames(SE_params) <- colnames(W)
     colnames(SE_params) <- colnames(Q_slope)
     Q_stat <- gls_fit$Q
+    if (!is.null(gls_fit$diag)) {
+      d <- gls_fit$diag
+      message(sprintf(
+        paste0("GLS tau_cov diagnostics: %.0f SNPs, %.0f solved (%.4f%%); ",
+               "ridge repair attempted %.0f (%.4f%%), rescued %.0f, ",
+               "Sigma still not SPD %.0f; skipped: beta non-finite %.0f, ",
+               "bad offset %.0f, cov non-finite %.0f, Sigma solve fail %.0f, ",
+               "WtSinvW not SPD %.0f, theta fail %.0f, Vtheta fail %.0f, Q invalid %.0f"),
+        d$n_snps, d$n_ok, 100 * d$n_ok / max(d$n_snps, 1),
+        d$n_ridge_tried, 100 * d$n_ridge_tried / max(d$n_snps, 1),
+        d$n_ridge_rescued, d$n_sigma_not_spd,
+        d$n_beta_nonfinite, d$n_offset_bad, d$n_cov_nonfinite,
+        d$n_solve_fail, d$n_xtx_not_spd, d$n_theta_fail,
+        d$n_vtheta_fail, d$n_q_bad
+      ))
+      gls_diag <- d
+    }
   } else {
     # Use C++ helper for fast computation
     se_mat <- compute_calibrated_se(
@@ -377,6 +399,7 @@ if (se_mode == "diagonal") {
   if (return_cov == "mashr") out$mashr <- mashr_inputs
   if (se_mode == "plugin_cor") out$R_tau <- R_tau
   if (se_mode == "tau_cov") out$tau_cov_estimator <- tau_cov_estimator
+  if (exists("gls_diag", inherits = FALSE)) out$gls_diag <- gls_diag
   out
 }
 
@@ -574,7 +597,7 @@ param_gwas_from_file <- function(
   param_cov_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
-  tau_cov_estimator = c("ols", "gls"),
+  tau_cov_estimator = c("gls", "ols"),
   gls_ridge = 1e-8,
   n_threads = 1L
 ) {

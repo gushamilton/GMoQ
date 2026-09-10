@@ -179,17 +179,35 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
     std::fill(param_cov_upper.begin(), param_cov_upper.end(), NA_REAL);
   }
 
+  // Diagnostic counters. Purely observational: they do not affect any numeric
+  // result. Used to report how often the ridge repair path fires on real data.
+  long long d_beta_nonfinite = 0;
+  long long d_offset_bad = 0;
+  long long d_cov_nonfinite = 0;
+  long long d_ridge_tried = 0;
+  long long d_ridge_rescued = 0;
+  long long d_sigma_not_spd = 0;
+  long long d_solve_fail = 0;
+  long long d_xtx_not_spd = 0;
+  long long d_theta_fail = 0;
+  long long d_vtheta_fail = 0;
+  long long d_q_bad = 0;
+  long long d_ok = 0;
+
   #ifdef _OPENMP
   omp_set_num_threads(n_threads);
   #endif
 
-  #pragma omp parallel for schedule(dynamic, 20)
+  #pragma omp parallel for schedule(dynamic, 20) \
+    reduction(+:d_beta_nonfinite,d_offset_bad,d_cov_nonfinite,d_ridge_tried, \
+                d_ridge_rescued,d_sigma_not_spd,d_solve_fail,d_xtx_not_spd, \
+                d_theta_fail,d_vtheta_fail,d_q_bad,d_ok)
   for (int i = 0; i < n_snps; i++) {
     const arma::vec beta_vec = beta_stage1.col(i);
-    if (!beta_vec.is_finite()) continue;
+    if (!beta_vec.is_finite()) { d_beta_nonfinite++; continue; }
 
     const long long start_idx = (long long)(offsets[i] / 4);
-    if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) continue;
+    if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) { d_offset_bad++; continue; }
 
     arma::mat Sigma(K, K, arma::fill::zeros);
     bool cov_ok = true;
@@ -207,18 +225,20 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
       }
       if (!cov_ok) break;
     }
-    if (!cov_ok) continue;
+    if (!cov_ok) { d_cov_nonfinite++; continue; }
 
     arma::mat chol_tmp;
     bool sigma_spd = arma::chol(chol_tmp, Sigma, "lower");
     if (!sigma_spd && gls_ridge > 0.0) {
+      d_ridge_tried++;
       const arma::vec d = Sigma.diag();
       double diag_scale = arma::mean(d.elem(arma::find_finite(d)));
       if (!std::isfinite(diag_scale) || diag_scale <= 0.0) diag_scale = 1.0;
       Sigma.diag() += gls_ridge * diag_scale;
       sigma_spd = arma::chol(chol_tmp, Sigma, "lower");
+      if (sigma_spd) d_ridge_rescued++;
     }
-    if (!sigma_spd) continue;
+    if (!sigma_spd) { d_sigma_not_spd++; continue; }
 
     arma::mat rhs(K, n_params + 1);
     rhs.cols(0, n_params - 1) = W_mat;
@@ -228,33 +248,34 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
     bool ok = arma::solve(SinvRhs, Sigma, rhs,
                           arma::solve_opts::fast + arma::solve_opts::likely_sympd);
 
-    if (!ok || !SinvRhs.is_finite()) continue;
+    if (!ok || !SinvRhs.is_finite()) { d_solve_fail++; continue; }
 
     arma::mat SinvW = SinvRhs.cols(0, n_params - 1);
     arma::vec SinvBeta = SinvRhs.col(n_params);
     arma::mat WtSinvW = W_mat.t() * SinvW;
     WtSinvW = 0.5 * (WtSinvW + WtSinvW.t());
-    if (!arma::chol(chol_tmp, WtSinvW, "lower")) continue;
+    if (!arma::chol(chol_tmp, WtSinvW, "lower")) { d_xtx_not_spd++; continue; }
 
     arma::vec WtSinvBeta = W_mat.t() * SinvBeta;
 
     arma::vec theta;
     ok = arma::solve(theta, WtSinvW, WtSinvBeta,
                      arma::solve_opts::fast + arma::solve_opts::likely_sympd);
-    if (!ok || !theta.is_finite()) continue;
+    if (!ok || !theta.is_finite()) { d_theta_fail++; continue; }
 
     arma::mat Vtheta;
     ok = arma::solve(Vtheta, WtSinvW, arma::eye(n_params, n_params),
                      arma::solve_opts::fast + arma::solve_opts::likely_sympd);
-    if (!ok || !Vtheta.is_finite()) continue;
+    if (!ok || !Vtheta.is_finite()) { d_vtheta_fail++; continue; }
 
     arma::vec resid = beta_vec - W_mat * theta;
     arma::vec SinvResid = SinvBeta - SinvW * theta;
     double q_val = arma::dot(resid, SinvResid);
-    if (!std::isfinite(q_val)) continue;
-    if (q_val < -1e-8) continue;
+    if (!std::isfinite(q_val)) { d_q_bad++; continue; }
+    if (q_val < -1e-8) { d_q_bad++; continue; }
     if (q_val < 0.0) q_val = 0.0;
 
+    d_ok++;
     params.col(i) = theta;
     for (int p = 0; p < n_params; p++) {
       double var = Vtheta(p, p);
@@ -277,6 +298,21 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
     _["params"] = params,
     _["se"] = se,
     _["Q"] = Q
+  );
+  out["diag"] = List::create(
+    _["n_snps"] = (double) n_snps,
+    _["n_ok"] = (double) d_ok,
+    _["n_beta_nonfinite"] = (double) d_beta_nonfinite,
+    _["n_offset_bad"] = (double) d_offset_bad,
+    _["n_cov_nonfinite"] = (double) d_cov_nonfinite,
+    _["n_ridge_tried"] = (double) d_ridge_tried,
+    _["n_ridge_rescued"] = (double) d_ridge_rescued,
+    _["n_sigma_not_spd"] = (double) d_sigma_not_spd,
+    _["n_solve_fail"] = (double) d_solve_fail,
+    _["n_xtx_not_spd"] = (double) d_xtx_not_spd,
+    _["n_theta_fail"] = (double) d_theta_fail,
+    _["n_vtheta_fail"] = (double) d_vtheta_fail,
+    _["n_q_bad"] = (double) d_q_bad
   );
   if (return_cov) {
     out["param_cov_upper"] = param_cov_upper;
