@@ -49,20 +49,28 @@ def get_armadillo_lib():
 # BluePebble `short` allocation can land on Skylake-SP, Cascade Lake *or* an AMD node,
 # and a binary built with -march=native on one of those can SIGILL on another.
 #
-# The default below is therefore -march=haswell (AVX2 + FMA + BMI2, i.e. the
-# x86-64-v3 feature level; spelled explicitly because the system compiler here is
-# GCC 8, which predates the -march=x86-64-v3 alias).  Every compute node in the pool
-# supports it.  -mtune tunes scheduling for the majority Intel parts without
-# restricting the instruction set.
+# The default is nevertheless left EMPTY, i.e. the SSE2 baseline is kept, because raising
+# it was measured on BluePebble and bought nothing: interleaved on one node, 15 timings per
+# build of a production-shaped 500-SNP batch, the median kernel time with
+# -march=haswell was 0.9997 of the SSE2 baseline against a 9-22% run-to-run IQR.  The
+# kernel is memory-bound (0.38 flop/byte, IPC 0.7) and its inner loops stride down the
+# wrong axis, so GCC can contract FMAs - 131 of the 136 it emits are *scalar* - but cannot
+# widen anything.  -march=skylake-avx512 is no better: GCC 8 emits zero zmm registers for
+# it and produces bitwise identical results to -march=haswell.
 #
-# Override with FUNGWAS_STAGE1_ARCH, e.g.
-#   FUNGWAS_STAGE1_ARCH=""                       # SSE2 baseline (the old behaviour)
-#   FUNGWAS_STAGE1_ARCH="-march=skylake-avx512"  # Intel-only, AVX-512
-#   FUNGWAS_STAGE1_ARCH="-march=native"          # this build host only; not portable
+# Enabling it is not free: FMA contraction changes float64 results in the last bits
+# (measured max absolute difference 2.2e-16, max |delta beta|/SE 4.6e-15).  That is far
+# below the %.6g and int8 resolution of the Stage 1 outputs, which are byte-identical
+# either way - but changing results for no measured gain is a bad default.
 #
-# NOTE: allowing FMA contraction changes floating-point results in the last bits
-# relative to the SSE2 baseline.  -ffast-math is deliberately NOT used.
-_DEFAULT_ARCH_FLAGS = '-march=haswell -mtune=skylake-avx512'
+# The mechanism is kept so the ISA is a deliberate, documented choice rather than an
+# accident, and so a future kernel with a better access pattern can turn it on:
+#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512"  # AVX2+FMA, portable
+#   FUNGWAS_STAGE1_ARCH="-march=skylake-avx512"                 # Intel-only, no gain here
+#   FUNGWAS_STAGE1_ARCH="-march=native"                         # NOT portable, see above
+#
+# -ffast-math is deliberately never used.
+_DEFAULT_ARCH_FLAGS = ''
 _arch_env = os.environ.get('FUNGWAS_STAGE1_ARCH')
 _arch_flags = (_DEFAULT_ARCH_FLAGS if _arch_env is None else _arch_env).split()
 
