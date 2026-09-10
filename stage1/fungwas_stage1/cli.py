@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import sqlite3
+from collections import Counter
 import struct
 import sys
 import time
@@ -327,6 +328,50 @@ def find_multiallelic_rsids_from_bgi(bgen_path: str, requested_rsids: Optional[S
         conn.close()
 
 
+def query_bgi_records_for_rsids(bgen_path: str, requested_rsids: Set[str]) -> List[tuple]:
+    """Return the .bgi records for a set of rsIDs, in BGEN file order, in one index scan.
+
+    Returns tuples ``(file_start_position, chromosome, position, rsid)`` for every BGEN
+    record whose rsID is in ``requested_rsids``. Records are ordered by
+    ``file_start_position``, i.e. exactly the order a record-by-record walk of the BGEN
+    visits them in, so downstream ordering is unchanged.
+
+    The UK Biobank .bgi has ``PRIMARY KEY (chromosome, position, rsid, allele1, allele2,
+    file_start_position)`` and no index on ``rsid`` alone, so ``WHERE rsid = ?`` degrades
+    to a full table scan *per lookup*. A single JOIN against a TEMP table of the requested
+    rsIDs pays one scan for the whole set instead - the same pattern already used by
+    find_multiallelic_rsids_from_bgi.
+    """
+    bgi_path = f"{bgen_path}.bgi"
+    if not os.path.exists(bgi_path):
+        raise FileNotFoundError(f"Missing BGEN index required for indexed variant access: {bgi_path}")
+
+    if not requested_rsids:
+        return []
+
+    conn = sqlite3.connect(bgi_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Variant'")
+        if cur.fetchone() is None:
+            raise ValueError(f"BGEN index does not contain Variant table: {bgi_path}")
+
+        cur.execute("CREATE TEMP TABLE requested_rsid (rsid TEXT PRIMARY KEY)")
+        cur.executemany(
+            "INSERT OR IGNORE INTO requested_rsid (rsid) VALUES (?)",
+            ((rsid,) for rsid in requested_rsids),
+        )
+        query = (
+            "SELECT v.file_start_position, v.chromosome, v.position, v.rsid "
+            "FROM Variant v "
+            "JOIN requested_rsid r ON v.rsid = r.rsid "
+            "ORDER BY v.file_start_position"
+        )
+        return cur.execute(query).fetchall()
+    finally:
+        conn.close()
+
+
 def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Optional[str],
                          keep_file: Optional[str] = None,
                          covar_cols: Optional[list[str]] = None) -> tuple:
@@ -443,6 +488,60 @@ class VariantGenerator:
                     break
 
 
+class SeekingVariantGenerator:
+    """Yield the requested variants in BGEN file order by seeking to indexed offsets.
+
+    Equivalent to VariantGenerator, but reads only the selected records instead of
+    walking every record in the file. ``records`` must be
+    ``(file_start_position, chromosome, position, rsid)`` tuples for the target rsIDs,
+    already ordered by ``file_start_position``, so the yielded order matches the
+    record-by-record walk exactly.
+
+    Seeking goes through ``BgenReader.fetch(chrom, pos, pos)``, whose .bgi query is an
+    index SEARCH on the (chromosome, position) primary-key prefix. (``with_rsid`` is
+    deliberately not used: the .bgi has no rsid index, so it is a full table scan per
+    lookup.) Records sharing a position that are not targets are discarded by file
+    offset, and targets sharing a position are re-sorted by offset so file order is
+    preserved there too.
+    """
+
+    def __init__(self, bfile, records, snp_set):
+        self.bfile = bfile  # Keep handle alive!
+        self.records = records
+        self.snp_set = snp_set
+        self.found = 0
+        self.target = len(snp_set)
+
+    def __iter__(self):
+        recs = self.records
+        n = len(recs)
+        i = 0
+        while i < n:
+            chrom = recs[i][1]
+            pos = recs[i][2]
+            wanted = set()
+            j = i
+            while j < n and recs[j][1] == chrom and recs[j][2] == pos:
+                wanted.add(recs[j][0])
+                j += 1
+            i = j
+
+            # Materialise the fetch before yielding: BgenReader.fetch is a generator over
+            # a sqlite cursor shared with the rest of the index, so it must be drained
+            # before control leaves this frame.
+            candidates = [var for var in list(self.bfile.fetch(chrom, pos, pos))
+                          if var.fileoffset in wanted]
+            candidates.sort(key=lambda var: var.fileoffset)
+
+            for var in candidates:
+                if var.rsid not in self.snp_set:
+                    continue
+                self.found += 1
+                yield var
+                if self.found >= self.target:
+                    return
+
+
 class FilteredBgenIterator:
     """Iterator over all BGEN records except excluded rsIDs."""
     def __init__(self, bfile, excluded_rsids: Optional[Set[str]] = None):
@@ -456,7 +555,8 @@ class FilteredBgenIterator:
 
 
 def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
-                      snp_list: Optional[List[str]], allow_multiallelic_rsids: bool = False):
+                      snp_list: Optional[List[str]], allow_multiallelic_rsids: bool = False,
+                      seek_variants: bool = True):
     """
     Get variants from BGEN file using the bgen package.
     
@@ -476,11 +576,43 @@ def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
     
     if snp_list:
         log_mem(f"Fetching {len(snp_list)} specific SNPs using bgen...")
-        
-        # Pre-filter: intersect user SNPs with BGEN contents using index
+
+        snp_set = set(snp_list)
+        bgi_path = f"{bgen_path}.bgi"
+
+        if seek_variants and os.path.exists(bgi_path):
+            # One .bgi scan gives membership, the multiallelic-rsID record counts AND the
+            # file offsets, so the selected records can be seeked to directly instead of
+            # walking every record in the chromosome.
+            log_mem("Reading BGEN index for variant list...")
+            records = query_bgi_records_for_rsids(bgen_path, snp_set)
+            record_counts = Counter(rec[3] for rec in records)
+            valid_snps = set(record_counts)
+            invalid_count = len(snp_set) - len(valid_snps)
+
+            if invalid_count > 0:
+                log_mem(f"{invalid_count} requested SNPs not in BGEN, processing {len(valid_snps)}")
+
+            if len(valid_snps) == 0:
+                logger.warning("No valid SNPs found in BGEN file!")
+
+            if not allow_multiallelic_rsids:
+                excluded_rsids = {rsid for rsid, count in record_counts.items() if count > 1}
+                if excluded_rsids:
+                    valid_snps = valid_snps - excluded_rsids
+                    log_mem(
+                        f"Excluded {len(excluded_rsids)} requested rsIDs with multiple BGEN records; "
+                        f"processing {len(valid_snps)} unambiguous SNPs"
+                    )
+
+            records = [rec for rec in records if rec[3] in valid_snps]
+            log_mem(f"Seeking to {len(records)} indexed BGEN records (skipping the full-file walk)")
+            gen = SeekingVariantGenerator(bfile, records, valid_snps)
+            return gen, bfile.samples, bfile
+
+        # Fallback: no usable index, or --no-seek-variants. Walk the file record-by-record.
         log_mem("Reading BGEN index for variant list...")
         bgen_rsids = set(bfile.rsids())
-        snp_set = set(snp_list)
         valid_snps = snp_set & bgen_rsids
         invalid_count = len(snp_set) - len(valid_snps)
         
@@ -643,6 +775,10 @@ def main():
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
                         help='Allow the uncompiled NumPy fallback. This can be ~1000x slower and is for debugging only.')
+    parser.add_argument('--no-seek-variants', dest='seek_variants', action='store_false',
+                        help='Walk the BGEN record-by-record instead of seeking to .bgi file '
+                             'offsets (slower; kept for validation and for BGENs with no index).')
+    parser.set_defaults(seek_variants=True)
     parser.add_argument('--allow-multiallelic-rsids', action='store_true',
                         help='Allow rsIDs that map to multiple BGEN records. By default these are excluded using the .bgi index.')
     
@@ -741,7 +877,8 @@ def main():
     
     # Open BGEN and get variants
     variants, bgen_samples, bfile_handle = get_variants_bgen(
-        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids
+        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
+        seek_variants=args.seek_variants
     )
     
     # Match samples
