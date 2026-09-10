@@ -24,6 +24,7 @@ import sqlite3
 import struct
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Optional, List, Set
 
@@ -34,6 +35,7 @@ from .core import (
     residualize,
     compute_block_scores,
     compute_block_scores_multi,
+    compute_block_finalize,
     compute_covariance_from_blocks,
     resolve_covar_cols,
     set_numpy_fallback_allowed,
@@ -327,6 +329,50 @@ def find_multiallelic_rsids_from_bgi(bgen_path: str, requested_rsids: Optional[S
         conn.close()
 
 
+def query_bgi_records_for_rsids(bgen_path: str, requested_rsids: Set[str]) -> List[tuple]:
+    """Return the .bgi records for a set of rsIDs, in BGEN file order, in one index scan.
+
+    Returns tuples ``(file_start_position, chromosome, position, rsid)`` for every BGEN
+    record whose rsID is in ``requested_rsids``. Records are ordered by
+    ``file_start_position``, i.e. exactly the order a record-by-record walk of the BGEN
+    visits them in, so downstream ordering is unchanged.
+
+    The UK Biobank .bgi has ``PRIMARY KEY (chromosome, position, rsid, allele1, allele2,
+    file_start_position)`` and no index on ``rsid`` alone, so ``WHERE rsid = ?`` degrades
+    to a full table scan *per lookup*. A single JOIN against a TEMP table of the requested
+    rsIDs pays one scan for the whole set instead - the same pattern already used by
+    find_multiallelic_rsids_from_bgi.
+    """
+    bgi_path = f"{bgen_path}.bgi"
+    if not os.path.exists(bgi_path):
+        raise FileNotFoundError(f"Missing BGEN index required for indexed variant access: {bgi_path}")
+
+    if not requested_rsids:
+        return []
+
+    conn = sqlite3.connect(bgi_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Variant'")
+        if cur.fetchone() is None:
+            raise ValueError(f"BGEN index does not contain Variant table: {bgi_path}")
+
+        cur.execute("CREATE TEMP TABLE requested_rsid (rsid TEXT PRIMARY KEY)")
+        cur.executemany(
+            "INSERT OR IGNORE INTO requested_rsid (rsid) VALUES (?)",
+            ((rsid,) for rsid in requested_rsids),
+        )
+        query = (
+            "SELECT v.file_start_position, v.chromosome, v.position, v.rsid "
+            "FROM Variant v "
+            "JOIN requested_rsid r ON v.rsid = r.rsid "
+            "ORDER BY v.file_start_position"
+        )
+        return cur.execute(query).fetchall()
+    finally:
+        conn.close()
+
+
 def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Optional[str],
                          keep_file: Optional[str] = None,
                          covar_cols: Optional[list[str]] = None) -> tuple:
@@ -443,6 +489,60 @@ class VariantGenerator:
                     break
 
 
+class SeekingVariantGenerator:
+    """Yield the requested variants in BGEN file order by seeking to indexed offsets.
+
+    Equivalent to VariantGenerator, but reads only the selected records instead of
+    walking every record in the file. ``records`` must be
+    ``(file_start_position, chromosome, position, rsid)`` tuples for the target rsIDs,
+    already ordered by ``file_start_position``, so the yielded order matches the
+    record-by-record walk exactly.
+
+    Seeking goes through ``BgenReader.fetch(chrom, pos, pos)``, whose .bgi query is an
+    index SEARCH on the (chromosome, position) primary-key prefix. (``with_rsid`` is
+    deliberately not used: the .bgi has no rsid index, so it is a full table scan per
+    lookup.) Records sharing a position that are not targets are discarded by file
+    offset, and targets sharing a position are re-sorted by offset so file order is
+    preserved there too.
+    """
+
+    def __init__(self, bfile, records, snp_set):
+        self.bfile = bfile  # Keep handle alive!
+        self.records = records
+        self.snp_set = snp_set
+        self.found = 0
+        self.target = len(snp_set)
+
+    def __iter__(self):
+        recs = self.records
+        n = len(recs)
+        i = 0
+        while i < n:
+            chrom = recs[i][1]
+            pos = recs[i][2]
+            wanted = set()
+            j = i
+            while j < n and recs[j][1] == chrom and recs[j][2] == pos:
+                wanted.add(recs[j][0])
+                j += 1
+            i = j
+
+            # Materialise the fetch before yielding: BgenReader.fetch is a generator over
+            # a sqlite cursor shared with the rest of the index, so it must be drained
+            # before control leaves this frame.
+            candidates = [var for var in list(self.bfile.fetch(chrom, pos, pos))
+                          if var.fileoffset in wanted]
+            candidates.sort(key=lambda var: var.fileoffset)
+
+            for var in candidates:
+                if var.rsid not in self.snp_set:
+                    continue
+                self.found += 1
+                yield var
+                if self.found >= self.target:
+                    return
+
+
 class FilteredBgenIterator:
     """Iterator over all BGEN records except excluded rsIDs."""
     def __init__(self, bfile, excluded_rsids: Optional[Set[str]] = None):
@@ -456,7 +556,8 @@ class FilteredBgenIterator:
 
 
 def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
-                      snp_list: Optional[List[str]], allow_multiallelic_rsids: bool = False):
+                      snp_list: Optional[List[str]], allow_multiallelic_rsids: bool = False,
+                      seek_variants: bool = True):
     """
     Get variants from BGEN file using the bgen package.
     
@@ -476,11 +577,43 @@ def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
     
     if snp_list:
         log_mem(f"Fetching {len(snp_list)} specific SNPs using bgen...")
-        
-        # Pre-filter: intersect user SNPs with BGEN contents using index
+
+        snp_set = set(snp_list)
+        bgi_path = f"{bgen_path}.bgi"
+
+        if seek_variants and os.path.exists(bgi_path):
+            # One .bgi scan gives membership, the multiallelic-rsID record counts AND the
+            # file offsets, so the selected records can be seeked to directly instead of
+            # walking every record in the chromosome.
+            log_mem("Reading BGEN index for variant list...")
+            records = query_bgi_records_for_rsids(bgen_path, snp_set)
+            record_counts = Counter(rec[3] for rec in records)
+            valid_snps = set(record_counts)
+            invalid_count = len(snp_set) - len(valid_snps)
+
+            if invalid_count > 0:
+                log_mem(f"{invalid_count} requested SNPs not in BGEN, processing {len(valid_snps)}")
+
+            if len(valid_snps) == 0:
+                logger.warning("No valid SNPs found in BGEN file!")
+
+            if not allow_multiallelic_rsids:
+                excluded_rsids = {rsid for rsid, count in record_counts.items() if count > 1}
+                if excluded_rsids:
+                    valid_snps = valid_snps - excluded_rsids
+                    log_mem(
+                        f"Excluded {len(excluded_rsids)} requested rsIDs with multiple BGEN records; "
+                        f"processing {len(valid_snps)} unambiguous SNPs"
+                    )
+
+            records = [rec for rec in records if rec[3] in valid_snps]
+            log_mem(f"Seeking to {len(records)} indexed BGEN records (skipping the full-file walk)")
+            gen = SeekingVariantGenerator(bfile, records, valid_snps)
+            return gen, bfile.samples, bfile
+
+        # Fallback: no usable index, or --no-seek-variants. Walk the file record-by-record.
         log_mem("Reading BGEN index for variant list...")
         bgen_rsids = set(bfile.rsids())
-        snp_set = set(snp_list)
         valid_snps = snp_set & bgen_rsids
         invalid_count = len(snp_set) - len(valid_snps)
         
@@ -586,6 +719,93 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 all_betas.append(beta)
 
 
+def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+                            f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
+    """Write one batch from the fused C++ finalizer output.
+
+    Byte-for-byte the same output layout as write_stats_batch; only the arithmetic that
+    produced beta/se/Sigma differs (C++ rather than NumPy).  The skip rule is the same
+    test in a different place: write_stats_batch skips a SNP whose block statistics are
+    NaN, and the fused path returns NaN beta/se/cov for exactly those SNPs (the C++
+    genotype filter guarantees sum(g_resid^2) >= min_var > 0, so the only way to reach a
+    non-positive jackknife denominator is to have failed that filter already).
+    """
+    for p_idx, (betas, se_all, cov_all) in enumerate(fused_list):
+        f_tsv = f_tsv_list[p_idx]
+        f_cov = f_cov_list[p_idx]
+        f_cov_ids = f_cov_ids_list[p_idx]
+        f_cov_scale = f_cov_scale_list[p_idx]
+        all_betas = all_betas_list[p_idx]
+
+        for j, info in enumerate(batch_info):
+            if np.isnan(betas[j, 0]):
+                continue
+
+            beta = betas[j]
+            se = se_all[j]
+            cov_upper = cov_all[j]
+
+            row = list(info)
+            for b, s in zip(beta, se):
+                row.extend([f'{b:.6g}', f'{s:.6g}'])
+            f_tsv.write('\t'.join(map(str, row)) + '\n')
+
+            if args.cov_dtype == 'int8':
+                scale = np.max(np.abs(cov_upper)) / 127.0
+                if not np.isfinite(scale) or scale <= 0:
+                    scale = 1.0
+                cov_q = np.clip(np.rint(cov_upper / scale), -127, 127).astype(np.int8)
+                f_cov.write(cov_q.tobytes(order='C'))
+                f_cov_scale.write(struct.pack('f', float(scale)))
+            else:
+                f_cov.write(struct.pack(f'{n_cov_elements}f', *cov_upper))
+            f_cov_ids.write('\t'.join(map(str, info)) + '\n')
+
+            if args.output_rtau:
+                all_betas.append(np.asarray(beta))
+
+
+def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
+                   f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
+                   all_betas_list, n_cov_elements, T):
+    """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
+    t_compute = time.perf_counter()
+    if use_multi:
+        stats_list = compute_block_scores_multi(
+            G_view, RIF_resid_list, Q, block_ids, args.blocks, n_threads=args.threads
+        )
+        fused_list = None
+    elif args.fused_finalize:
+        fused_list = [
+            compute_block_finalize(
+                G_view, RIF_resid_list[0], Q, block_ids, args.blocks, n_threads=args.threads
+            )
+        ]
+        stats_list = None
+    else:
+        stats_list = [
+            compute_block_scores(
+                G_view, RIF_resid_list[0], Q, block_ids, args.blocks, n_threads=args.threads
+            )
+        ]
+        fused_list = None
+    compute_s = time.perf_counter() - t_compute
+
+    t_write = time.perf_counter()
+    if fused_list is not None:
+        write_stats_batch_fused(
+            fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+            f_cov_scale_list, all_betas_list, n_cov_elements, T
+        )
+    else:
+        write_stats_batch(
+            stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+            f_cov_scale_list, all_betas_list, n_cov_elements, T
+        )
+    write_s = time.perf_counter() - t_write
+    return compute_s, write_s
+
+
 def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np.ndarray],
                               X_full: np.ndarray, taus: np.ndarray,
                               loco_predictions: Optional[dict[str, dict[str, np.ndarray]]],
@@ -643,6 +863,15 @@ def main():
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
                         help='Allow the uncompiled NumPy fallback. This can be ~1000x slower and is for debugging only.')
+    parser.add_argument('--fused-finalize', dest='fused_finalize', action='store_true',
+                        help='Compute beta/SE/covariance inside the C++ OpenMP loop instead of '
+                             'returning per-block statistics and redoing the work per SNP in NumPy. '
+                             'Single-phenotype only. Results differ from the NumPy path in the last '
+                             'bits (different summation order).')
+    parser.add_argument('--no-seek-variants', dest='seek_variants', action='store_false',
+                        help='Walk the BGEN record-by-record instead of seeking to .bgi file '
+                             'offsets (slower; kept for validation and for BGENs with no index).')
+    parser.set_defaults(seek_variants=True)
     parser.add_argument('--allow-multiallelic-rsids', action='store_true',
                         help='Allow rsIDs that map to multiple BGEN records. By default these are excluded using the .bgi index.')
     
@@ -705,6 +934,9 @@ def main():
     covar_cols = parse_list_arg(args.covar_cols)
 
     use_multi = len(pheno_cols) > 1
+    if args.fused_finalize and len(pheno_cols) > 1:
+        raise ValueError("--fused-finalize supports a single phenotype only; "
+                         "drop it or use one --pheno-col.")
     if not use_multi and args.pheno_cols:
         log_mem("Single phenotype provided via --pheno-cols; using single-phenotype path.")
 
@@ -741,7 +973,8 @@ def main():
     
     # Open BGEN and get variants
     variants, bgen_samples, bfile_handle = get_variants_bgen(
-        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids
+        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
+        seek_variants=args.seek_variants
     )
     
     # Match samples
@@ -823,27 +1056,13 @@ def main():
             variant_chr = normalize_chr_label(variant.chrom)
             if loco_predictions is not None and variant_chr != active_chr:
                 if idx_in_batch > 0:
-                    t_compute = time.perf_counter()
-                    if use_multi:
-                        stats_list = compute_block_scores_multi(
-                            G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, args.blocks,
-                            n_threads=args.threads
-                        )
-                    else:
-                        stats_list = [
-                            compute_block_scores(
-                                G_batch[:, :idx_in_batch], RIF_resid_list[0], Q, block_ids, args.blocks,
-                                n_threads=args.threads
-                            )
-                        ]
-                    total_compute += time.perf_counter() - t_compute
-
-                    t_write = time.perf_counter()
-                    write_stats_batch(
-                        stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+                    compute_s, write_s = _process_batch(
+                        G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
+                        args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                         f_cov_scale_list, all_betas_list, n_cov_elements, T
                     )
-                    total_write += time.perf_counter() - t_write
+                    total_compute += compute_s
+                    total_write += write_s
                     total_snps += idx_in_batch
                     idx_in_batch = 0
                     batch_info = []
@@ -871,27 +1090,13 @@ def main():
             if idx_in_batch >= args.batch_size:
                 t_batch = time.time()
                 
-                t_compute = time.perf_counter()
-                if use_multi:
-                    stats_list = compute_block_scores_multi(
-                        G_batch, RIF_resid_list, Q, block_ids, args.blocks,
-                        n_threads=args.threads
-                    )
-                else:
-                    stats_list = [
-                        compute_block_scores(
-                            G_batch, RIF_resid_list[0], Q, block_ids, args.blocks,
-                            n_threads=args.threads
-                        )
-                    ]
-                total_compute += time.perf_counter() - t_compute
-
-                t_write = time.perf_counter()
-                write_stats_batch(
-                    stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+                compute_s, write_s = _process_batch(
+                    G_batch, RIF_resid_list, Q, block_ids, batch_info,
+                    args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                     f_cov_scale_list, all_betas_list, n_cov_elements, T
                 )
-                total_write += time.perf_counter() - t_write
+                total_compute += compute_s
+                total_write += write_s
                 
                 total_snps += args.batch_size
                 elapsed = time.time() - t_batch
@@ -902,27 +1107,13 @@ def main():
         
         # Final partial batch
         if idx_in_batch > 0:
-            t_compute = time.perf_counter()
-            if use_multi:
-                stats_list = compute_block_scores_multi(
-                    G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, args.blocks,
-                    n_threads=args.threads
-                )
-            else:
-                stats_list = [
-                    compute_block_scores(
-                        G_batch[:, :idx_in_batch], RIF_resid_list[0], Q, block_ids, args.blocks,
-                        n_threads=args.threads
-                    )
-                ]
-            total_compute += time.perf_counter() - t_compute
-
-            t_write = time.perf_counter()
-            write_stats_batch(
-                stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+            compute_s, write_s = _process_batch(
+                G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
+                args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                 f_cov_scale_list, all_betas_list, n_cov_elements, T
             )
-            total_write += time.perf_counter() - t_write
+            total_compute += compute_s
+            total_write += write_s
             
             total_snps += idx_in_batch
     
