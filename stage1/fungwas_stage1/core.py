@@ -209,6 +209,55 @@ def compute_block_scores(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
         return _compute_block_scores_numpy(G, Y_resid, Q, block_ids, n_blocks, min_mac, min_var)
 
 
+def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
+                           block_ids: np.ndarray, n_blocks: int,
+                           min_mac: float = 5.0, min_var: float = 1e-8,
+                           n_threads: int = 1):
+    """Fused C++ path: block statistics, jackknife beta/SE and covariance in one pass.
+
+    Same arithmetic as ``compute_block_scores`` followed by
+    ``compute_covariance_from_blocks`` per SNP, but done inside the OpenMP loop, so the
+    (M, n_blocks, 1+T) intermediate is never materialised and the covariance is computed
+    in parallel instead of one SNP at a time in NumPy.
+
+    The summation order differs from the NumPy path (the C++ code accumulates the
+    jackknife cross-products with explicit loops where NumPy calls BLAS), so results
+    agree only to floating-point rounding, not bit-for-bit.
+
+    Returns
+    -------
+    betas : array (M, T)
+    se : array (M, T)
+    cov_upper : array (M, T*(T+1)//2)
+        Packed upper triangle of Sigma in row-major order, i.e. the same order as
+        ``Sigma[np.triu_indices(T)]``.
+
+    Rows for SNPs that fail the genotype filters (or have a non-positive total
+    denominator) are NaN throughout, matching the NaN convention of
+    ``compute_block_scores``.
+    """
+    require_cpp_extension("Fused block finalization")
+    if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_finalize_block_scores_static'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_finalize_block_scores_static; "
+            "rebuild the extension or use compute_block_scores instead."
+        )
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    Y_f = np.asfortranarray(Y_resid, dtype=np.float64)
+    Q_f = np.asfortranarray(Q, dtype=np.float64)
+    block_ids_i32 = block_ids.astype(np.int32)
+    return cpp_ext.stage1_finalize_block_scores_static(
+        G_f,
+        Y_f,
+        Q_f,
+        block_ids_i32,
+        n_blocks,
+        min_mac,
+        min_var,
+        n_threads,
+    )
+
+
 def compute_block_scores_multi(G: np.ndarray, RIF_resid_list: list[np.ndarray], Q: np.ndarray,
                                block_ids: np.ndarray, n_blocks: int,
                                min_mac: float = 5.0, min_var: float = 1e-8,

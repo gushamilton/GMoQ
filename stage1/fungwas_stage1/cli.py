@@ -35,6 +35,7 @@ from .core import (
     residualize,
     compute_block_scores,
     compute_block_scores_multi,
+    compute_block_finalize,
     compute_covariance_from_blocks,
     resolve_covar_cols,
     set_numpy_fallback_allowed,
@@ -718,6 +719,93 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 all_betas.append(beta)
 
 
+def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+                            f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
+    """Write one batch from the fused C++ finalizer output.
+
+    Byte-for-byte the same output layout as write_stats_batch; only the arithmetic that
+    produced beta/se/Sigma differs (C++ rather than NumPy).  The skip rule is the same
+    test in a different place: write_stats_batch skips a SNP whose block statistics are
+    NaN, and the fused path returns NaN beta/se/cov for exactly those SNPs (the C++
+    genotype filter guarantees sum(g_resid^2) >= min_var > 0, so the only way to reach a
+    non-positive jackknife denominator is to have failed that filter already).
+    """
+    for p_idx, (betas, se_all, cov_all) in enumerate(fused_list):
+        f_tsv = f_tsv_list[p_idx]
+        f_cov = f_cov_list[p_idx]
+        f_cov_ids = f_cov_ids_list[p_idx]
+        f_cov_scale = f_cov_scale_list[p_idx]
+        all_betas = all_betas_list[p_idx]
+
+        for j, info in enumerate(batch_info):
+            if np.isnan(betas[j, 0]):
+                continue
+
+            beta = betas[j]
+            se = se_all[j]
+            cov_upper = cov_all[j]
+
+            row = list(info)
+            for b, s in zip(beta, se):
+                row.extend([f'{b:.6g}', f'{s:.6g}'])
+            f_tsv.write('\t'.join(map(str, row)) + '\n')
+
+            if args.cov_dtype == 'int8':
+                scale = np.max(np.abs(cov_upper)) / 127.0
+                if not np.isfinite(scale) or scale <= 0:
+                    scale = 1.0
+                cov_q = np.clip(np.rint(cov_upper / scale), -127, 127).astype(np.int8)
+                f_cov.write(cov_q.tobytes(order='C'))
+                f_cov_scale.write(struct.pack('f', float(scale)))
+            else:
+                f_cov.write(struct.pack(f'{n_cov_elements}f', *cov_upper))
+            f_cov_ids.write('\t'.join(map(str, info)) + '\n')
+
+            if args.output_rtau:
+                all_betas.append(np.asarray(beta))
+
+
+def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
+                   f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
+                   all_betas_list, n_cov_elements, T):
+    """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
+    t_compute = time.perf_counter()
+    if use_multi:
+        stats_list = compute_block_scores_multi(
+            G_view, RIF_resid_list, Q, block_ids, args.blocks, n_threads=args.threads
+        )
+        fused_list = None
+    elif args.fused_finalize:
+        fused_list = [
+            compute_block_finalize(
+                G_view, RIF_resid_list[0], Q, block_ids, args.blocks, n_threads=args.threads
+            )
+        ]
+        stats_list = None
+    else:
+        stats_list = [
+            compute_block_scores(
+                G_view, RIF_resid_list[0], Q, block_ids, args.blocks, n_threads=args.threads
+            )
+        ]
+        fused_list = None
+    compute_s = time.perf_counter() - t_compute
+
+    t_write = time.perf_counter()
+    if fused_list is not None:
+        write_stats_batch_fused(
+            fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+            f_cov_scale_list, all_betas_list, n_cov_elements, T
+        )
+    else:
+        write_stats_batch(
+            stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+            f_cov_scale_list, all_betas_list, n_cov_elements, T
+        )
+    write_s = time.perf_counter() - t_write
+    return compute_s, write_s
+
+
 def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np.ndarray],
                               X_full: np.ndarray, taus: np.ndarray,
                               loco_predictions: Optional[dict[str, dict[str, np.ndarray]]],
@@ -775,6 +863,11 @@ def main():
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
                         help='Allow the uncompiled NumPy fallback. This can be ~1000x slower and is for debugging only.')
+    parser.add_argument('--fused-finalize', dest='fused_finalize', action='store_true',
+                        help='Compute beta/SE/covariance inside the C++ OpenMP loop instead of '
+                             'returning per-block statistics and redoing the work per SNP in NumPy. '
+                             'Single-phenotype only. Results differ from the NumPy path in the last '
+                             'bits (different summation order).')
     parser.add_argument('--no-seek-variants', dest='seek_variants', action='store_false',
                         help='Walk the BGEN record-by-record instead of seeking to .bgi file '
                              'offsets (slower; kept for validation and for BGENs with no index).')
@@ -841,6 +934,9 @@ def main():
     covar_cols = parse_list_arg(args.covar_cols)
 
     use_multi = len(pheno_cols) > 1
+    if args.fused_finalize and len(pheno_cols) > 1:
+        raise ValueError("--fused-finalize supports a single phenotype only; "
+                         "drop it or use one --pheno-col.")
     if not use_multi and args.pheno_cols:
         log_mem("Single phenotype provided via --pheno-cols; using single-phenotype path.")
 
@@ -960,27 +1056,13 @@ def main():
             variant_chr = normalize_chr_label(variant.chrom)
             if loco_predictions is not None and variant_chr != active_chr:
                 if idx_in_batch > 0:
-                    t_compute = time.perf_counter()
-                    if use_multi:
-                        stats_list = compute_block_scores_multi(
-                            G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, args.blocks,
-                            n_threads=args.threads
-                        )
-                    else:
-                        stats_list = [
-                            compute_block_scores(
-                                G_batch[:, :idx_in_batch], RIF_resid_list[0], Q, block_ids, args.blocks,
-                                n_threads=args.threads
-                            )
-                        ]
-                    total_compute += time.perf_counter() - t_compute
-
-                    t_write = time.perf_counter()
-                    write_stats_batch(
-                        stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+                    compute_s, write_s = _process_batch(
+                        G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
+                        args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                         f_cov_scale_list, all_betas_list, n_cov_elements, T
                     )
-                    total_write += time.perf_counter() - t_write
+                    total_compute += compute_s
+                    total_write += write_s
                     total_snps += idx_in_batch
                     idx_in_batch = 0
                     batch_info = []
@@ -1008,27 +1090,13 @@ def main():
             if idx_in_batch >= args.batch_size:
                 t_batch = time.time()
                 
-                t_compute = time.perf_counter()
-                if use_multi:
-                    stats_list = compute_block_scores_multi(
-                        G_batch, RIF_resid_list, Q, block_ids, args.blocks,
-                        n_threads=args.threads
-                    )
-                else:
-                    stats_list = [
-                        compute_block_scores(
-                            G_batch, RIF_resid_list[0], Q, block_ids, args.blocks,
-                            n_threads=args.threads
-                        )
-                    ]
-                total_compute += time.perf_counter() - t_compute
-
-                t_write = time.perf_counter()
-                write_stats_batch(
-                    stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+                compute_s, write_s = _process_batch(
+                    G_batch, RIF_resid_list, Q, block_ids, batch_info,
+                    args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                     f_cov_scale_list, all_betas_list, n_cov_elements, T
                 )
-                total_write += time.perf_counter() - t_write
+                total_compute += compute_s
+                total_write += write_s
                 
                 total_snps += args.batch_size
                 elapsed = time.time() - t_batch
@@ -1039,27 +1107,13 @@ def main():
         
         # Final partial batch
         if idx_in_batch > 0:
-            t_compute = time.perf_counter()
-            if use_multi:
-                stats_list = compute_block_scores_multi(
-                    G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, args.blocks,
-                    n_threads=args.threads
-                )
-            else:
-                stats_list = [
-                    compute_block_scores(
-                        G_batch[:, :idx_in_batch], RIF_resid_list[0], Q, block_ids, args.blocks,
-                        n_threads=args.threads
-                    )
-                ]
-            total_compute += time.perf_counter() - t_compute
-
-            t_write = time.perf_counter()
-            write_stats_batch(
-                stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
+            compute_s, write_s = _process_batch(
+                G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
+                args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                 f_cov_scale_list, all_betas_list, n_cov_elements, T
             )
-            total_write += time.perf_counter() - t_write
+            total_compute += compute_s
+            total_write += write_s
             
             total_snps += idx_in_batch
     
