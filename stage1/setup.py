@@ -41,6 +41,31 @@ def get_armadillo_lib():
             return lib_path
     return None
 
+# Vectorisation flags for the C++ kernel.
+#
+# The kernel was historically built at the x86-64 SSE2 baseline - two-wide
+# double-precision, no FMA - even on AVX-512 hardware.  Raising the baseline is a
+# build-time choice, not a run-time one, and it has to be made conservatively: a
+# BluePebble `short` allocation can land on Skylake-SP, Cascade Lake *or* an AMD node,
+# and a binary built with -march=native on one of those can SIGILL on another.
+#
+# The default below is therefore -march=haswell (AVX2 + FMA + BMI2, i.e. the
+# x86-64-v3 feature level; spelled explicitly because the system compiler here is
+# GCC 8, which predates the -march=x86-64-v3 alias).  Every compute node in the pool
+# supports it.  -mtune tunes scheduling for the majority Intel parts without
+# restricting the instruction set.
+#
+# Override with FUNGWAS_STAGE1_ARCH, e.g.
+#   FUNGWAS_STAGE1_ARCH=""                       # SSE2 baseline (the old behaviour)
+#   FUNGWAS_STAGE1_ARCH="-march=skylake-avx512"  # Intel-only, AVX-512
+#   FUNGWAS_STAGE1_ARCH="-march=native"          # this build host only; not portable
+#
+# NOTE: allowing FMA contraction changes floating-point results in the last bits
+# relative to the SSE2 baseline.  -ffast-math is deliberately NOT used.
+_DEFAULT_ARCH_FLAGS = '-march=haswell -mtune=skylake-avx512'
+_arch_env = os.environ.get('FUNGWAS_STAGE1_ARCH')
+_arch_flags = (_DEFAULT_ARCH_FLAGS if _arch_env is None else _arch_env).split()
+
 ext_modules = [
     Extension(
         'fungwas_stage1._stage1_cpp',
@@ -52,7 +77,7 @@ ext_modules = [
         library_dirs=[get_armadillo_lib()] if get_armadillo_lib() else [],
         runtime_library_dirs=[get_armadillo_lib()] if get_armadillo_lib() else [],
         libraries=['armadillo'],
-        extra_compile_args=['-std=c++14', '-O3', '-fopenmp', '-fPIC'],
+        extra_compile_args=['-std=c++14', '-O3', '-fopenmp', '-fPIC'] + _arch_flags,
         extra_link_args=['-fopenmp'],
         language='c++'
     ),
