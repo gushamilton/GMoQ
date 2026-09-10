@@ -87,8 +87,10 @@ def write_stage1_outputs(
 ):
     out_tsv = out_prefix.with_suffix(".stage1.tsv.gz")
     out_cov = out_prefix.with_suffix(".cov.gz")
+    out_ids = out_prefix.with_suffix(".cov.ids.tsv.gz")
 
-    columns = ["snp_id", "chr", "bp", "effect_allele", "other_allele"]
+    id_columns = ["snp_id", "chr", "bp", "effect_allele", "other_allele"]
+    columns = list(id_columns)
     for tau in taus:
         columns.append(f"beta_tau_{tau:.2f}")
         columns.append(f"se_tau_{tau:.2f}")
@@ -96,19 +98,24 @@ def write_stage1_outputs(
     n_snps, n_taus = betas.shape
     triu_idx = np.triu_indices(n_taus)
 
-    with gzip.open(out_tsv, "wt") as f_tsv, gzip.open(out_cov, "wb") as f_cov:
+    with gzip.open(out_tsv, "wt") as f_tsv, gzip.open(out_cov, "wb") as f_cov, gzip.open(
+        out_ids, "wt"
+    ) as f_ids:
         f_tsv.write("\t".join(columns) + "\n")
+        f_ids.write("\t".join(id_columns) + "\n")
 
         for j in range(n_snps):
-            row = [f"SNP{j+1}", 1, j + 1, "A", "G"]
+            ids = [f"SNP{j+1}", 1, j + 1, "A", "G"]
+            row = list(ids)
             for b, s in zip(betas[j], ses[j]):
                 row.extend([f"{b:.6g}", f"{s:.6g}"])
             f_tsv.write("\t".join(map(str, row)) + "\n")
+            f_ids.write("\t".join(map(str, ids)) + "\n")
 
             cov_upper = covariances[j][triu_idx].astype(np.float32)
             f_cov.write(cov_upper.tobytes())
 
-    return out_tsv, out_cov
+    return out_tsv, out_cov, out_ids
 
 
 def main() -> None:
@@ -140,7 +147,7 @@ def main() -> None:
     )
 
     out_prefix = Path(args.out_prefix)
-    out_tsv, out_cov = write_stage1_outputs(
+    out_tsv, out_cov, out_ids = write_stage1_outputs(
         out_prefix,
         taus,
         result["betas"],
@@ -159,6 +166,7 @@ def main() -> None:
 
     print(f"Wrote stage1: {out_tsv}")
     print(f"Wrote cov: {out_cov}")
+    print(f"Wrote cov ids: {out_ids}")
     print(f"Wrote meta: {meta_path}")
 
 

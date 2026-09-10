@@ -6,7 +6,7 @@
 
 # Install if needed
 # install.packages("bigsnpr")
-# devtools::install_github("MichelNivard/fungwas")
+# Install the G-MoQ Stage 2 package locally:  R CMD INSTALL stage2/
 devtools::document()
 library(bigsnpr)
 library(fungwasStage2)
@@ -16,7 +16,11 @@ set.seed(123)
 # -------------------------
 # 1. Load PLINK genotype data
 # -------------------------
-plink_prefix <- "/Users/michelnivard/Downloads/1KG.EAS.auto.snp.norm.nodup.split.rare002.common015.missing/1KG.EAS.auto.snp.norm.nodup.split.rare002.common015.missing"   # without extension
+plink_prefix <- Sys.getenv("GMOQ_PLINK_PREFIX", unset = "")   # PLINK prefix, without extension
+if (!nzchar(plink_prefix) || !file.exists(paste0(plink_prefix, ".bed"))) {
+  message("SKIP test-plink-files.R: set GMOQ_PLINK_PREFIX to a PLINK bed/bim/fam prefix to run this example.")
+  quit(save = "no", status = 0)
+}
 snp_readBed(paste0(plink_prefix, ".bed"))   # converts to .rds, RUNONCE
 obj.bigSNP <- snp_attach(paste0(plink_prefix, ".rds"))
 
