@@ -11,10 +11,11 @@ param_gwas(
   se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   plugin_R = NULL,
   cov_data = NULL,
-  tau_cov_estimator = c("gls", "ols"),
+  tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-08,
   n_threads = 1L,
-  return_cov = c("none", "upper", "full", "mashr")
+  return_cov = c("none", "upper", "full", "mashr"),
+  q_method = c("chisq_naive", "saddlepoint", "liu", "satterthwaite")
 )
 }
 \arguments{

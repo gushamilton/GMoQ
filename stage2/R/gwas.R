@@ -185,12 +185,14 @@ param_gwas <- function(
   tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
   n_threads = 1L,
-  return_cov = c("none", "upper", "full", "mashr")
+  return_cov = c("none", "upper", "full", "mashr"),
+  q_method = c("chisq_naive", "saddlepoint", "liu", "satterthwaite")
 ) {
   transform <- match.arg(transform)
   se_mode   <- match.arg(se_mode)
   tau_cov_estimator <- match.arg(tau_cov_estimator)
   return_cov <- match.arg(return_cov)
+  q_method <- match.arg(q_method)
 
   taus    <- stage1$taus
   q_tau   <- stage1$q_tau
@@ -339,6 +341,15 @@ if (se_mode == "diagonal") {
       var_j   <- SE_tau[, j]^2
       Q_stat[j] <- sum((resid_j^2) / pmax(var_j, 1e-12))
     }
+    # The STATISTIC above is unchanged. What q_method changes is only the
+    # reference distribution used to turn it into a p-value: the residuals
+    # are strongly correlated across taus, so chisq(T - k) is wrong.
+    if (q_method != "chisq_naive" && !is.null(cov_data)) {
+      q_cal <- .q_pvalue_calibrated(
+        Q = Q_stat, cov_data = cov_data, SE_tau = SE_tau, W = W,
+        method = q_method, n_threads = n_threads
+      )
+    }
   }
 }
 
@@ -392,8 +403,14 @@ if (se_mode == "diagonal") {
     params    = params,
     SE_params = SE_params,
     Q         = Q_stat,
-    df        = Tt - K
+    df        = Tt - K,
+    q_method  = q_method
   )
+  if (exists("q_cal", inherits = FALSE)) {
+    out$Q_pval   <- q_cal$pval
+    out$Q_df_eff <- q_cal$df_eff
+    out$Q_scale  <- q_cal$scale
+  }
   if (return_cov == "upper") out$param_cov_upper <- param_cov_upper
   if (return_cov == "full") out$param_cov <- param_cov_full
   if (return_cov == "mashr") out$mashr <- mashr_inputs
@@ -599,11 +616,13 @@ param_gwas_from_file <- function(
   drop_multiallelic = TRUE,
   tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
-  n_threads = 1L
+  n_threads = 1L,
+  q_method = c("chisq_naive", "saddlepoint", "liu", "satterthwaite")
 ) {
   se_mode <- match.arg(se_mode)
   return_cov <- match.arg(return_cov)
   tau_cov_estimator <- match.arg(tau_cov_estimator)
+  q_method <- match.arg(q_method)
   
   if (!requireNamespace("data.table", quietly = TRUE)) {
     stop("data.table package required for param_gwas_from_file")
@@ -686,7 +705,8 @@ param_gwas_from_file <- function(
     tau_cov_estimator = tau_cov_estimator,
     gls_ridge = gls_ridge,
     n_threads = n_threads,
-    return_cov = return_cov
+    return_cov = return_cov,
+    q_method = q_method
   )
   
   # Build output data.table
@@ -700,7 +720,14 @@ param_gwas_from_file <- function(
   }
   
   out_dt$Q <- result$Q
-  out_dt$Q_pval <- stats::pchisq(result$Q, df = result$df, lower.tail = FALSE)
+  if (!is.null(result$Q_pval)) {
+    # Calibrated reference distribution (q_method != "chisq_naive").
+    out_dt$Q_pval   <- result$Q_pval
+    out_dt$Q_df_eff <- result$Q_df_eff
+    out_dt$Q_scale  <- result$Q_scale
+  } else {
+    out_dt$Q_pval <- stats::pchisq(result$Q, df = result$df, lower.tail = FALSE)
+  }
 
   if (!is.null(param_cov_file) && !is.null(result$param_cov_upper)) {
     .write_param_cov_upper(result$param_cov_upper, param_cov_file)
@@ -802,4 +829,107 @@ param_gwas_multi_from_file <- function(
     se_mode = se_mode,
     cov_data = cov_data
   )
+}
+
+#' Calibrated p-value for the Stage 2 lack-of-fit statistic Q
+#'
+#' The Q statistic sums squared residuals divided by their own per-tau
+#' variances. The 45 residuals are strongly correlated (same individuals,
+#' overlapping influence functions), so Q is NOT chi-square on \code{T - k}
+#' degrees of freedom: it is a quadratic form in a correlated normal vector,
+#'
+#'   Q = r' D^-1 r,  r = M b,  M = I - W (W'W)^-1 W',  Var(r) = M Sigma M',
+#'
+#' whose exact null distribution is \code{sum_i lambda_i chi2_1} with
+#' \code{lambda} the eigenvalues of \code{D^-1/2 M Sigma M' D^-1/2}.
+#'
+#' Critically this needs \code{Sigma} only and never \code{Sigma^-1}, so it is
+#' valid on the stored int8 covariance, which is accurate in quadratic forms
+#' but useless for inversion.
+#'
+#' @param Q Numeric vector of observed Q statistics.
+#' @param cov_data List with \code{cov_vec} and \code{offsets}.
+#' @param SE_tau Numeric matrix (T x n_snps) of Stage 1 per-tau SEs.
+#' @param W Weight matrix (T x k).
+#' @param method One of "satterthwaite", "liu", "saddlepoint".
+#' @param n_threads OpenMP threads.
+#' @return List with \code{pval}, \code{df_eff}, \code{scale}, \code{n_eig}.
+#' @keywords internal
+.q_pvalue_calibrated <- function(Q, cov_data, SE_tau, W,
+                                 method = c("saddlepoint", "liu", "satterthwaite"),
+                                 n_threads = 1L) {
+  method <- match.arg(method)
+  Tt <- nrow(SE_tau)
+  M <- diag(Tt) - W %*% solve(crossprod(W), t(W))
+  Dvar <- SE_tau * SE_tau
+
+  cal <- compute_q_calibration(
+    cov_vec = cov_data$cov_vec,
+    offsets = cov_data$offsets,
+    Qstat = as.numeric(Q),
+    Dvar = Dvar,
+    M = M,
+    K = as.integer(Tt),
+    n_threads = as.integer(n_threads)
+  )
+
+  c1 <- cal[, 1]; c2 <- cal[, 2]; c3 <- cal[, 3]; c4 <- cal[, 4]
+  p_saddle <- cal[, 5]; n_eig <- cal[, 6]
+
+  ok <- is.finite(c1) & is.finite(c2) & c1 > 0 & c2 > 0
+  n <- length(Q)
+  pval <- rep(NA_real_, n)
+
+  # Two-moment Satterthwaite: Q ~ scale * chisq(df_eff)
+  scale_a <- rep(NA_real_, n); df_eff <- rep(NA_real_, n)
+  scale_a[ok] <- c2[ok] / c1[ok]              # Var/(2E) = 2c2/(2c1)
+  df_eff[ok]  <- c1[ok]^2 / c2[ok]            # 2E^2/Var
+  p_satt <- rep(NA_real_, n)
+  p_satt[ok] <- stats::pchisq(Q[ok] / scale_a[ok], df = df_eff[ok],
+                              lower.tail = FALSE)
+
+  # Four-moment (Liu, Tang & Zhang 2009): matches skewness and kurtosis too,
+  # which the two-moment version does not, and which dominates the far tail.
+  p_liu <- rep(NA_real_, n)
+  okl <- ok & is.finite(c3) & is.finite(c4) & c4 > 0
+  if (any(okl)) {
+    s1 <- c3[okl] / c2[okl]^1.5
+    s2 <- c4[okl] / c2[okl]^2
+    muQ <- c1[okl]
+    sigmaQ <- sqrt(2 * c2[okl])
+    disc <- s1^2 - s2
+    use_nc <- disc > 0
+    a <- numeric(length(s1)); delta <- numeric(length(s1)); l <- numeric(length(s1))
+    a[use_nc] <- 1 / (s1[use_nc] - sqrt(disc[use_nc]))
+    delta[use_nc] <- s1[use_nc] * a[use_nc]^3 - a[use_nc]^2
+    l[use_nc] <- a[use_nc]^2 - 2 * delta[use_nc]
+    a[!use_nc] <- 1 / sqrt(s2[!use_nc])
+    delta[!use_nc] <- 0
+    l[!use_nc] <- 1 / s2[!use_nc]
+    muX <- l + delta
+    sigmaX <- sqrt(2) * a
+    Qn <- (Q[okl] - muQ) / sigmaQ * sigmaX + muX
+    good <- is.finite(Qn) & is.finite(l) & l > 0 & is.finite(delta) & delta >= 0
+    v <- rep(NA_real_, length(Qn))
+    v[good] <- stats::pchisq(Qn[good], df = l[good], ncp = delta[good],
+                             lower.tail = FALSE)
+    p_liu[okl] <- v
+  }
+
+  if (method == "satterthwaite") {
+    pval <- p_satt
+  } else if (method == "liu") {
+    pval <- p_liu
+  } else {
+    # Saddlepoint where it applies (upper tail only); Liu elsewhere, which is
+    # the region where p is large and the approximation hardly matters.
+    pval <- p_liu
+    use <- is.finite(p_saddle) & p_saddle >= 0
+    pval[use] <- p_saddle[use]
+    still <- !is.finite(pval)
+    pval[still] <- p_satt[still]
+  }
+
+  list(pval = pval, df_eff = df_eff, scale = scale_a, n_eig = n_eig,
+       p_satterthwaite = p_satt, p_liu = p_liu, p_saddlepoint = p_saddle)
 }
