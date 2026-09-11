@@ -142,11 +142,45 @@ def resolve_sample_column(sample_lookup: dict[str, int], aliases: list[str]) -> 
     return None
 
 
+def sanitize_pheno_name(name: str) -> str:
+    """Canonicalize a phenotype name the way this project names files and directories.
+
+    Non-alphanumeric characters other than ``-`` and ``_`` become ``_``.  This is the
+    same rule used for multi-phenotype output prefixes, and it is the rule REGENIE
+    runners here use for per-phenotype directories, so ``testosterone_shrink_0.2``
+    canonicalizes to ``testosterone_shrink_0_2``.
+    """
+    return ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in name)
+
+
 def resolve_loco_files(loco_path: str, pheno_cols: list[str]) -> dict[str, str]:
     """
     Resolve REGENIE LOCO inputs to a phenotype->.loco path mapping.
 
     Supports either a direct `.loco` file or a REGENIE `_pred.list` master file.
+
+    Resolution is **exact and deterministic**.  A REGENIE ``*_pred.list`` line is
+    ``<phenotype> <path/to/*.loco>``; the phenotype is taken from the *first* field
+    and compared to the requested phenotype name by equality:
+
+    1. equality on the raw pred.list label;
+    2. failing that, equality on the canonicalized label
+       (:func:`sanitize_pheno_name` on both sides), which absorbs the one naming
+       divergence used in this project -- ``.`` written as ``_`` in file and
+       directory components, e.g. label ``testosterone_shrink_0_2`` for phenotype
+       ``testosterone_shrink_0.2``.
+
+    Substring matching is deliberately *not* used.  The manuscript phenotype names
+    are proper substrings of one another (``bmi`` of ``log_bmi``/``rint_bmi``;
+    ``testosterone`` of ``testosterone_shrink_0.2``/``_0.5``/``_0.7``; ``crp`` of
+    ``log_crp``), so substring matching cannot distinguish them and silently
+    attaches the wrong LOCO predictor.
+
+    Anything that does not resolve to exactly one ``.loco`` path raises
+    :class:`ValueError` naming the candidates -- it is never resolved by guessing.
+
+    The result depends only on ``pheno_cols`` and the pred.list contents, never on
+    ``PYTHONHASHSEED``, dict/set iteration order, or the order of pred.list entries.
     """
     path = Path(loco_path)
     if path.suffix == '.loco':
@@ -169,33 +203,76 @@ def resolve_loco_files(loco_path: str, pheno_cols: list[str]) -> dict[str, str]:
         raise ValueError(f"No .loco files found in {loco_path}")
 
     if len(pheno_cols) == 1 and len(loco_files) == 1:
+        # Unambiguous by construction: one phenotype, one predictor file.  This also
+        # preserves support for REGENIE runs whose internal phenotype label differs
+        # from the requested --pheno-col (the weight_height / weight_height2 models
+        # run REGENIE on a column literally named "weight").
         return {pheno_cols[0]: loco_files[0]}
 
-    mapping = {}
-    remaining = set(pheno_cols)
-
+    # label -> ordered, de-duplicated candidate paths.  Lists, not sets: order here
+    # is pred.list order, and it is only ever used to report candidates.
+    by_label: dict[str, list[str]] = {}
+    by_canonical: dict[str, list[str]] = {}
+    labelled = 0
     for parts in entries:
         loco_file = parts[-1]
-        if not loco_file.endswith('.loco'):
+        if not loco_file.endswith('.loco') or len(parts) < 2:
             continue
-        joined = ' '.join(parts[:-1] + [Path(loco_file).stem])
-        for pheno in list(remaining):
-            if pheno in joined:
-                mapping[pheno] = loco_file
-                remaining.remove(pheno)
-                break
+        labelled += 1
+        label = parts[0]
+        for key, table in ((label, by_label), (sanitize_pheno_name(label), by_canonical)):
+            bucket = table.setdefault(key, [])
+            if loco_file not in bucket:
+                bucket.append(loco_file)
 
-    if remaining:
-        unresolved = sorted(remaining)
-        unassigned = [f for f in loco_files if f not in mapping.values()]
-        if len(unassigned) == len(unresolved):
-            for pheno, loco_file in zip(unresolved, unassigned):
-                mapping[pheno] = loco_file
-        else:
+    known_labels = sorted(by_label)
+    mapping: dict[str, str] = {}
+    unresolved: list[str] = []
+    for pheno in pheno_cols:
+        matched_on = 'phenotype label'
+        candidates = by_label.get(pheno)
+        if not candidates:
+            candidates = by_canonical.get(sanitize_pheno_name(pheno))
+            matched_on = 'canonicalized phenotype label'
+        if not candidates:
+            unresolved.append(pheno)
+            continue
+        if len(candidates) > 1:
             raise ValueError(
-                f"Could not map LOCO files in {loco_path} to phenotypes {unresolved}. "
-                "Use a pred.list whose entries include phenotype names or pass a single .loco for one phenotype."
+                f"Ambiguous LOCO resolution in {loco_path}: phenotype '{pheno}' matches "
+                f"{len(candidates)} distinct .loco files on {matched_on} "
+                f"({', '.join(sorted(candidates))}). Refusing to guess. Provide a "
+                "pred.list with exactly one entry per phenotype."
             )
+        mapping[pheno] = candidates[0]
+
+    if unresolved:
+        detail = (
+            f"phenotype labels present in the pred.list: {known_labels}"
+            if labelled
+            else f"no pred.list line carried a phenotype label before the .loco path "
+                 f"({len(loco_files)} unlabelled .loco entries)"
+        )
+        raise ValueError(
+            f"Could not map LOCO files in {loco_path} to phenotypes {unresolved}; "
+            f"{detail}. resolve_loco_files matches the pred.list's first field exactly "
+            "(optionally after canonicalizing '.' and other non-alphanumerics to '_'); "
+            "substring matching is deliberately not used because these phenotype names "
+            "are prefixes of one another. Rebuild the pred.list so each requested "
+            "phenotype appears as its own first field, or pass a single .loco file for "
+            "a single phenotype."
+        )
+
+    claimed: dict[str, str] = {}
+    for pheno in pheno_cols:
+        loco_file = mapping[pheno]
+        if loco_file in claimed:
+            raise ValueError(
+                f"Ambiguous LOCO resolution in {loco_path}: .loco file {loco_file} "
+                f"resolved for both '{claimed[loco_file]}' and '{pheno}'. Each phenotype "
+                "needs its own LOCO predictor file."
+            )
+        claimed[loco_file] = pheno
 
     return mapping
 
@@ -1023,8 +1100,7 @@ def main():
     block_ids = np.random.randint(0, args.blocks, N_matched).astype(np.int32)
     
     # Output setup
-    def _sanitize_name(name: str) -> str:
-        return ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in name)
+    _sanitize_name = sanitize_pheno_name
 
     out_prefixes = []
     for col in pheno_cols:

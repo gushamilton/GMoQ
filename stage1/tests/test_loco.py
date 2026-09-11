@@ -1,6 +1,11 @@
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from fungwas_stage1.cli import (
     build_rif_residuals,
@@ -169,3 +174,182 @@ def test_multi_phenotype_block_scores_match_single_path_under_numpy_fallback():
     finally:
         core.HAVE_CPP = original_have_cpp
         core.ALLOW_NUMPY_FALLBACK = original_allow
+
+
+# ---------------------------------------------------------------------------
+# resolve_loco_files: exactness, determinism, and explicit failure.
+#
+# Regression cover for the silent-wrong-results bug in which pred.list entries
+# were mapped to phenotypes by *substring* match while iterating a *set*: every
+# manuscript phenotype name is a proper substring of another (bmi of log_bmi and
+# rint_bmi; testosterone of its three shrink variants; crp of log_crp), so the
+# mapping depended on PYTHONHASHSEED and on pred.list entry order and could
+# silently attach another phenotype's LOCO predictors.
+# ---------------------------------------------------------------------------
+
+BMI_GROUP = ["bmi", "log_bmi", "rint_bmi"]
+TESTOSTERONE_GROUP = [
+    "testosterone",
+    "testosterone_shrink_0.2",
+    "testosterone_shrink_0.5",
+    "testosterone_shrink_0.7",
+]
+
+
+def _write_pred_list(tmp_path: Path, name: str, phenos, reverse: bool = False) -> tuple[str, dict]:
+    """Write a REGENIE-style combined pred.list mirroring the real paper layout.
+
+    Real entries look like::
+
+        testosterone_shrink_0.2 /.../full/testosterone_shrink_0_2/testosterone_shrink_0_2_step1_1.loco
+
+    i.e. the label keeps the ``.`` while the path component replaces it with ``_``.
+    """
+    expected = {}
+    lines = []
+    for pheno in phenos:
+        tag = pheno.replace(".", "_")
+        loco = str(tmp_path / "full" / tag / f"{tag}_step1_1.loco")
+        expected[pheno] = loco
+        lines.append(f"{pheno} {loco}")
+    if reverse:
+        lines = list(reversed(lines))
+    pred = tmp_path / name
+    pred.write_text("\n".join(lines) + "\n")
+    return str(pred), expected
+
+
+@pytest.mark.parametrize("phenos", [BMI_GROUP, TESTOSTERONE_GROUP])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_resolve_loco_files_exact_for_prefix_overlapping_groups(tmp_path: Path, phenos, reverse):
+    """Each phenotype gets its own .loco even though names are prefixes of one another."""
+    pred, expected = _write_pred_list(tmp_path, "group_pred.list", phenos, reverse=reverse)
+
+    assert resolve_loco_files(pred, list(phenos)) == expected
+    # ...and independently of the order the phenotypes are requested in.
+    assert resolve_loco_files(pred, list(reversed(phenos))) == expected
+
+
+def test_resolve_loco_files_matches_canonicalized_label(tmp_path: Path):
+    """A pred.list label written with '_' for '.' still resolves, exactly."""
+    loco = tmp_path / "testosterone_shrink_0_2_step1_1.loco"
+    loco.write_text("FID_IID s1\n22 0.0\n")
+    other = tmp_path / "testosterone_step1_1.loco"
+    other.write_text("FID_IID s1\n22 0.0\n")
+    pred = tmp_path / "pred.list"
+    pred.write_text(f"testosterone {other}\ntestosterone_shrink_0_2 {loco}\n")
+
+    mapping = resolve_loco_files(str(pred), ["testosterone", "testosterone_shrink_0.2"])
+
+    assert mapping == {
+        "testosterone": str(other),
+        "testosterone_shrink_0.2": str(loco),
+    }
+
+
+def test_resolve_loco_files_single_pheno_against_combined_pred_list(tmp_path: Path):
+    """A single phenotype selected out of a combined pred.list is matched exactly.
+
+    Under the old substring matcher, requesting only ``bmi`` could bind to the
+    ``log_bmi`` entry, since 'bmi' is contained in that entry's line.
+    """
+    pred, expected = _write_pred_list(tmp_path, "group_pred.list", BMI_GROUP, reverse=True)
+
+    assert resolve_loco_files(pred, ["bmi"]) == {"bmi": expected["bmi"]}
+    assert resolve_loco_files(pred, ["log_bmi"]) == {"log_bmi": expected["log_bmi"]}
+
+
+def test_resolve_loco_files_single_entry_pred_list_keeps_regenie_label_mismatch(tmp_path: Path):
+    """One phenotype, one .loco: still resolved, whatever REGENIE called the column.
+
+    The paper's ``weight_height`` / ``weight_height2`` models run REGENIE on a
+    column literally named ``weight``, so the pred.list label does not equal the
+    requested phenotype tag.  That single/single case must keep working.
+    """
+    loco = tmp_path / "weight_height_step1_1.loco"
+    loco.write_text("FID_IID s1\n22 0.0\n")
+    pred = tmp_path / "weight_height_step1_pred.list"
+    pred.write_text(f"weight {loco}\n")
+
+    assert resolve_loco_files(str(pred), ["weight_height"]) == {"weight_height": str(loco)}
+
+
+def test_resolve_loco_files_raises_on_ambiguous_duplicate_label(tmp_path: Path):
+    """Two entries sharing a label must raise and name both candidates."""
+    a = tmp_path / "a" / "weight_step1_1.loco"
+    b = tmp_path / "b" / "weight_step1_1.loco"
+    pred = tmp_path / "pred.list"
+    pred.write_text(f"weight {a}\nweight {b}\nbmi {tmp_path / 'bmi.loco'}\n")
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_loco_files(str(pred), ["weight", "bmi"])
+
+    message = str(excinfo.value)
+    assert "Ambiguous" in message
+    assert str(a) in message and str(b) in message
+
+
+def test_resolve_loco_files_raises_when_phenotype_absent(tmp_path: Path):
+    """An unresolvable phenotype raises and lists the labels that are present."""
+    pred, _ = _write_pred_list(tmp_path, "group_pred.list", BMI_GROUP)
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_loco_files(pred, ["bmi", "vitamin_d"])
+
+    message = str(excinfo.value)
+    assert "vitamin_d" in message
+    assert "log_bmi" in message and "rint_bmi" in message
+    # It must not silently fall back to positional assignment.
+    assert "Could not map LOCO files" in message
+
+
+def test_resolve_loco_files_raises_when_two_phenotypes_claim_one_file(tmp_path: Path):
+    """Distinct phenotypes canonicalizing to the same label must not share a .loco."""
+    loco = tmp_path / "x_step1_1.loco"
+    pred = tmp_path / "pred.list"
+    pred.write_text(f"a.b {loco}\n")
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_loco_files(str(pred), ["a.b", "a_b"])
+
+    assert "resolved for both" in str(excinfo.value)
+
+
+def test_resolve_loco_files_is_invariant_to_python_hash_seed(tmp_path: Path):
+    """The mapping must not depend on PYTHONHASHSEED, for either group, either order.
+
+    Runs in fresh interpreters: string hashing is randomized per process, so this
+    is the only way to exercise it.  The pre-fix implementation iterated a ``set``
+    of phenotype names and produced 2 distinct mappings for the BMI group and 3
+    for the testosterone group on reversed pred.lists.
+    """
+    configs = []
+    for label, phenos in (("bmi", BMI_GROUP), ("testosterone", TESTOSTERONE_GROUP)):
+        for reverse in (False, True):
+            name = f"{label}_{'rev' if reverse else 'fwd'}_pred.list"
+            pred, expected = _write_pred_list(tmp_path, name, phenos, reverse=reverse)
+            configs.append({"pred": pred, "phenos": list(phenos), "expected": expected})
+
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import json, sys\n"
+        "from fungwas_stage1.cli import resolve_loco_files\n"
+        "configs = json.load(open(sys.argv[1]))\n"
+        "print(json.dumps([resolve_loco_files(c['pred'], c['phenos']) for c in configs]))\n"
+    )
+    config_json = tmp_path / "configs.json"
+    config_json.write_text(json.dumps(configs))
+
+    expected = [c["expected"] for c in configs]
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
+
+    seeds = [0, 1, 2, 3, 7, 13, 42, 99, 1234, 31337, 65535, 4294967295]
+    for seed in seeds:
+        env["PYTHONHASHSEED"] = str(seed)
+        out = subprocess.run(
+            [sys.executable, str(probe), str(config_json)],
+            capture_output=True, text=True, env=env, check=True,
+        )
+        assert json.loads(out.stdout) == expected, f"mapping changed under PYTHONHASHSEED={seed}"
