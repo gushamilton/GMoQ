@@ -36,6 +36,8 @@ from .core import (
     compute_block_scores,
     compute_block_scores_multi,
     compute_block_finalize,
+    compute_block_scores_panel,
+    compute_block_finalize_panel,
     compute_covariance_from_blocks,
     resolve_covar_cols,
     set_numpy_fallback_allowed,
@@ -776,16 +778,22 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
         )
         fused_list = None
     elif args.fused_finalize:
+        finalize = compute_block_finalize_panel if args.panel_kernel else compute_block_finalize
+        kw = {'panel_size': args.panel_size} if args.panel_kernel else {}
         fused_list = [
-            compute_block_finalize(
-                G_view, RIF_resid_list[0], Q, block_ids, args.blocks, n_threads=args.threads
+            finalize(
+                G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
+                n_threads=args.threads, **kw
             )
         ]
         stats_list = None
     else:
+        scores = compute_block_scores_panel if args.panel_kernel else compute_block_scores
+        kw = {'panel_size': args.panel_size} if args.panel_kernel else {}
         stats_list = [
-            compute_block_scores(
-                G_view, RIF_resid_list[0], Q, block_ids, args.blocks, n_threads=args.threads
+            scores(
+                G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
+                n_threads=args.threads, **kw
             )
         ]
         fused_list = None
@@ -863,6 +871,13 @@ def main():
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
                         help='Allow the uncompiled NumPy fallback. This can be ~1000x slower and is for debugging only.')
+    parser.add_argument('--panel-kernel', dest='panel_kernel', action='store_true',
+                        help='Use the panel form of the block-score kernel: carry --panel-size '
+                             'SNPs through one sweep over the samples so the residualised RIF '
+                             'matrix is streamed once per panel instead of once per SNP. '
+                             'Bit-identical output; single phenotype only.')
+    parser.add_argument('--panel-size', dest='panel_size', type=int, default=16,
+                        help='Number of SNPs per panel for --panel-kernel (default: 16).')
     parser.add_argument('--fused-finalize', dest='fused_finalize', action='store_true',
                         help='Compute beta/SE/covariance inside the C++ OpenMP loop instead of '
                              'returning per-block statistics and redoing the work per SNP in NumPy. '
@@ -934,6 +949,11 @@ def main():
     covar_cols = parse_list_arg(args.covar_cols)
 
     use_multi = len(pheno_cols) > 1
+    if args.panel_kernel and len(pheno_cols) > 1:
+        raise ValueError("--panel-kernel supports a single phenotype only; "
+                         "drop it or use a single --pheno-col.")
+    if args.panel_kernel and args.panel_size < 1:
+        raise ValueError("--panel-size must be >= 1")
     if args.fused_finalize and len(pheno_cols) > 1:
         raise ValueError("--fused-finalize supports a single phenotype only; "
                          "drop it or use one --pheno-col.")

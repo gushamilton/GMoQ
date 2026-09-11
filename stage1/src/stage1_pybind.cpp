@@ -356,6 +356,340 @@ py::tuple stage1_finalize_block_scores_impl(
     return py::make_tuple(betas_arr, se_arr, cov_arr);
 }
 
+// ---------------------------------------------------------------------------
+// Panel kernel.
+//
+// The per-SNP path above streams the whole (N, T) residualised RIF matrix from
+// DRAM once for every SNP (166 MB per SNP at production N), which makes it
+// memory-bound: 0.38 flop/byte, IPC 0.7.  The panel kernel processes P SNPs
+// together so RIF is streamed once per *panel*, and takes RIF and Q in C
+// (row-major) order so that the innermost loops run along the short,
+// contiguous axis (T = 45, K = 13) instead of striding by N.
+//
+// This is a pure re-nesting of the existing loops.  Every floating-point
+// accumulator receives exactly the same addends in exactly the same order as
+// prepare_genotype_raw + accumulate_block_stats_flat:
+//   Qtg[p][k]        over i ascending
+//   proj             over k ascending
+//   g2[p]            over i ascending
+//   stats[p][b][c]   over i ascending
+// so the result is bit-for-bit identical to the per-SNP path, not merely equal
+// to rounding.  (Verified empirically; see docs/BP1_stage1_kernel.md.)
+// ---------------------------------------------------------------------------
+
+inline void panel_block_stats(
+    const double* G_ptr,       // (N, M) column-major
+    const double* RIF_ptr,     // (N, T) row-major
+    const double* Q_ptr,       // (N, K) row-major
+    const int32_t* block_ptr,
+    size_t N,
+    size_t T,
+    size_t K,
+    int n_blocks,
+    double min_mac,
+    size_t j0,
+    size_t j1,
+    std::vector<size_t>& cols,
+    std::vector<double>& gmean,
+    std::vector<double>& g2,
+    std::vector<double>& Qtg,
+    std::vector<double>& stats
+) {
+    const size_t out_cols = 1 + T;
+
+    cols.clear();
+    gmean.clear();
+
+    // Pass 1: per-SNP finite count, sum and the MAC filter.  Reads one
+    // contiguous G column per SNP, exactly as prepare_genotype_raw does.
+    for (size_t j = j0; j < j1; j++) {
+        const double* g_col = G_ptr + j * N;
+        size_t n_valid = 0;
+        double g_sum = 0.0;
+        for (size_t i = 0; i < N; i++) {
+            double val = g_col[i];
+            if (std::isfinite(val)) {
+                g_sum += val;
+                n_valid++;
+            }
+        }
+        if (n_valid < 100) {
+            continue;
+        }
+        double mac = std::min(g_sum, 2.0 * static_cast<double>(n_valid) - g_sum);
+        if (mac < min_mac) {
+            continue;
+        }
+        cols.push_back(j);
+        gmean.push_back(g_sum / static_cast<double>(n_valid));
+    }
+
+    const size_t P = cols.size();
+    if (P == 0) {
+        return;
+    }
+
+    // Pass 2: Qtg[p][k] = sum_i Q[i,k] * g_imputed[i,p], accumulated over i
+    // ascending for every (p, k) - the same order as the per-SNP kernel.
+    Qtg.assign(P * K, 0.0);
+    for (size_t i = 0; i < N; i++) {
+        const double* qrow = Q_ptr + i * K;
+        for (size_t p = 0; p < P; p++) {
+            double val = G_ptr[i + cols[p] * N];
+            if (!std::isfinite(val)) {
+                val = gmean[p];
+            }
+            double* qt = &Qtg[p * K];
+            for (size_t k = 0; k < K; k++) {
+                qt[k] += qrow[k] * val;
+            }
+        }
+    }
+
+    // Pass 3: residualise and accumulate the block statistics for all P SNPs in
+    // one sweep over the samples, so RIF is read once for the whole panel.
+    g2.assign(P, 0.0);
+    stats.assign(static_cast<size_t>(n_blocks) * P * out_cols, 0.0);
+
+    for (size_t i = 0; i < N; i++) {
+        const double* qrow = Q_ptr + i * K;
+        const double* rrow = RIF_ptr + i * T;
+        int b = block_ptr[i];
+        const bool have_block = (b >= 0 && b < n_blocks);
+        double* tile = have_block
+            ? &stats[static_cast<size_t>(b) * P * out_cols]
+            : nullptr;
+
+        for (size_t p = 0; p < P; p++) {
+            double val = G_ptr[i + cols[p] * N];
+            if (!std::isfinite(val)) {
+                val = gmean[p];
+            }
+            const double* qt = &Qtg[p * K];
+            double proj = 0.0;
+            for (size_t k = 0; k < K; k++) {
+                proj += qrow[k] * qt[k];
+            }
+            double resid = val - proj;
+            g2[p] += resid * resid;
+            if (tile != nullptr) {
+                double* s = tile + p * out_cols;
+                s[0] += resid * resid;
+                for (size_t t = 0; t < T; t++) {
+                    s[1 + t] += resid * rrow[t];
+                }
+            }
+        }
+    }
+}
+
+template <bool UseStaticSchedule>
+py::array_t<double> stage1_block_scores_panel_impl(
+    py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> RIF_resid_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> Q_arr,
+    py::array_t<int32_t> block_ids_arr,
+    int n_blocks,
+    double min_mac,
+    double min_var,
+    int n_threads,
+    int panel_size
+) {
+    auto G_buf = G_arr.request();
+    auto RIF_buf = RIF_resid_arr.request();
+    auto Q_buf = Q_arr.request();
+    auto block_buf = block_ids_arr.request();
+
+    size_t N = G_buf.shape[0];
+    size_t M = G_buf.shape[1];
+    size_t T = RIF_buf.shape[1];
+    size_t K = Q_buf.shape[1];
+
+    if (static_cast<size_t>(RIF_buf.shape[0]) != N || static_cast<size_t>(Q_buf.shape[0]) != N) {
+        throw std::runtime_error("RIF_resid and Q must have the same number of rows as G.");
+    }
+    if (panel_size < 1) {
+        panel_size = 1;
+    }
+
+    const double* G_ptr = static_cast<const double*>(G_buf.ptr);
+    const double* RIF_ptr = static_cast<const double*>(RIF_buf.ptr);
+    const double* Q_ptr = static_cast<const double*>(Q_buf.ptr);
+    const int32_t* block_ptr = static_cast<const int32_t*>(block_buf.ptr);
+
+    std::vector<size_t> out_shape = {M, static_cast<size_t>(n_blocks), 1 + T};
+    py::array_t<double> result(out_shape);
+    auto result_buf = result.request();
+    double* result_ptr = static_cast<double*>(result_buf.ptr);
+
+    const size_t out_cols = 1 + T;
+    const size_t stride = static_cast<size_t>(n_blocks) * out_cols;
+    std::fill(result_ptr, result_ptr + M * stride, std::numeric_limits<double>::quiet_NaN());
+
+    const size_t P = static_cast<size_t>(panel_size);
+    const size_t n_panels = (M + P - 1) / P;
+
+    #ifdef _OPENMP
+    omp_set_num_threads(n_threads);
+    #endif
+
+    #pragma omp parallel
+    {
+        std::vector<size_t> cols;
+        std::vector<double> gmean;
+        std::vector<double> g2;
+        std::vector<double> Qtg;
+        std::vector<double> stats;
+
+        if (UseStaticSchedule) {
+            #pragma omp for schedule(static)
+            for (size_t ip = 0; ip < n_panels; ip++) {
+                size_t j0 = ip * P;
+                size_t j1 = std::min(M, j0 + P);
+                panel_block_stats(G_ptr, RIF_ptr, Q_ptr, block_ptr, N, T, K, n_blocks,
+                                  min_mac, j0, j1, cols, gmean, g2, Qtg, stats);
+                for (size_t p = 0; p < cols.size(); p++) {
+                    if (!(g2[p] >= min_var)) {
+                        continue;
+                    }
+                    double* out = result_ptr + cols[p] * stride;
+                    for (int b = 0; b < n_blocks; b++) {
+                        const double* s = &stats[static_cast<size_t>(b) * cols.size() * out_cols
+                                                 + p * out_cols];
+                        std::copy(s, s + out_cols, out + static_cast<size_t>(b) * out_cols);
+                    }
+                }
+            }
+        } else {
+            #pragma omp for schedule(dynamic, 1)
+            for (size_t ip = 0; ip < n_panels; ip++) {
+                size_t j0 = ip * P;
+                size_t j1 = std::min(M, j0 + P);
+                panel_block_stats(G_ptr, RIF_ptr, Q_ptr, block_ptr, N, T, K, n_blocks,
+                                  min_mac, j0, j1, cols, gmean, g2, Qtg, stats);
+                for (size_t p = 0; p < cols.size(); p++) {
+                    if (!(g2[p] >= min_var)) {
+                        continue;
+                    }
+                    double* out = result_ptr + cols[p] * stride;
+                    for (int b = 0; b < n_blocks; b++) {
+                        const double* s = &stats[static_cast<size_t>(b) * cols.size() * out_cols
+                                                 + p * out_cols];
+                        std::copy(s, s + out_cols, out + static_cast<size_t>(b) * out_cols);
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+template <bool UseStaticSchedule>
+py::tuple stage1_finalize_block_scores_panel_impl(
+    py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> RIF_resid_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> Q_arr,
+    py::array_t<int32_t> block_ids_arr,
+    int n_blocks,
+    double min_mac,
+    double min_var,
+    int n_threads,
+    int panel_size
+) {
+    auto G_buf = G_arr.request();
+    auto RIF_buf = RIF_resid_arr.request();
+    auto Q_buf = Q_arr.request();
+    auto block_buf = block_ids_arr.request();
+
+    size_t N = G_buf.shape[0];
+    size_t M = G_buf.shape[1];
+    size_t T = RIF_buf.shape[1];
+    size_t K = Q_buf.shape[1];
+
+    if (static_cast<size_t>(RIF_buf.shape[0]) != N || static_cast<size_t>(Q_buf.shape[0]) != N) {
+        throw std::runtime_error("RIF_resid and Q must have the same number of rows as G.");
+    }
+    if (panel_size < 1) {
+        panel_size = 1;
+    }
+
+    const double* G_ptr = static_cast<const double*>(G_buf.ptr);
+    const double* RIF_ptr = static_cast<const double*>(RIF_buf.ptr);
+    const double* Q_ptr = static_cast<const double*>(Q_buf.ptr);
+    const int32_t* block_ptr = static_cast<const int32_t*>(block_buf.ptr);
+
+    const size_t n_cov = T * (T + 1) / 2;
+    const size_t out_cols = 1 + T;
+
+    py::array_t<double, py::array::f_style> betas_arr({M, T});
+    py::array_t<double, py::array::f_style> se_arr({M, T});
+    py::array_t<double, py::array::f_style> cov_arr({M, n_cov});
+
+    double* betas_ptr = static_cast<double*>(betas_arr.request().ptr);
+    double* se_ptr = static_cast<double*>(se_arr.request().ptr);
+    double* cov_ptr = static_cast<double*>(cov_arr.request().ptr);
+
+    const double nan_val = std::numeric_limits<double>::quiet_NaN();
+    std::fill(betas_ptr, betas_ptr + M * T, nan_val);
+    std::fill(se_ptr, se_ptr + M * T, nan_val);
+    std::fill(cov_ptr, cov_ptr + M * n_cov, nan_val);
+
+    const size_t P = static_cast<size_t>(panel_size);
+    const size_t n_panels = (M + P - 1) / P;
+
+    #ifdef _OPENMP
+    omp_set_num_threads(n_threads);
+    #endif
+
+    #pragma omp parallel
+    {
+        std::vector<size_t> cols;
+        std::vector<double> gmean;
+        std::vector<double> g2;
+        std::vector<double> Qtg;
+        std::vector<double> stats;
+        std::vector<double> snp_stats;
+        std::vector<double> beta(T, nan_val);
+        std::vector<double> se(T, nan_val);
+        std::vector<double> cov_upper(n_cov, nan_val);
+
+        #pragma omp for schedule(static)
+        for (size_t ip = 0; ip < n_panels; ip++) {
+            size_t j0 = ip * P;
+            size_t j1 = std::min(M, j0 + P);
+            panel_block_stats(G_ptr, RIF_ptr, Q_ptr, block_ptr, N, T, K, n_blocks,
+                              min_mac, j0, j1, cols, gmean, g2, Qtg, stats);
+            const size_t PA = cols.size();
+            snp_stats.assign(static_cast<size_t>(n_blocks) * out_cols, 0.0);
+            for (size_t p = 0; p < PA; p++) {
+                if (!(g2[p] >= min_var)) {
+                    continue;
+                }
+                for (int b = 0; b < n_blocks; b++) {
+                    const double* s = &stats[static_cast<size_t>(b) * PA * out_cols + p * out_cols];
+                    std::copy(s, s + out_cols,
+                              snp_stats.begin() + static_cast<size_t>(b) * out_cols);
+                }
+                if (!finalize_stats_flat(snp_stats, n_blocks, T, beta, se, cov_upper)) {
+                    continue;
+                }
+                size_t j = cols[p];
+                for (size_t t = 0; t < T; t++) {
+                    betas_ptr[j + M * t] = beta[t];
+                    se_ptr[j + M * t] = se[t];
+                }
+                for (size_t c = 0; c < n_cov; c++) {
+                    cov_ptr[j + M * c] = cov_upper[c];
+                }
+            }
+        }
+    }
+
+    (void)UseStaticSchedule;
+    return py::make_tuple(betas_arr, se_arr, cov_arr);
+}
+
 template <bool UseStaticSchedule>
 py::list stage1_block_scores_multi_raw_impl(
     py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
@@ -966,6 +1300,27 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("block_ids"), py::arg("n_blocks"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1);
+
+    m.def("stage1_block_scores_panel_static", &stage1_block_scores_panel_impl<true>,
+          "Panel block scores: P SNPs per sweep over the samples, RIF/Q in C order",
+          py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
+          py::arg("block_ids"), py::arg("n_blocks"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    m.def("stage1_block_scores_panel_dynamic", &stage1_block_scores_panel_impl<false>,
+          "Panel block scores with a dynamic OpenMP schedule",
+          py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
+          py::arg("block_ids"), py::arg("n_blocks"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    m.def("stage1_finalize_block_scores_panel_static", &stage1_finalize_block_scores_panel_impl<true>,
+          "Panel block scores fused with the jackknife finalisation",
+          py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
+          py::arg("block_ids"), py::arg("n_blocks"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_size") = 16);
 
     m.def("stage1_finalize_block_scores_static", &stage1_finalize_block_scores_impl<true>,
           "Experimental fused stage1 finalization with static scheduling",

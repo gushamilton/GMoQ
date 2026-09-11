@@ -209,6 +209,64 @@ def compute_block_scores(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
         return _compute_block_scores_numpy(G, Y_resid, Q, block_ids, n_blocks, min_mac, min_var)
 
 
+def compute_block_scores_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
+                               block_ids: np.ndarray, n_blocks: int,
+                               min_mac: float = 5.0, min_var: float = 1e-8,
+                               n_threads: int = 1, panel_size: int = 16) -> np.ndarray:
+    """Panel form of :func:`compute_block_scores`.
+
+    Identical output to :func:`compute_block_scores` - **bit for bit**, not merely to
+    rounding.  The only difference is loop nesting: ``panel_size`` SNPs are carried
+    through one sweep over the samples together, so the (N, T) residualised RIF matrix
+    is streamed from DRAM once per panel instead of once per SNP.  Every floating-point
+    accumulator still receives the same addends in the same order, so no reassociation
+    takes place.
+
+    ``Y_resid`` and ``Q`` are taken in C (row-major) order, which is the order NumPy
+    produces them in, so the per-batch ``asfortranarray`` copies of the per-SNP path
+    (166 MB + 48 MB at production N) are not made either.
+    """
+    require_cpp_extension("Panel block-score computation")
+    if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_block_scores_panel_static'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_block_scores_panel_static; "
+            "rebuild the extension or use compute_block_scores instead."
+        )
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    Y_c = np.ascontiguousarray(Y_resid, dtype=np.float64)
+    Q_c = np.ascontiguousarray(Q, dtype=np.float64)
+    block_ids_i32 = block_ids.astype(np.int32)
+    return cpp_ext.stage1_block_scores_panel_static(
+        G_f, Y_c, Q_c, block_ids_i32, n_blocks, min_mac, min_var, n_threads, panel_size,
+    )
+
+
+def compute_block_finalize_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
+                                 block_ids: np.ndarray, n_blocks: int,
+                                 min_mac: float = 5.0, min_var: float = 1e-8,
+                                 n_threads: int = 1, panel_size: int = 16):
+    """Panel kernel fused with the jackknife finalisation.
+
+    The block statistics are bit-identical to :func:`compute_block_scores`; the
+    finalisation is the same ``finalize_stats_flat`` used by
+    :func:`compute_block_finalize`, so the beta/SE/covariance output is bit-identical to
+    that function's.
+    """
+    require_cpp_extension("Fused panel block finalization")
+    if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_finalize_block_scores_panel_static'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_finalize_block_scores_panel_static; "
+            "rebuild the extension or use compute_block_finalize instead."
+        )
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    Y_c = np.ascontiguousarray(Y_resid, dtype=np.float64)
+    Q_c = np.ascontiguousarray(Q, dtype=np.float64)
+    block_ids_i32 = block_ids.astype(np.int32)
+    return cpp_ext.stage1_finalize_block_scores_panel_static(
+        G_f, Y_c, Q_c, block_ids_i32, n_blocks, min_mac, min_var, n_threads, panel_size,
+    )
+
+
 def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
                            block_ids: np.ndarray, n_blocks: int,
                            min_mac: float = 5.0, min_var: float = 1e-8,
