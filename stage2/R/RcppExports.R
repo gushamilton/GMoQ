@@ -2,11 +2,11 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 fit_multi_models <- function(beta_stage1, se_stage1, W_list, N, n_threads = 1L) {
-    .Call('_fungwasStage2_fit_multi_models', PACKAGE = 'fungwasStage2', beta_stage1, se_stage1, W_list, N, n_threads)
+    .Call(`_fungwasStage2_fit_multi_models`, beta_stage1, se_stage1, W_list, N, n_threads)
 }
 
 fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n_threads = 1L) {
-    .Call('_fungwasStage2_fit_multi_models_tau_cov', PACKAGE = 'fungwasStage2', beta_stage1, cov_vec, offsets, W_list, N, n_threads)
+    .Call(`_fungwasStage2_fit_multi_models_tau_cov`, beta_stage1, cov_vec, offsets, W_list, N, n_threads)
 }
 
 #' Compute Calibrated Standard Errors
@@ -17,7 +17,7 @@ fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n
 #' @param K Dimension of the covariance matrix (e.g. 17).
 #' @return NumericMatrix of standard errors (n_snps x n_params).
 compute_calibrated_se <- function(cov_vec, offsets, A, K) {
-    .Call('_fungwasStage2_compute_calibrated_se', PACKAGE = 'fungwasStage2', cov_vec, offsets, A, K)
+    .Call(`_fungwasStage2_compute_calibrated_se`, cov_vec, offsets, A, K)
 }
 
 #' Compute parameter covariance upper triangles
@@ -28,7 +28,7 @@ compute_calibrated_se <- function(cov_vec, offsets, A, K) {
 #' @param K Dimension of the covariance matrix (e.g. 17).
 #' @return NumericMatrix of upper-triangle covariance (n_snps x n_cov_params).
 compute_param_cov <- function(cov_vec, offsets, A, K) {
-    .Call('_fungwasStage2_compute_param_cov', PACKAGE = 'fungwasStage2', cov_vec, offsets, A, K)
+    .Call(`_fungwasStage2_compute_param_cov`, cov_vec, offsets, A, K)
 }
 
 #' Compute GLS Stage 2 Parameter GWAS
@@ -41,9 +41,30 @@ compute_param_cov <- function(cov_vec, offsets, A, K) {
 #' @param offsets Integer vector of byte offsets (0-based) into the original file.
 #' @param W Weight/design matrix with K rows and n_params columns.
 #' @param return_cov Whether to return parameter covariance upper triangles.
-#' @param gls_ridge Relative diagonal ridge used only to make a nearly positive-definite covariance usable.
+#' @param gls_ridge Relative diagonal ridge added only if the covariance solve fails.
 #' @param n_threads Number of OpenMP threads.
 #' @return List with params, se, Q, and optionally param_cov_upper.
 compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov = FALSE, gls_ridge = 1e-8, n_threads = 1L) {
-    .Call('_fungwasStage2_compute_gls_param_gwas', PACKAGE = 'fungwasStage2', beta_stage1, cov_vec, offsets, W, return_cov, gls_ridge, n_threads)
+    .Call(`_fungwasStage2_compute_gls_param_gwas`, beta_stage1, cov_vec, offsets, W, return_cov, gls_ridge, n_threads)
 }
+
+#' Null-distribution quantities for the Stage 2 lack-of-fit statistic
+#'
+#' Computes, for each SNP, the power sums of the eigenvalues of
+#' \code{D^-1/2 M Sigma M' D^-1/2} together with a saddlepoint tail
+#' probability for the observed \code{Q}. Uses \code{Sigma} only; it never
+#' inverts or factorises it, so it is valid on the stored int8 covariance.
+#'
+#' @param cov_vec Concatenated upper triangles of the per-SNP covariances.
+#' @param offsets Byte offsets (0-based) of each SNP's record.
+#' @param Qstat Numeric vector of observed Q statistics (n_snps).
+#' @param Dvar Numeric matrix (K x n_snps) of per-tau variances, se_tau^2.
+#' @param M Residual projector I - W (W'W)^-1 W' (K x K).
+#' @param K Number of taus.
+#' @param n_threads OpenMP threads.
+#' @return Numeric matrix (n_snps x 6): c1, c2, c3, c4, p_saddle, n_eig.
+#'   \code{p_saddle} is negative where the saddlepoint does not apply.
+compute_q_calibration <- function(cov_vec, offsets, Qstat, Dvar, M, K, n_threads) {
+    .Call(`_fungwasStage2_compute_q_calibration`, cov_vec, offsets, Qstat, Dvar, M, K, n_threads)
+}
+

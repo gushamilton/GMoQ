@@ -87,6 +87,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// compute_q_calibration
+NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets, NumericVector Qstat, NumericMatrix Dvar, NumericMatrix M, int K, int n_threads);
+RcppExport SEXP _fungwasStage2_compute_q_calibration(SEXP cov_vecSEXP, SEXP offsetsSEXP, SEXP QstatSEXP, SEXP DvarSEXP, SEXP MSEXP, SEXP KSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type cov_vec(cov_vecSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Qstat(QstatSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type Dvar(DvarSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type M(MSEXP);
+    Rcpp::traits::input_parameter< int >::type K(KSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(compute_q_calibration(cov_vec, offsets, Qstat, Dvar, M, K, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fungwasStage2_fit_multi_models", (DL_FUNC) &_fungwasStage2_fit_multi_models, 5},
@@ -94,6 +111,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fungwasStage2_compute_calibrated_se", (DL_FUNC) &_fungwasStage2_compute_calibrated_se, 4},
     {"_fungwasStage2_compute_param_cov", (DL_FUNC) &_fungwasStage2_compute_param_cov, 4},
     {"_fungwasStage2_compute_gls_param_gwas", (DL_FUNC) &_fungwasStage2_compute_gls_param_gwas, 7},
+    {"_fungwasStage2_compute_q_calibration", (DL_FUNC) &_fungwasStage2_compute_q_calibration, 7},
     {NULL, NULL, 0}
 };
 

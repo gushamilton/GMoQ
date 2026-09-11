@@ -319,3 +319,163 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Calibrated null distribution for the Stage 2 lack-of-fit statistic Q
+// ---------------------------------------------------------------------------
+//
+// Q = r' D^-1 r with r = M b, M = I - W (W'W)^-1 W', D = diag(se_tau^2).
+// Under the null b ~ N(W theta, Sigma), so r ~ N(0, M Sigma M') and
+//
+//     Q ~ sum_i lambda_i chi2_1,
+//
+// where lambda_i are the eigenvalues of B = D^-1/2 M Sigma M' D^-1/2.
+// This requires Sigma only -- never Sigma^-1 -- which is what makes it usable
+// on the stored int8 covariance.
+//
+// Returns, per SNP, the first four "power sums" c_k = sum lambda^k (from which
+// R forms the Satterthwaite and Liu approximations) together with a
+// Lugannani-Rice saddlepoint tail probability, which is accurate far enough
+// into the tail to be used at genome-wide thresholds.
+//
+// Only pure double arithmetic happens inside the parallel region; every R API
+// call is left to the caller.
+
+namespace {
+
+// Upper-tail probability of the standard normal.
+inline double norm_sf(double x) {
+  return 0.5 * std::erfc(x / std::sqrt(2.0));
+}
+
+// Lugannani-Rice saddlepoint upper-tail probability for sum_i lam_i chi2_1.
+// Returns a negative value if it is not applicable (caller falls back).
+double saddlepoint_sf(double q, const arma::vec& lam) {
+  const arma::uword n = lam.n_elem;
+  if (n == 0) return -1.0;
+  double mu = arma::accu(lam);
+  double lmax = lam.max();
+  if (!(q > mu) || lmax <= 0.0) return -1.0;   // only valid in the upper tail
+
+  // K'(z) = sum lam/(1 - 2 lam z) is increasing on (-inf, 1/(2 lmax)).
+  const double hi_lim = 0.5 / lmax;
+  double lo = -1.0, hi = hi_lim * (1.0 - 1e-12);
+
+  auto kprime = [&](double z) {
+    double s = 0.0;
+    for (arma::uword i = 0; i < n; ++i) s += lam[i] / (1.0 - 2.0 * lam[i] * z);
+    return s;
+  };
+
+  int guard = 0;
+  while (kprime(lo) > q) { lo *= 2.0; if (++guard > 200) return -1.0; }
+
+  double zeta = 0.0;
+  for (int it = 0; it < 200; ++it) {
+    zeta = 0.5 * (lo + hi);
+    double v = kprime(zeta);
+    if (v > q) hi = zeta; else lo = zeta;
+    if (hi - lo < 1e-14 * std::max(1.0, std::fabs(hi))) break;
+  }
+
+  double K = 0.0, K2 = 0.0;
+  for (arma::uword i = 0; i < n; ++i) {
+    double den = 1.0 - 2.0 * lam[i] * zeta;
+    if (den <= 0.0) return -1.0;
+    K -= 0.5 * std::log(den);
+    K2 += 2.0 * lam[i] * lam[i] / (den * den);
+  }
+  double arg = 2.0 * (zeta * q - K);
+  if (!(arg > 0.0) || !(K2 > 0.0)) return -1.0;
+
+  double w = (zeta >= 0 ? 1.0 : -1.0) * std::sqrt(arg);
+  double v = zeta * std::sqrt(K2);
+  if (w == 0.0 || v <= 0.0) return -1.0;
+  double p = norm_sf(w + std::log(v / w) / w);
+  if (!std::isfinite(p) || p < 0.0 || p > 1.0) return -1.0;
+  return p;
+}
+
+}  // namespace
+
+//' Null-distribution quantities for the Stage 2 lack-of-fit statistic
+//'
+//' Computes, for each SNP, the power sums of the eigenvalues of
+//' \code{D^-1/2 M Sigma M' D^-1/2} together with a saddlepoint tail
+//' probability for the observed \code{Q}. Uses \code{Sigma} only; it never
+//' inverts or factorises it, so it is valid on the stored int8 covariance.
+//'
+//' @param cov_vec Concatenated upper triangles of the per-SNP covariances.
+//' @param offsets Byte offsets (0-based) of each SNP's record.
+//' @param Qstat Numeric vector of observed Q statistics (n_snps).
+//' @param Dvar Numeric matrix (K x n_snps) of per-tau variances, se_tau^2.
+//' @param M Residual projector I - W (W'W)^-1 W' (K x K).
+//' @param K Number of taus.
+//' @param n_threads OpenMP threads.
+//' @return Numeric matrix (n_snps x 6): c1, c2, c3, c4, p_saddle, n_eig.
+//'   \code{p_saddle} is negative where the saddlepoint does not apply.
+// [[Rcpp::export]]
+NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets,
+                                    NumericVector Qstat, NumericMatrix Dvar,
+                                    NumericMatrix M, int K, int n_threads) {
+  const int n_snps = offsets.size();
+  const int n_cov_elements = K * (K + 1) / 2;
+
+  arma::mat M_mat(M.begin(), K, K, false);
+  arma::mat D_mat(Dvar.begin(), K, n_snps, false);
+  NumericMatrix out(n_snps, 6);
+
+#ifdef _OPENMP
+  if (n_threads > 1) omp_set_num_threads(n_threads);
+#pragma omp parallel for schedule(dynamic, 256)
+#endif
+  for (int i = 0; i < n_snps; i++) {
+    for (int p = 0; p < 6; p++) out(i, p) = NA_REAL;
+
+    long long start_idx = (long long)(offsets[i] / 4);
+    if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) continue;
+
+    arma::mat Sigma(K, K, arma::fill::zeros);
+    int idx = 0;
+    for (int r = 0; r < K; r++)
+      for (int c = r; c < K; c++) Sigma(r, c) = cov_vec[start_idx + idx++];
+    for (int r = 0; r < K; r++)
+      for (int c = r + 1; c < K; c++) Sigma(c, r) = Sigma(r, c);
+
+    // C = D^-1/2 M ; B = C Sigma C'
+    arma::vec d = D_mat.col(i);
+    bool bad = false;
+    arma::vec inv_sqrt(K);
+    for (int t = 0; t < K; t++) {
+      double v = d[t];
+      if (!(v > 0.0) || !std::isfinite(v)) { bad = true; break; }
+      inv_sqrt[t] = 1.0 / std::sqrt(v);
+    }
+    if (bad || !Sigma.is_finite()) continue;
+
+    arma::mat C = arma::diagmat(inv_sqrt) * M_mat;
+    arma::mat B = C * Sigma * C.t();
+    B = 0.5 * (B + B.t());
+
+    arma::vec ev;
+    if (!arma::eig_sym(ev, B)) continue;
+
+    // Drop the structural zeros (M has rank K - ncol(W)) and any negative
+    // eigenvalues produced by int8 quantisation noise.
+    double emax = ev.max();
+    if (!(emax > 0.0)) continue;
+    arma::vec lam = ev.elem(arma::find(ev > 1e-10 * emax));
+    if (lam.n_elem < 2) continue;
+
+    double c1 = 0, c2 = 0, c3 = 0, c4 = 0;
+    for (arma::uword j = 0; j < lam.n_elem; ++j) {
+      double l = lam[j], l2 = l * l;
+      c1 += l; c2 += l2; c3 += l2 * l; c4 += l2 * l2;
+    }
+    out(i, 0) = c1; out(i, 1) = c2; out(i, 2) = c3; out(i, 3) = c4;
+    out(i, 4) = saddlepoint_sf(Qstat[i], lam);
+    out(i, 5) = (double)lam.n_elem;
+  }
+
+  return out;
+}
