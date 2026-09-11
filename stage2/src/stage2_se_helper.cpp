@@ -353,13 +353,27 @@ inline double norm_sf(double x) {
 double saddlepoint_sf(double q, const arma::vec& lam) {
   const arma::uword n = lam.n_elem;
   if (n == 0) return -1.0;
-  double mu = arma::accu(lam);
+  double mu = arma::accu(lam);          // = K'(0)
   double lmax = lam.max();
   if (!(q > mu) || lmax <= 0.0) return -1.0;   // only valid in the upper tail
 
-  // K'(z) = sum lam/(1 - 2 lam z) is increasing on (-inf, 1/(2 lmax)).
-  const double hi_lim = 0.5 / lmax;
-  double lo = -1.0, hi = hi_lim * (1.0 - 1e-12);
+  // DOMAIN OF CONVERGENCE.  K(t) = -0.5 sum log(1 - 2 lam_i t) is finite only
+  // where every 1 - 2 lam_i t > 0, i.e. on the open interval
+  //
+  //     1/(2 lam_min) < t < 1/(2 lam_max)      (lower bound -inf if lam_min>=0)
+  //
+  // With a two-sided spectrum -- which is exactly what keeping the negative
+  // eigenvalues produces -- the interval is bounded at BOTH ends, and stepping
+  // outside it does not crash: 1 - 2 lam_i t merely goes negative for some i
+  // and K'/K'' silently return values from the wrong branch.  The bracket must
+  // therefore never be allowed to leave the interval.
+  //
+  // K' is strictly increasing on the interval (K'' = sum 2 lam^2/(1-2 lam t)^2
+  // > 0), so a bracket is valid iff K'(lo) <= q <= K'(hi) with both endpoints
+  // inside.  We are only ever called with q > mu = K'(0), and t = 0 is in the
+  // interval for ANY spectrum, so lo = 0 is a provably safe lower bracket and
+  // no downward expansion is needed at all.  The root zeta is in (0, hi_lim).
+  const double hi_lim = 0.5 / lmax;                       // > 0, always finite
 
   auto kprime = [&](double z) {
     double s = 0.0;
@@ -367,8 +381,18 @@ double saddlepoint_sf(double q, const arma::vec& lam) {
     return s;
   };
 
+  double lo = 0.0;
+  // Upper bracket: K'(t) -> +inf as t -> hi_lim from below, so a point with
+  // K'(hi) > q always exists strictly inside.  Walk in from a safe interior
+  // start by halving the remaining gap; never set hi >= hi_lim.
+  double hi = hi_lim * 0.5;
   int guard = 0;
-  while (kprime(lo) > q) { lo *= 2.0; if (++guard > 200) return -1.0; }
+  while (!(kprime(hi) > q)) {
+    double next = hi + 0.5 * (hi_lim - hi);
+    if (!(next > hi) || !(next < hi_lim)) return -1.0;    // gap underflowed
+    hi = next;
+    if (++guard > 200) return -1.0;
+  }
 
   double zeta = 0.0;
   for (int it = 0; it < 200; ++it) {
@@ -460,11 +484,27 @@ NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets
     arma::vec ev;
     if (!arma::eig_sym(ev, B)) continue;
 
-    // Drop the structural zeros (M has rank K - ncol(W)) and any negative
-    // eigenvalues produced by int8 quantisation noise.
-    double emax = ev.max();
+    // Drop the structural zeros of B and nothing else.
+    //
+    // B = G Sigma G' with G = D^-1/2 M and rank(M) = K - ncol(W), so exactly
+    // ncol(W) eigenvalues are structurally zero for ANY Sigma.  Those are the
+    // only ones that may be discarded.  NEGATIVE eigenvalues must be KEPT:
+    // the stored int8 Sigma is not positive definite for essentially every
+    // SNP, and its negative eigenvalues carry real negative mass in
+    // Q = sum_i lambda_i chi2_1.  Deleting them (as a one-sided `ev > tol`
+    // test does) biases tr(B) upward and the effective df c1^2/c2 roughly
+    // twice as much.  So select by MAGNITUDE against the spectral radius.
+    //
+    // Tolerance: the structural zeros come out of eig_sym at O(eps)*||B||,
+    // i.e. ~1e-16 to 1e-14 of the spectral radius for K = 45.  The smallest
+    // genuine eigenvalues of B are ~1e-4 of the radius and the negative ones
+    // produced by int8 quantisation are ~1e-1 of it.  1e-8 sits about six
+    // orders of magnitude above the numerical noise and four below the
+    // smallest real structure, in the middle of a very wide empty gap.
+    const double ev_tol = 1e-8;
+    double emax = arma::abs(ev).max();          // spectral radius
     if (!(emax > 0.0)) continue;
-    arma::vec lam = ev.elem(arma::find(ev > 1e-10 * emax));
+    arma::vec lam = ev.elem(arma::find(arma::abs(ev) > ev_tol * emax));
     if (lam.n_elem < 2) continue;
 
     double c1 = 0, c2 = 0, c3 = 0, c4 = 0;
