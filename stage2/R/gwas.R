@@ -182,7 +182,7 @@ param_gwas <- function(
   se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   plugin_R = NULL,
   cov_data = NULL,
-  tau_cov_estimator = c("gls", "ols"),
+  tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr")
@@ -597,7 +597,7 @@ param_gwas_from_file <- function(
   param_cov_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
-  tau_cov_estimator = c("gls", "ols"),
+  tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
   n_threads = 1L
 ) {
