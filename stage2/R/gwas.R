@@ -880,7 +880,10 @@ param_gwas_multi_from_file <- function(
   n <- length(Q)
   pval <- rep(NA_real_, n)
 
-  # Two-moment Satterthwaite: Q ~ scale * chisq(df_eff)
+  # Two-moment Satterthwaite: Q ~ scale * chisq(df_eff).
+  # c1 = E[Q] = tr(B) and c2 = Var[Q]/2 = tr(B^2) are both exact for a
+  # two-sided eigenvalue spectrum (c2 is a sum of squares, so always > 0).
+  # The scale/df match needs c1 > 0, which `ok` already requires.
   scale_a <- rep(NA_real_, n); df_eff <- rep(NA_real_, n)
   scale_a[ok] <- c2[ok] / c1[ok]              # Var/(2E) = 2c2/(2c1)
   df_eff[ok]  <- c1[ok]^2 / c2[ok]            # 2E^2/Var
@@ -898,7 +901,14 @@ param_gwas_multi_from_file <- function(
     muQ <- c1[okl]
     sigmaQ <- sqrt(2 * c2[okl])
     disc <- s1^2 - s2
-    use_nc <- disc > 0
+    # The moments c1..c4 are exact for a two-sided spectrum -- the cumulants
+    # of sum lam_i chi2_1 are 2^(k-1) (k-1)! c_k whatever the signs. What is
+    # sign-sensitive is the FIT: both branches below map the moments onto a
+    # (non-central) chi-square, whose skewness is necessarily positive, so
+    # they are only meaningful when s1 = c3/c2^1.5 > 0. With enough negative
+    # weight c3 can go non-positive, and the matching then silently returns a
+    # number from the wrong shape family. Refuse it instead.
+    use_nc <- disc > 0 & s1 > 0
     a <- numeric(length(s1)); delta <- numeric(length(s1)); l <- numeric(length(s1))
     a[use_nc] <- 1 / (s1[use_nc] - sqrt(disc[use_nc]))
     delta[use_nc] <- s1[use_nc] * a[use_nc]^3 - a[use_nc]^2
@@ -909,7 +919,8 @@ param_gwas_multi_from_file <- function(
     muX <- l + delta
     sigmaX <- sqrt(2) * a
     Qn <- (Q[okl] - muQ) / sigmaQ * sigmaX + muX
-    good <- is.finite(Qn) & is.finite(l) & l > 0 & is.finite(delta) & delta >= 0
+    good <- is.finite(Qn) & is.finite(l) & l > 0 & is.finite(delta) & delta >= 0 &
+            is.finite(s1) & s1 > 0
     v <- rep(NA_real_, length(Qn))
     v[good] <- stats::pchisq(Qn[good], df = l[good], ncp = delta[good],
                              lower.tail = FALSE)
