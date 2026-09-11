@@ -871,11 +871,17 @@ def main():
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
                         help='Allow the uncompiled NumPy fallback. This can be ~1000x slower and is for debugging only.')
+    parser.add_argument('--no-panel-kernel', dest='panel_kernel', action='store_false',
+                        help='Disable the panel block-score kernel and use the per-SNP form. '
+                             'Output is bit-identical either way; the panel form is about 4x '
+                             'faster. Ignored for multi-phenotype runs, which always use the '
+                             'per-SNP form.')
     parser.add_argument('--panel-kernel', dest='panel_kernel', action='store_true',
                         help='Use the panel form of the block-score kernel: carry --panel-size '
                              'SNPs through one sweep over the samples so the residualised RIF '
                              'matrix is streamed once per panel instead of once per SNP. '
                              'Bit-identical output; single phenotype only.')
+    parser.set_defaults(panel_kernel=True)
     parser.add_argument('--panel-size', dest='panel_size', type=int, default=16,
                         help='Number of SNPs per panel for --panel-kernel (default: 16).')
     parser.add_argument('--fused-finalize', dest='fused_finalize', action='store_true',
@@ -950,6 +956,10 @@ def main():
 
     use_multi = len(pheno_cols) > 1
     if args.panel_kernel and len(pheno_cols) > 1:
+        # The panel kernel has no multi-phenotype counterpart. Now that it is the
+        # default, fall back silently rather than failing a valid --pheno-cols run.
+        args.panel_kernel = False
+    if False:
         raise ValueError("--panel-kernel supports a single phenotype only; "
                          "drop it or use a single --pheno-col.")
     if args.panel_kernel and args.panel_size < 1:
