@@ -60,15 +60,19 @@ cov_data <- list(cov_vec = cov_vec, offsets = offsets)
 
 stage1 <- list(taus = taus, q_tau = rep(0, Tt), Q_slope = Q_slope, SE_tau = SE_tau)
 
-# ---- 1. default behaviour is untouched ---------------------------------
-fit_old <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W),
-                      se_mode = "tau_cov", cov_data = cov_data, tau_cov_estimator = "ols")
-ok(is.null(fit_old$Q_pval), "default q_method returns no calibrated p-value")
-ok(identical(fit_old$q_method, "chisq_naive"), "default q_method is chisq_naive")
-
+# ---- 1. default is the calibrated reference; chisq_naive reproduces the old --
 fit_new <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W),
+                      se_mode = "tau_cov", cov_data = cov_data, tau_cov_estimator = "ols")
+ok(identical(fit_new$q_method, "saddlepoint"), "default q_method is saddlepoint")
+ok(!is.null(fit_new$Q_pval), "default q_method returns a calibrated p-value")
+
+# chisq_naive remains reachable and reproduces the pre-2026-09-11 published behaviour
+fit_old <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W),
                       se_mode = "tau_cov", cov_data = cov_data,
-                      tau_cov_estimator = "ols", q_method = "saddlepoint")
+                      tau_cov_estimator = "ols", q_method = "chisq_naive")
+ok(identical(fit_old$q_method, "chisq_naive"), "chisq_naive is still selectable")
+ok(is.null(fit_old$Q_pval), "chisq_naive returns no calibrated p-value, as published")
+
 ok(isTRUE(all.equal(fit_old$Q, fit_new$Q, tolerance = 0)),
    "the Q STATISTIC is bit-identical across q_method (only the reference changes)")
 ok(isTRUE(all.equal(fit_old$params, fit_new$params, tolerance = 0)),

@@ -186,7 +186,7 @@ param_gwas <- function(
   gls_ridge = 1e-8,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr"),
-  q_method = c("chisq_naive", "saddlepoint", "liu", "satterthwaite")
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite")
 ) {
   transform <- match.arg(transform)
   se_mode   <- match.arg(se_mode)
@@ -617,7 +617,7 @@ param_gwas_from_file <- function(
   tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
   n_threads = 1L,
-  q_method = c("chisq_naive", "saddlepoint", "liu", "satterthwaite")
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite")
 ) {
   se_mode <- match.arg(se_mode)
   return_cov <- match.arg(return_cov)
