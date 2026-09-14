@@ -346,6 +346,30 @@ on transportability (§5), not on power.
   jackknife gives the SE. Estimate it on an LD-pruned genome-wide set, not on the
   hits — the denominator correction is what makes including null variants safe.
 
+  Measured behaviour, on 50,000 synthetic variants with `r_av` = 0.135 and sampling
+  error comparable to the signal (`sim_meanvar/src` trim check):
+
+  | | slope | bias / SE |
+  |---|---|---|
+  | naive OLS of `alpha_v` on `alpha` | 0.1267 | biased **low** (dilution) |
+  | dilution correction only | 0.1997 | biased **high** by 48% (the within-variant covariance) |
+  | **both corrections** | **0.1329** | **-0.14** |
+
+  Neither correction alone is enough, and they err in opposite directions. Trimming
+  is mild at the default: `trim` = 0, 0.001, 0.01, 0.05 give bias/SE of -0.14, -0.09,
+  +0.21, +1.45, so 0.01 is safe and 0.05 is already too aggressive (it removes 40 per
+  cent of the denominator mass).
+
+  **The assumption, and how it fails.** Consistency requires genuine dispersion
+  effects to be uncorrelated with mean effects — Young et al.'s assumption, not
+  testable from these data. With genuine vQTLs present but independent, `r_av` is
+  recovered cleanly (0.1328 against 0.135, -1.16 SE). With a real dispersion signal
+  genuinely proportional to the mean effect (true total coupling 0.235), the
+  estimator returns 0.238 — it **absorbs the real signal into the nuisance
+  parameter**. That is the correct behaviour given the assumption, and it is also the
+  reason the uncorrected column must stay: if the biology really is "variance scales
+  with mean", the residualisation defines that away by construction.
+
 - **`residualise_dispersion(...)`** — the corrected estimate and its SE:
 
   ```

@@ -204,8 +204,8 @@ estimate_rav <- function(beta_mu, beta_sigma2, se_mu, se_sigma2,
       se <- sqrt((nb - 1) / nb * sum((ps - mean(ps))^2))
     }
   }
-  list(r_av = r_av, se = se, n_used = sum(keep), n_blocks = nb,
-       denominator = sum(den[keep]), trim = trim)
+  list(r_av = r_av, se = se, n_used = length(num), n_blocks = nb,
+       denominator = sum(den), trim = trim)
 }
 
 
