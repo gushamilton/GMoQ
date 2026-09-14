@@ -136,6 +136,13 @@ When two taus share a sample quantile their RIF columns are literally the same v
 is rank-deficient, and the GLS solve falls back to ridge repair on 100% of SNPs. The Stage 2 log says so
 explicitly: `ridge repair attempted 2020 (100.0000%), rescued 2020`.
 
+**Why OLS escapes, and why that matters.** The OLS path is a *fixed-contrast projection*
+(`stage2/R/tail-reference.R:433`): the contrast `(W'W)^-1 W'` does not depend on the estimated
+covariance, and `Sigma` enters only through the sandwich `W' Sigma W`. It is never inverted, so a
+rank-deficient `Sigma` costs nothing. GLS uses `Sigma^-1` as the weight matrix, which is precisely the
+operation that fails. **`tau_cov_estimator = "gls"` is the package default**
+(`stage2/R/gwas.R:223`), so the broken path is the one a user gets without asking.
+
 **This is a power failure, not a false-positive failure — with one exception.** Rejection in the far tail
 as a multiple of nominal (scale parameter, n = 200,000):
 
