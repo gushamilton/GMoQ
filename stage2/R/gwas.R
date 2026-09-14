@@ -1115,7 +1115,7 @@ param_gwas_multi_from_file <- function(
 #'   Q = r' D^-1 r,  r = M b,  M = I - W (W'W)^-1 W',  Var(r) = M Sigma M',
 #'
 #' whose exact null distribution is \code{sum_i lambda_i chi2_1} with
-#' \code{lambda} the eigenvalues of \code{D^-1/2 M Sigma M' D^-1/2}.
+#' \code{lambda} the eigenvalues of \code{D^-1/2 M Sigma t(M) D^-1/2}.
 #'
 #' Critically this needs \code{Sigma} only and never \code{Sigma^-1}, so it is
 #' valid on the stored int8 covariance, which is accurate in quadratic forms

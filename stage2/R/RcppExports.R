@@ -51,7 +51,7 @@ compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov 
 #' Null-distribution quantities for the Stage 2 lack-of-fit statistic
 #'
 #' Computes, for each SNP, the power sums of the eigenvalues of
-#' \code{D^-1/2 M Sigma M' D^-1/2} together with a saddlepoint tail
+#' \code{D^-1/2 M Sigma t(M) D^-1/2} together with a saddlepoint tail
 #' probability for the observed \code{Q}. Uses \code{Sigma} only; it never
 #' inverts or factorises it, so it is valid on the stored int8 covariance.
 #'

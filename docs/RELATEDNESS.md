@@ -114,28 +114,65 @@ basis vectors. Being a shape test rather than a level test, it separates confoun
 real signal without LDSC - which matters, since nobody has justified applying mean-effect
 LDSC to variance statistics.
 
-## What to worry about instead: the mean-variance scale artefact
+## What to worry about instead: a mean effect that manufactures a vQTL
 
-Three to four orders of magnitude larger than anything above. A SNP with a **pure mean effect
-and no variance effect at all**, N = 200,000:
+Three to four orders of magnitude larger than anything above, and **two separate
+mechanisms, not one**. An earlier version of this section attributed the whole effect
+to the phenotype's mean-variance relationship and blamed the residual on
+`W`-misspecification. Both attributions were wrong. The exact population calculation
+is in `docs/MEAN_VARIANCE_ARTEFACT.md`; the numbers below supersede the ones that
+stood here.
 
-| scale | spurious `theta_sigma2` bias |
-|---|---|
-| raw (lognormal) | **28.1 SD** |
-| log-transformed | 2.7 SD |
-| RINT | 3.2 SD |
+A SNP with a **pure mean effect and no variance effect at all**, N = 200,000,
+MAF 0.30, on a lognormal trait of raw-scale skewness 1.75:
 
-**RINT does not remove it**, independently reproducing Young et al. 2018: variance effects
-arising from a mean-variance relationship are not in general removed by an inverse normal
-transform. The residual after the correct transformation is `W`-misspecification: the
-Gaussian `W` is built on a marginal that is a mixture over genotypes, so any departure from
-Gaussianity couples mean into variance.
+| scale | previously reported (20-rep MC) | exact | true dispersion effect |
+|---|---|---|---|
+| raw (lognormal) | 28.1 SD | **33.2** | **0.2341 — real, not spurious** |
+| log | 2.7 SD | **3.12** | 0 (exactly) |
+| RINT | 3.2 SD | **3.09** | -1.7e-4 |
 
-Stage 2's GLS orthogonalises `theta_sigma2` against `theta_mu` *within* a variant under an
-assumed shape. That is not the same as Young's genome-wide residualisation
-`d_l = alpha_vl - r_av * alpha_l` (they estimate `r_av = 0.135` for UK Biobank BMI). Since
-this project analyses raw `bmi` and `weight` alongside `rint_bmi`, **that residualisation is
-worth adding.**
+The old figures came from 20 Monte Carlo replicates, which carry +-4.6 on 28.1 and
++-0.49 on 2.7 and 3.2. All three are consistent with the exact values; only the raw
+one was materially imprecise.
+
+**Correction 1: RINT does remove the mean-variance mechanism, completely.** Repeat
+the calculation at MAF 0.50, where the genotype skewness `(1-2p)/sqrt(2p(1-p))` is
+exactly zero:
+
+| scale | MAF 0.30 | MAF 0.50 |
+|---|---|---|
+| raw | 33.2 | 34.4 |
+| log | 3.12 | **2.8e-13** |
+| RINT | 3.09 | **6.4e-14** |
+
+Zero to machine precision. Everything that survives transformation is proportional to
+the *genotype* skewness and disappears with it.
+
+**Correction 2: the residual is not `W`-misspecification.** `W` does not know the
+allele frequency, so it is equally misspecified in both columns above. The residual
+is the genotype-skewness-times-density-curvature term derived independently on the
+`sim/dispersion` branch, and their guard `G = 0.6855 * gskew * Z_mu^2 / sqrt(N)`
+predicts it to within 0.4 per cent (3.110 predicted against 3.122 exact).
+
+**Correction 3: the raw-scale number is not a bias.** A lognormal's conditional SD is
+proportional to its conditional mean, so the true raw-scale variance effect really is
+0.2341. Stage 2 returns 0.1405 — it *understates* the true raw-scale effect by 40 per
+cent. The problem is the scale of analysis, not the estimator.
+
+**The number that matters.** At N = 461,320, on a raw untransformed trait of skewness
+1.75, a pure mean effect of **|Z_mu| = 9.5, about 0.02 SD per allele**, is enough to
+push the dispersion parameter past 5e-8. At the milder skewness 0.61 that gives
+Young et al.'s UK Biobank BMI coupling of `r_av` = 0.135, the threshold is
+**|Z_mu| = 19.7**. Both are ordinary GWAS hits. After log or RINT the threshold moves
+out to |Z_mu| = 43-93 and the genotype-skewness mechanism takes over.
+
+Stage 2's GLS orthogonalises `theta_sigma2` against `theta_mu` *within* a variant.
+That is a sampling-level statement and is unrelated to the across-variant population
+coupling Young et al. remove with `d_l = alpha_vl - r_av * alpha_l`. Since this
+project analyses raw `bmi` and `weight` alongside `rint_bmi`, that residualisation is
+implemented in `stage2/R/dispersion-guards.R` as an extra output column, alongside
+the genotype-skewness guard, which it does not and cannot fix.
 
 ## Context
 
