@@ -92,6 +92,30 @@ for (lv in c(95, 99)) {
   }
 }
 
+## ---- 1b. coverage per model PARAMETER --------------------------------------
+allpar <- sort(unique(unlist(lapply(Z, colnames))))
+for (dg in c("null", "scale", "mixed")) {
+  hdr(sprintf("COVERAGE 95%% PER PARAMETER, arm A (MAF 0.30), dgp = %s", dg))
+  cat(sprintf("%-22s %-5s", "fit:param", "est"))
+  for (N in Ns) cat(sprintf(" %16s", paste0("N=", N)))
+  cat("\n")
+  for (pm in allpar) {
+    for (est in c("ols", "gls")) {
+      ids0 <- sel(arm = "A", dgp = dg, est = est)
+      if (!length(ids0)) next
+      line <- sprintf("%-22s %-5s", pm, est); any_ok <- FALSE
+      for (N in Ns) {
+        ids <- intersect(ids0, sel(N = N))
+        v <- pooled(ids, ind95, function(m) colnames(Z[[paste(m$cell, m$est,
+                                                              sep = "|")]]) == pm)
+        if (!is.na(v["est"])) any_ok <- TRUE
+        line <- paste0(line, sprintf(" %16s", fmt(v)))
+      }
+      if (any_ok) cat(line, "\n")
+    }
+  }
+}
+
 ## ---- 2. coverage restricted to WELL-FITTING model/cell combinations --------
 hdr("COVERAGE 95%, restricted to (fit,param) with lack of fit < 0.5")
 keep_good <- function(m) m$lof < 0.5
