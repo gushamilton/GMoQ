@@ -1087,7 +1087,9 @@ def main():
             y_values_full = {col: values[loco_valid_mask] for col, values in y_values_full.items()}
             X_full = X_full[loco_valid_mask]
         log_mem("LOCO predictions loaded; RIFs will be recomputed per chromosome on Y - LOCO(chr)")
-    RIF_resid_list, Q, q_tau_list = build_rif_residuals(y_values_full, pheno_cols, X_full, taus)
+    # NB: the RIF and the covariate basis are NOT built here. They are built after
+    # the BGEN sample match below, on exactly the rows that will be analysed. See
+    # the comment at that call site.
     log_mem(f"Phenotype load time: {time.perf_counter() - t_load:.2f}s")
     N = len(sample_ids)
     
@@ -1109,13 +1111,35 @@ def main():
     
     # Match samples
     valid_mask, bgen_indices = match_samples(bgen_samples, sample_ids)
-    
-    # Filter to matched samples
-    RIF_resid_list = [rif[valid_mask] for rif in RIF_resid_list]
-    Q = Q[valid_mask]
     N_matched = len(bgen_indices)
-    
+
     log_mem(f"Matched {N_matched}/{N} samples to BGEN")
+
+    # Build the covariate basis and the RIF on the MATCHED rows, not on the keep
+    # sample. Both depend on which rows are in the analysis, and neither survives
+    # being row-subset afterwards:
+    #
+    #   * Q is used by the kernels as a projector, g_resid = g - Q (Q' g). Columns
+    #     orthonormal over the keep sample are not orthonormal over a subset of it,
+    #     so the projection becomes partial and leaks the covariate-parallel part of
+    #     the genotype into the numerator of every slope. On the UK Biobank BMI
+    #     inputs (486,254 keep rows, 461,320 matched) the row-subset basis reached
+    #     max |Q'Q - I| = 0.97 - the ancestry-PC columns kept 3-9% of their norm,
+    #     because the unmatched samples are the ones the genotype release excludes
+    #     on ancestry - and shifted beta_tau by a median of 0.12 SE, up to 2.3 SE,
+    #     in a consistent direction at all 45 taus, while leaving se_tau unchanged.
+    #   * the RIF depends on the sample through q_tau, the bandwidth and f_hat.
+    #     That channel is second-order here (mean delta-z -0.0008) because q_tau is
+    #     an additive constant the intercept removes and f_hat largely cancels
+    #     between beta and se, but building on the matched rows costs nothing and
+    #     removes it too.
+    #
+    # This is what the --loco-preds path has always done via compute_chr_rif_residuals,
+    # which is why no published result was affected; the call below is that same
+    # function with no LOCO adjustment.
+    RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
+        pheno_cols, y_values_full, X_full, taus, None, None, valid_mask
+    )
     t_batches = time.perf_counter()
     
     # Assign jackknife blocks
