@@ -491,3 +491,95 @@ jackknife path builds, so genome-wide Stage 2 memory is unchanged (~10 GB at
 factor into one `T x T` operation per chromosome plus one scalar per variant;
 exploiting that would mean a second implementation of every downstream
 quantity, and was deliberately left out of the first change.
+
+---
+
+## 11. The genotype-skewness dispersion correction: what it costs and what it refuses (2026-09-14)
+
+`correct_dispersion_skew()` subtracts the exact bias `delta^2 * k`,
+`k = 1 - 2*eaf`, that a pure location effect leaves in `beta_sigma2` at a skewed
+genotype. On a Normal baseline it removes the artefact completely — the worst
+cell in the sweep falls from 0.916 to 1.5e-09 at 5e-8. The full measurement is
+`docs/DISPERSION_SKEW_CORRECTION.md`; the numbers that constrain *use* are here.
+
+### What it costs
+
+Nothing measurable on null variants, and nothing measurable on a genuine
+dispersion effect with no location effect (power at 5e-8 unchanged in the fifth
+decimal). The one real cost is at a rare variant carrying a colossal location
+effect, where the correction has genuine variance of its own:
+
+| MAF | Z_mu | power unc @5e-8 | power cor @5e-8 | honest power | SE ratio |
+|---|---|---|---|---|---|
+| 0.01 | 16 | 0.976 | 0.562 | 0.50 | 1.025 |
+| 0.01 | 30 | 1.000 | **0.372** | 0.50 | 1.094 |
+
+**About 26% of honest power is lost at MAF 0.01 / Z_mu 30.** That is the worst
+cell in the whole sweep, it is the same cell where the *uncorrected* rate is
+0.916, and `dispersion_skew_guard()` flags it with `G` = 6.3. `G` has therefore
+inverted in meaning: it no longer bounds false positives, it marks where honest
+power has been paid away.
+
+### The skewness envelope is coupled to the estimator
+
+Corrected rates at 5e-8, MAF 0.01, Z_mu 30, **GLS**: skewness 0.63 -> 3.8e-10;
+0.71 -> 3.6e-09; 0.82 -> 5.0e-07; 0.89 -> 4.8e-05; 0.95 -> **1.00**. The usable
+envelope under GLS is about **|skewness| 0.65**; under OLS it runs out to about
+**1.0**. Choose the estimator and the limit together.
+
+The failure is **not** summarised by skewness alone, nor by kurtosis alone. At
+matched skewness 0.80 under GLS, skew-normal (excess kurtosis 0.65) leaves
+2.0e-04 while chi2(12) (excess kurtosis 1.00) leaves 5.0e-07 — 390x apart, with
+the *lower*-kurtosis distribution worse. Symmetric t(6), skewness exactly 0,
+still leaves a 62x residual. What governs it is how far `f0'/f0` departs from
+proportionality to `qnorm(tau)`, which no single moment captures. Transform the
+phenotype (`docs/phenotype_preparation.md`) and none of this is live.
+
+### Three ways to get a wrong answer, all now refused
+
+Two of the three are **worse than not correcting at all**, which is why they
+refuse rather than warn.
+
+1. **A folded MAF in `eaf`.** `k = 1 - 2*eaf` is signed, so a folded frequency at
+   a variant whose effect allele is the major one makes the correction *add* the
+   bias: |Z| 3.27 -> 6.20, p 1.1e-03 -> 5.6e-10; at MAF 0.01 / Z_mu 30 the rate
+   at 5e-8 goes to **1.000**, against 0.916 uncorrected. Stage 1 emits no
+   frequency column, so a folded MAF is the likeliest input. Refused: an `eaf`
+   below 0.5 at every variant, `eaf` and `maf` being the same values in
+   `dispersion_report()`, and any call that has not set `eaf_orientation`.
+2. **A `W` merely *named* `beta_sigma2`.** The proof is about the numbers.
+   `check_vqtl_design()` verifies `W[, mu_name] == 1` and
+   `W[, sigma2_name] == qnorm(taus)/(2*sd)` elementwise, which is why
+   `dispersion_report()` requires `W_sd`. A shape check is not enough: the same
+   Normal model parameterised in the SD rather than the variance is still
+   proportional to `qnorm(taus)` and over-subtracts by `2*sd` — at sd = 1.3, from
+   +1.51e-02 (truth 0) to -2.41e-02, 1.6x the original bias with the sign
+   flipped. The 5-parameter mixture under `mu_name = "beta_mu1"` over-subtracts
+   by 2.4x.
+3. **A `w_sd_ratio` that does not match the `sd` that built `W`.** It scales the
+   whole correction linearly, with no symptom. It is 1 for the usual
+   `make_weights_vqtl(taus, q_tau, mu = mean(y), sd = sd(y))`.
+
+### Two things nothing in the package sees
+
+* **Dispersion inflation from the phenotype's shape at MAF 0.50.** On a chi2(4)
+  baseline with Z_mu = 60 it is 0.163 at nominal 0.05 and 4.5e-06 at 5e-8. The
+  correction is identically zero there because `k = 0`, and
+  `dispersion_skew_guard()` is identically zero there because `gskew = 0`. Both
+  tools read zero exactly where this mechanism is worst.
+* **An asymmetric tau grid.** The `O(delta^3)` term is orthogonal to the
+  dispersion column only on a grid symmetric about 0.5. On
+  `linspace(0.02, 0.70, 45)` the order of the residual drops from 4.00 to 3.01
+  and its relative size grows about 70x, sign depending on which tail is
+  truncated. `check_vqtl_design()` warns; it does not refuse.
+
+### Not done
+
+The correction is applied *after* the projection, which is exact only for
+`make_weights_vqtl`'s design. Correcting `b(tau)` before the projection is valid
+for every `W` and costs the same O(1) per variant, but it makes the phenotype SD
+a required input (it stops cancelling) and needs a declared location contrast for
+a general `W` (`beta_mu` is exactly `delta` only because `W[, "beta_mu"] = 1`).
+Both are prerequisites Stage 1 and Stage 2 do not currently supply, so the class
+is closed by refusing unverified designs rather than by generalising. Reasoning
+in `docs/DISPERSION_SKEW_CORRECTION.md` section 2.1.
