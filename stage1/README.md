@@ -217,7 +217,9 @@ Note: `chr:pos` formats are not accepted in this file - only RSIDs.
 | `{out}.stage1.tsv.gz` | Per-SNP betas and SEs for each tau |
 | `{out}.cov.gz` | Binary covariance matrices (upper triangle; int8 by default, float32 optional) |
 | `{out}.cov.scale.gz` | Per-SNP float32 scales (only when `--cov-dtype int8`) |
-| `{out}.cov.meta.json` | Covariance storage metadata (`cov_dtype`, record layout) |
+| `{out}.cov.meta.json` | Covariance storage metadata (`cov_dtype`, record layout) and the `analysis` provenance block |
+| `{out}.sigma0.tsv.gz` | Pooled cross-quantile covariance `Sigma_0`, one T×T float64 matrix per chromosome (suppress with `--no-sigma0`) |
+| `{out}.sigma0.meta.json` | What `Sigma_0` was built from: phenotype, covariates, tau grid, sample count, LOCO predictor, fingerprint |
 | `{out}.Rtau.tsv` | T×T correlation matrix (with `--output-rtau`) |
 
 ### Stage 1 TSV format
@@ -240,6 +242,16 @@ Legacy mode (`--cov-dtype float32`):
 For T=17 taus:
 - Float32: 153 values = 612 bytes/SNP.
 - Int8 + scale: 153 bytes + 4-byte scale = 157 bytes/SNP (~74% smaller).
+
+### Pooled covariance format
+
+`{out}.sigma0.tsv.gz` is a gzipped TSV with columns `chr`, `tau` and one column
+per tau, `%.17g` so float64 round-trips exactly; one block of T rows per
+chromosome, keyed `ALL` when the run had no `--loco-preds`. Stage 2 reads it with
+`cov_source = "pooled"` and forms the per-variant covariance as
+`Sigma_0 / d_resid`. Measured on real chr22 at T=45: **13.3 KB per chromosome**
+against 227-285 gzipped bytes *per variant* for the jackknife, and 0.06 s to
+compute. See `docs/KNOWN_ISSUES.md` section 10.
 
 ## Performance
 

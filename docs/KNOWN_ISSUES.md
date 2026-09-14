@@ -24,6 +24,10 @@ tests, 18 Stage 2 tests.
 
 ## 2. The one substantive defect: tail calibration
 
+*(This section is about the block-jackknife covariance, which is still the
+default. The pooled covariance of section 10 does not have this defect: its
+degrees of freedom are 5e04 to 9e05 rather than 62, so its reference is normal.)*
+
 `SE_hat` is unbiased but **9% noisy** at `--blocks 65`. A noisy denominator is
 punished severely in the tail, because the ratio of nominal to actual error
 rate grows with the square of the threshold's z-score.
@@ -396,3 +400,94 @@ because the failure is silent by construction and no legitimate caller passes a
 non-orthonormal basis. Cost is about 0.4% of kernel time.
 
 Full analysis and verification: `fungwas_paper/docs/BP1_sample_match.md`.
+
+---
+
+## 10. The pooled cross-quantile covariance (new path, 2026-09-14)
+
+**A second covariance source, selectable from Stage 2 as
+`cov_source = "pooled"`. The block jackknife is unchanged and remains the
+default; every published result used it and this is not a one-way door.**
+
+Stage 1 now also writes, per trait per chromosome,
+
+```
+Sigma_0 = Psi_r' Psi_r / n          Psi_r = the covariate-residualised RIF
+```
+
+into `<prefix>.sigma0.tsv.gz` plus a `<prefix>.sigma0.meta.json` sidecar, and
+Stage 2 forms the per-variant covariance as `Sigma_v = Sigma_0 / d_resid`.
+`Sigma_0` contains no genotype: the cross-quantile correlation is a property of
+the phenotype, the covariates and the tau grid, and the only per-variant
+quantity is the scalar `d_resid = sum_i g_resid_i^2`, which the TSV has carried
+since `v0.3.0`. `--no-sigma0` suppresses the sidecar.
+
+### What it costs and what it buys
+
+| | jackknife (`B = 65`, int8) | pooled |
+|---|---|---|
+| storage, chr22 `bmi` | 227.5 gzipped **B/variant** | 13.3 **KB/chromosome** (0.76 B/variant over 17,550) |
+| Stage 1 compute | (the block-score kernel) | **0.06 s** per chromosome, 0.17% of a 35.6 s run |
+| diagonal ratio to an exact per-individual HC0 sandwich | 0.993 (p5 0.727, p95 1.313) | **1.00001** (p5 0.979, p95 1.022) |
+| max cross-tau correlation deviation from that sandwich | 0.306 | **0.008** |
+| Stage 2 SE, median ratio to exact | 0.992-1.002 (p5-p95 0.84-1.15) | **0.9997-1.0004** (p5-p95 ±1-4%) |
+| `df_eff` ratio to exact | 0.911-0.958 | **0.9998-1.0002** |
+| positive semi-definite | in exact arithmetic; **not after int8 quantisation** | by construction (a Gram matrix) |
+| GLS solved, 1,986 chr22 variants | **0** | **1,986** |
+| seed / block count | required | none |
+
+Measured on real chr22 `bmi` and `weight`, N = 461,320, 1,000-1,002 variants
+per trait; full evidence in
+`fungwas_paper/docs/BP1_pooled_implementation.md`.
+
+### Degrees of freedom
+
+Section 2's `t_nu` machinery exists because the jackknife covariance is
+estimated from `B` replicates. `Sigma_0` is estimated from `n` individuals and
+is shared across variants; its Satterthwaite degrees of freedom, computed
+exactly from the influence functions for the paper's own Stage 2 contrasts,
+are **50,439 to 945,964**, against 62 for the jackknife at `B = 65`. At
+`p = 5e-8` the `t` p-value is 1.0002-1.0047 times the normal one, so the
+reference degenerates to normal. Stage 2 records `nu = n_samples` with
+`ref_df_source = "pooled_sigma0_n_samples"` and the law of section 2 is left
+untouched for the jackknife path, which still needs it.
+
+### Where it does not hold
+
+`Sigma_v = Sigma_0 / d_resid` assumes `Var(psi_i | X_i, g_i)` is free of
+`g_i`. That is exact under the null and false at a variant that genuinely
+changes the **spread** of the phenotype. The drift is conservative (the pooled
+standard error is the larger one) and only becomes material well past the
+strongest reported vQTL effects, but it is a bias, not noise. A lead locus with
+a strong dispersion signal should have its covariance recomputed - the
+jackknife path is still there.
+
+At low minor allele count the estimator is fine and the *reference* is not: on
+both traits and over five MAC decades the pooled estimator's distance from the
+exact sandwich is 0.87-1.06 times the sandwich's own sampling error, and the
+two obey the same `MAC^-0.48` law. Below about MAC 60 no per-variant estimator
+has enough information to be a reference at all.
+
+### The refusals
+
+`Sigma_v = Sigma_0 / d_resid` is only the covariance of `beta_tau` if `Sigma_0`
+came from the same phenotype, covariate set, tau grid, LOCO predictor and
+sample as the scan. A mismatch leaves the point estimates untouched and the
+standard errors plausible, so nothing downstream can detect it; the measured
+size of the equivalent failure for a covariance blind to the covariates is
++1.7% on the `bmi` variance and **+25.6% on `weight`**. Stage 1 therefore
+writes an `analysis` block into `.cov.meta.json` (schema version 4) carrying a
+fingerprint over all five, and **Stage 2 stops rather than proceeds** on any
+disagreement, on a missing `d_resid` column, on a chromosome with no matrix, or
+on a sidecar schema it does not understand. `require_covariates` and
+`require_n_samples` let a caller assert independently. Same precedent as
+refusing to emit a p-value when `nu` is unknown.
+
+### Not done
+
+Stage 2 still expands `Sigma_0` into the same per-variant `cov_vec` the
+jackknife path builds, so genome-wide Stage 2 memory is unchanged (~10 GB at
+1.2M variants). The pooled identity makes all of OLS, GLS, `tr(B)` and `Q`
+factor into one `T x T` operation per chromosome plus one scalar per variant;
+exploiting that would mean a second implementation of every downstream
+quantity, and was deliberately left out of the first change.
