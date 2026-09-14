@@ -105,3 +105,44 @@ Evidence and per-trait consequences in docs/LOCO_SCALE.md.
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 git log --oneline -1"' 2>&1 | tail -5
+## Validation against REGENIE step 2
+
+chr22, `log_bmi`, 17,550 variants matched to REGENIE's 17,637 ADD results. REGENIE
+step 2 is the ground truth: it consumes its own LOCO predictions correctly. The
+G-MoQ quantity compared is the mean of `beta_tau` over the 45-point grid, which
+estimates the effect on `E[Y]` and so is directly comparable to REGENIE's `BETA`.
+
+| mode | cor(beta, REGENIE) | median \|beta\| / \|REGENIE beta\| | median SE ratio |
+|------|--------------------|-----------------------------------|-----------------|
+| `none` (old) | 0.500 | 1.746 | 3.343 |
+| `sd` (new default) | **0.993** | **1.007** | 1.534 |
+| `regression` | 0.993 | 1.009 | 1.534 |
+
+Under `sd` the tau-averaged effect recovers REGENIE's additive BETA to 0.7%. Under
+`none` it is 75% too large and only half-correlated with the truth.
+
+`sd` and `regression` are indistinguishable here: cor(beta) between them is 0.99967
+and the median SE ratio 1.00028. `sd` is kept as the default because it is the exact
+inverse of REGENIE's standardisation rather than a quantity fitted from the data.
+
+### Correction: the bug distorts the effect estimates, not just their standard errors
+
+An earlier reading of this defect held that point estimates stay unbiased because LOCO
+excludes the test chromosome and is therefore uncorrelated with the test genotype, so
+only the standard errors inflate. **That is wrong for G-MoQ**, and the chr22 run shows it:
+
+```
+cor(mean beta)        none vs sd = 0.4947   median ratio 0.9523
+cor(median-tau beta)  none vs sd = 0.3272   median ratio 0.7570
+median SE ratio       none / sd  = 2.1784
+median-tau SE ratio   none / sd  = 2.3260
+```
+
+The unbiasedness argument is a property of linear regression and does not survive the
+RIF. `RIF_i(tau) = q_tau + (tau - 1{Y_i <= q_tau}) / f(q_tau)` depends on Y through the
+quantile `q_tau` and the density `f(q_tau)`, both of which move when the analysed
+variable's variance quadruples. The distortion is worst at the median (cor 0.327), where
+the density shifts most.
+
+So the pre-v0.4.0 `log_bmi` results are wrong in their effect estimates as well as
+under-powered, and the SEs inflate by 2.2x on top. Regeneration is required, not optional.
