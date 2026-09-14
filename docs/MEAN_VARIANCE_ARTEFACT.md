@@ -432,7 +432,125 @@ for mechanism (b). Joint fitting is not a fix for either mechanism.
 
 ---
 
-## 6. What I could not settle
+## 6. Monte Carlo through the shipped pipeline
+
+Shipped Stage 1 (`core.run_stage1`, `compute_rif`, `pooled_cov.compute_sigma0`) and
+shipped Stage 2 (`param_gwas`, `transform = "custom_W"`, `se_mode = "tau_cov"`,
+pooled covariance). N = 50,000; 400 replicates; 200 independent variants per
+replicate against one phenotype, because the correction is genome-wide and must be
+estimated from many variants. 170 null, 20 pure-mean (|Z_mu| 4 to 40, half each
+sign), 10 pure-dispersion. `r_av` estimated from **all 200**, with no selection on
+truth. That is 68,000 null, 8,000 mean and 4,000 dispersion variant-observations per
+cell. Code in `sim_meanvar/src/mv_*.{py,R}`; tables in
+`/user/work/fh6520/meanvar/mc/summary/`.
+
+The Stage 2 call was verified against a hand-rolled fit: OLS `theta` max abs error
+**exactly 0**, OLS SE 2.2e-16, GLS `theta` 1.7e-12, `cov_vec` round-trip 1.7e-18.
+
+### (a) the artefact is removed, and (b) is not
+
+Rejection of `beta_sigma2` at 0.05 on the **pure-mean** class, where the true
+dispersion effect is exactly zero:
+
+| analysed scale | est | uncorrected | residualised |
+|---|---|---|---|
+| raw | ols | **7545/8000 = 0.943** +-0.003 | **3497/8000 = 0.437** +-0.006 |
+| raw | gls | **7723/8000 = 0.965** +-0.002 | **2850/8000 = 0.356** +-0.005 |
+| log | gls | 3313/8000 = 0.414 +-0.006 | 3478/8000 = 0.435 +-0.006 |
+| rint | gls | 3319/8000 = 0.415 +-0.006 | 3442/8000 = 0.430 +-0.006 |
+
+The residualisation takes `raw` from 0.943 down to 0.437 — **exactly onto the
+log/RINT floor of 0.41-0.42**, which is where a scale with no mean-variance coupling
+already sits. It removes essentially all of mechanism (a) and, as designed, nothing
+at all of mechanism (b). On log and RINT it is a no-op to within Monte Carlo error.
+
+Per effect size (`raw`, OLS), mean |z| on a variant with zero dispersion effect:
+
+| designed Z_mu | 4 | 12 | 20 | 28 | 40 |
+|---|---|---|---|---|---|
+| uncorrected z | 1.90 | 6.02 | 10.70 | 15.44 | 23.79 |
+| residualised z | -0.02 | 0.21 | 1.09 | 2.09 | 4.96 |
+
+(The floor is large here because N = 50,000 with |Z_mu| up to 40 puts `G` as high as
+21 for the rarer variants in the mixture — mechanism (b) is deliberately extreme in
+this design.)
+
+### Type-I error and the genome-wide extrapolation
+
+On genuinely null variants, corrected and uncorrected alike:
+
+| cell | est | uncorrected k/n | rate | corrected rate | sd(z) null | implied rate @5e-8 |
+|---|---|---|---|---|---|---|
+| log | ols | 3368/68000 | 0.0495 +-0.0008 | 0.0492 | 0.9963 | 4.46e-08 |
+| log | gls | 3319/68000 | 0.0488 +-0.0008 | 0.0486 | 0.9955 | 4.35e-08 |
+| raw | ols | 3375/68000 | 0.0496 +-0.0008 | 0.0509 | 0.9994 | 4.91e-08 |
+| raw | gls | 3413/68000 | 0.0502 +-0.0008 | 0.0505 | 1.0016 | 5.25e-08 |
+| rint | ols | 3413/68000 | 0.0502 +-0.0008 | 0.0502 | 0.9998 | 4.72e-08 |
+| rint | gls | 3419/68000 | 0.0503 +-0.0008 | 0.0500 | 0.9980 | 4.71e-08 |
+
+The 5e-8 column uses `2*pnorm(-qnorm(1-5e-8/2)/sd_z)`, the convention in
+`gls_coverage/src/summarise.R`; 5e-8 is unreachable by simulation directly. Every
+cell lands within 0.87x to 1.05x of nominal. **The null calibration of the dispersion
+parameter is sound. The artefact is entirely a mean-effect problem.**
+
+### The baby is not thrown out
+
+Pure-dispersion class. "Sign-aligned bias/SE" is `mean(sign(truth)*(est-truth)/se)`;
+negative is shrinkage toward zero. MCSE 0.016.
+
+| cell | est | bias/SE | power uncorrected | power residualised |
+|---|---|---|---|---|
+| log | gls | -0.13 | 0.9670 +-0.0028 | 0.9673 +-0.0028 |
+| raw | ols | -0.07 | 0.9637 +-0.0030 | **0.9802** +-0.0022 |
+| raw | gls | **-0.28** | 0.8340 +-0.0059 | **0.9490** +-0.0035 |
+| rint | gls | -0.08 | 0.9647 +-0.0029 | 0.9650 +-0.0029 |
+
+The correction **raises** power on the raw scale (0.834 to 0.949) and leaves it
+untouched on log and RINT. The estimator is unbiased on log and RINT; on raw under
+GLS there is a genuine 0.28 SE shrinkage that grows with effect size, which is `W`
+misspecification for a lognormal, not the correction.
+
+### Two real defects the Monte Carlo exposed
+
+**Coverage of the residualised statistic is worse, not better, on the raw scale.**
+95% Wald coverage about the true value: null class is nominal everywhere
+(0.9491-0.9514), but the `raw` mean class falls to **0.9173** residualised against
+0.9324 uncorrected, and the `raw` dispersion class under GLS to **0.9165** against
+0.9343. The headline numbers above use `se_rav = 0`, so `r_av`'s own uncertainty is
+missing from the interval. Anyone using the residualised column for *estimation*
+rather than *testing* must pass `se_rav`.
+
+**The block-jackknife SE for `r_av` is miscalibrated on the raw scale.** Against the
+across-replicate SD of `r_av`:
+
+| cell | est | r_av mean | across-replicate sd | mean jackknife SE |
+|---|---|---|---|---|
+| log | gls | 0.00005 | 0.0378 | 0.0393 |
+| rint | gls | 0.0039 | 0.0562 | 0.0696 |
+| raw | ols | 1.520 | 0.276 | **0.561** (2x too large) |
+| raw | gls | 0.968 | 0.145 | **0.053** (3x too small) |
+
+Well calibrated where the coupling is zero, badly calibrated where it is not. Passing
+that SE as `se_rav` over-corrects `raw` OLS into conservatism (mean-class rate 0.437
+to 0.0103, but the null rate also drops to 0.0405). The likely cause is that this
+design jackknifes 20 blocks of 10 variants inside a single replicate, which is not
+what a genome-wide LD-block jackknife over ~1e5 pruned variants does — but that is a
+hypothesis, and **the jackknife SE should not be relied on until it is checked at a
+realistic number of variants.**
+
+### A design decision confirmed empirically
+
+`r_av` on the raw scale is **1.520 under OLS and 0.968 under GLS** — genuinely
+different, because the Gaussian `W` is misspecified for a lognormal and the two
+projections of the same population `b(tau)` are different estimands. The GLS value
+matches the analytic prediction `2*E[Y]*(exp(s^2)-1)` = 1.13 far better than the OLS
+one. This confirms, from simulation, the constraint asserted a priori in §5:
+**`r_av` must be estimated with the same estimator and covariance source used for the
+scan.** Mixing them is a silent error of 50 per cent here.
+
+---
+
+## 7. What I could not settle
 
 - **A third mechanism exists, and neither study has named it.** On a *skewed*
   phenotype there is a residue at MAF 0.50, where the genotype skewness is exactly
@@ -458,6 +576,14 @@ for mechanism (b). Joint fitting is not a fix for either mechanism.
   3.4 at chi2_4 and 6.4 at chi2_2 with the shipped `W`, but I have not fitted a
   replacement constant across the MAF x N x skewness grid the way `sim/dispersion`
   fitted 0.6855 for OLS on the normal.
+- **The jackknife SE for `r_av` at a realistic number of variants.** §6 shows it is
+  2x too large under OLS and 3x too small under GLS on the raw scale, in a design
+  with only 200 variants and 20 blocks. Until that is repeated with ~1e5 LD-pruned
+  variants, treat `estimate_rav()$se` as indicative.
+- **Real genotypes and real traits.** No scan was run, per the brief. Everything is
+  simulated with independent variants; LD, genotyping error and Hardy-Weinberg
+  departure are untested, and `r_av` for the project's actual `bmi` and `weight`
+  phenotypes has not been estimated.
 - **Real genotypes, LD, Hardy-Weinberg departure, genotyping error.** Everything here
   uses an exact 3-point HWE genotype law.
 - **Heavy-tailed phenotypes beyond t_6.** Moments may not exist; not attempted.

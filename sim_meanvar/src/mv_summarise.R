@@ -89,6 +89,8 @@ summarise_cell <- function(x, cell) {
         se_over_sd_u_ctr = mean(s[i]) / sd(b[i] - tb[i]),
         se_over_sd_r = mean(sd_[i]) / sd(d[i]),
         se_over_sd_r_ctr = mean(sd_[i]) / sd(d[i] - td[i]),
+        sd_zc_u = sd(zc[i]), sd_zc_r = sd(zdc[i]),
+        se_over_sd_u_std = 1 / sd(zc[i]), se_over_sd_r_std = 1 / sd(zdc[i]),
         sd_z_null = sdz_null, sd_z_null_resid = sdz_null_d,
         rate_5e8_u = 2 * pnorm(-Z58 / sdz_null),
         rate_5e8_r = 2 * pnorm(-Z58 / sdz_null_d),
