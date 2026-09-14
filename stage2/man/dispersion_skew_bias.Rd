@@ -8,9 +8,11 @@ dispersion_skew_bias(
   beta_mu,
   se_mu = NULL,
   eaf = NULL,
+  eaf_orientation = NULL,
   mu3_over_var = NULL,
   debias = TRUE,
-  w_sd_ratio = 1
+  w_sd_ratio = 1,
+  n_min_orient = 10L
 )
 }
 \arguments{
@@ -21,8 +23,18 @@ dispersion_skew_bias(
 
 \item{eaf}{Frequency of the allele that \code{beta_mu} counts --- the
 \strong{effect} allele frequency, not the folded MAF. The sign of
-\eqn{1 - 2p} is the sign of the bias, so a folded MAF is not enough; see
-\code{\link{correct_dispersion_skew}}. Length 1 or \code{length(beta_mu)}.}
+\eqn{1 - 2p} is the sign of the bias, so a folded MAF is not merely
+insufficient, it corrects in the wrong direction and is worse than no
+correction; see \code{\link{correct_dispersion_skew}}. A column lying below
+0.5 at every variant is refused as a folded-MAF signature. Length 1 or
+\code{length(beta_mu)}.}
+
+\item{eaf_orientation}{Set to \code{"effect"} to assert deliberately that
+\code{eaf} is oriented to the allele \code{beta_mu} counts. \code{NULL}
+(default) leaves the assertion unmade: a conclusive folded-MAF signature is
+then refused rather than warned about, and an inconclusive one warns.
+\code{"folded"} is accepted as an explicit statement and always refused ---
+use \code{\link{dispersion_skew_guard}}, which needs only the magnitude.}
 
 \item{mu3_over_var}{Optional direct value of \eqn{\mu_3/\mathrm{Var}(g)},
 overriding \code{eaf}. Use this for dosages, or for any genotype law where
@@ -39,6 +51,9 @@ is not truncated. Default \code{TRUE}.}
 \item{w_sd_ratio}{Ratio (\code{sd} passed to \code{make_weights_vqtl}) /
 (phenotype SD). Leave at 1 unless \code{W} was deliberately built on a
 different scale.}
+
+\item{n_min_orient}{Number of distinct \code{eaf} values below 0.5 at which
+the folded-MAF signature becomes conclusive. Default 10.}
 }
 \value{
 Numeric vector, the predicted bias in \code{beta_sigma2}.
@@ -75,21 +90,33 @@ so the induced bias in \eqn{\hat\beta_{\sigma^2}} is
 \item \eqn{\sigma} \strong{cancels}. It appears in the bias and again in the
 weight column, so the correction needs no phenotype SD and no new Stage 1
 output. (\code{w_sd_ratio} exists only for the unusual case where the
-\code{sd} passed to \code{make_weights_vqtl} was not the phenotype SD.)
+\code{sd} passed to \code{make_weights_vqtl} was not the phenotype SD. It
+must match that \code{sd}: leaving it at 1 when \code{W} was built on
+another scale scales the whole correction by exactly that ratio, with no
+symptom.)
 \item Correcting \eqn{b(\tau)} before the projection and correcting the
-coefficient after it are \emph{identical}, not merely similar. Correcting
-afterwards is chosen because it is O(1) per variant and needs no refit.
+coefficient after it are \emph{identical} \strong{on this design}, not
+merely similar, because the bias vector lies exactly in the column space
+of \eqn{W}. Correcting afterwards is chosen because it is O(1) per variant
+and needs no refit. Outside \code{make_weights_vqtl} the equality fails,
+which is why \code{\link{check_vqtl_design}} gates on the numeric identity
+of \eqn{W} rather than on its column names.
 }
 
-\strong{Order of the expansion.} The derivation is second order in
-\eqn{\delta}. The third-order term is even in \eqn{z_\tau}, so it is
-orthogonal to the dispersion column and lands on \eqn{\beta_\mu} and on the
-fit residual instead. The first term that survives into
-\eqn{\beta_{\sigma^2}} is therefore \eqn{O(\delta^4)}: measured against an
-exact population calculation the relative error of this correction is
-\eqn{\approx 0.065\,(\delta/\sigma)^2}, i.e. 0.07\\% at 0.1 SD per allele and
-0.3\\% at 0.2 SD per allele. It is the \emph{residual} bias after correction
-that matters, and it is smaller than the correction by that factor.
+\strong{Order of the expansion, and the condition on the tau grid.} The
+derivation is second order in \eqn{\delta}. The third-order term is even in
+\eqn{z_\tau}, so \emph{on a tau grid symmetric about 0.5} it is orthogonal to
+the dispersion column and lands on \eqn{\beta_\mu} and on the fit residual
+instead. The first term that survives into \eqn{\beta_{\sigma^2}} is then
+\eqn{O(\delta^4)}: measured against an exact population calculation the
+relative error of this correction is \eqn{\approx 0.065\,(\delta/\sigma)^2},
+i.e. 0.07\\% at 0.1 SD per allele and 0.3\\% at 0.2 SD per allele.
+
+The symmetry is a real condition, not a technicality. On
+\code{seq(0.02, 0.70, length.out = 45)} the orthogonality is lost: the
+exponent drops from 4.00 to 3.01 and the relative error grows about 70-fold,
+with a sign that flips depending on which tail is truncated.
+\code{\link{check_vqtl_design}} warns when the grid is asymmetric.
 }
 \seealso{
 \code{\link{correct_dispersion_skew}}, \code{\link{dispersion_skew_guard}}

@@ -6,7 +6,14 @@ not a variance error, so it can be subtracted rather than only flagged.
 exact to \(O(\delta^4)\) and removes the artefact completely: the worst false-positive
 rate in the sweep falls from 0.91 to \(1.5\times10^{-9}\) at genome-wide
 significance, at a cost of nothing at all on null variants and nothing at all on
-genuine dispersion effects.**
+genuine dispersion effects — except at a rare variant carrying a colossal
+location effect, where it costs about 26% of honest power (§4).**
+
+**Three conditions, all enforced in code, all of which make the correction
+harmful rather than merely useless if broken: a *signed* effect-allele frequency
+(§8), `make_weights_vqtl`'s *numeric* design rather than merely its column names
+(§2.1), and a baseline within the skewness envelope for the chosen estimator —
+about 0.65 under GLS, about 1.0 under OLS (§5).**
 
 Everything below is an exact population calculation — quadrature, no Monte Carlo,
 no sampling error — confirmed by Monte Carlo through the shipped Stage 1 and
@@ -63,10 +70,45 @@ against the population estimand:
 ## 2. Design decisions
 
 **1. Where to apply it — after the projection, on the coefficient.** The two
-options are provably *identical*, not merely similar, because the bias vector lies
-exactly in the column space of \(W\) and \(AW = I\); this is asserted as a test.
-Applying it afterwards is chosen because it is O(1) per variant, needs no refit,
-and works for every `se_mode` without touching the C++ path.
+options are provably *identical* **on `make_weights_vqtl`'s design**, not merely
+similar, because the bias vector lies exactly in the column space of \(W\) and
+\(AW = I\); this is asserted as a test. Correcting \(b(\tau)\) *before* the
+projection is right for **every** \(W\), so it is fair to ask why the narrower
+choice ships.
+
+It is not a cost argument. The bias vector is a per-variant scalar
+\(\delta^2 k\) times the *fixed* vector \(u = \Phi^{-1}(\tau)/(2\sigma_Y)\), so
+\(Au\) is formed once and the per-variant cost of the before-projection route is
+also O(1). The reason is that before-projection **does not actually generalise**:
+
+* \(\sigma_Y\) **stops cancelling.** After the projection it cancels exactly,
+  because the bias *is* a multiple of the \(W\) column that carries \(\sigma_Y\)
+  in its denominator. Before it, you must build \(u\) numerically, so the
+  phenotype SD becomes a required input — one Stage 1 does not emit and Stage 2's
+  report does not thread through. Getting it wrong scales the correction
+  linearly, with no symptom: exactly the `w_sd_ratio` failure mode, made
+  mandatory.
+* \(\delta\) **stops being identifiable.** The bias is \(\delta^2 k\) with
+  \(\delta\) the per-allele location shift in phenotype units. Under
+  `make_weights_vqtl`, \(W[,\texttt{beta\_mu}] = 1\), so \(AW = I\) makes
+  `beta_mu` *exactly* that \(\delta\). Under a general \(W\) there is no such
+  guarantee: for the 5-parameter mixture, `beta_mu1` is a component mean, not the
+  shift of the whole distribution — which is precisely why that design
+  over-subtracts by 2.4x today. Shipping before-projection would move the silent
+  failure from "wrong \(W\)" to "wrong \(\delta\)", not remove it.
+
+So the class is closed not by moving the correction earlier but by refusing to
+correct on a design the derivation does not cover. `check_vqtl_design()` does
+that, on the *numbers* in \(W\) rather than its column names, and it is a total
+function: it either verifies the exact identity the proof needs or it refuses.
+Under that gate the after-projection form is exact, so a general-\(W\) path would
+be dead code for every input that passes and still unsafe for every input that
+does not. Generalising properly needs both prerequisites above — a phenotype SD
+threaded from Stage 1, and a declared location contrast for a general \(W\) —
+which is a redesign, not a guardrail.
+
+Applying it afterwards is also O(1) per variant, needs no refit, and works for
+every `se_mode` without touching the C++ path.
 
 **2. `delta_hat` — the location coefficient from the same fit, debiased, no
 iteration.** Because the bias is *entirely* absorbed by `beta_sigma2`,
@@ -82,16 +124,32 @@ correlated with `beta_sigma2`*, which is a variance matter and appears in the SE
 
 **3. `sigma_hat` — none is needed.** It cancels. This is the reason no new Stage 1
 output is required. (`w_sd_ratio` exists only for the unusual case where the `sd`
-passed to `make_weights_vqtl()` was deliberately not the phenotype SD.)
+passed to `make_weights_vqtl()` was deliberately not the phenotype SD. It **must
+match that `sd`**: it is (the `sd` passed to `make_weights_vqtl`) / (the phenotype
+SD), and leaving it at the default 1 when `W` was built on another scale
+multiplies the whole correction by exactly that ratio — linearly, with no
+symptom. `dispersion_report()` requires `W_sd` so the design check can confirm
+which `sd` built `W`.)
 
-**4. The \(O(\delta^3)\) term — it does not reach this parameter.** The third-order
-term is *even* in \(z_\tau\), hence orthogonal to the dispersion column; it lands
-on `beta_mu` and on the fit residual. The first term that survives into
-`beta_sigma2` is \(O(\delta^4)\), and the measured relative error of the
+**4. The \(O(\delta^3)\) term — it does not reach this parameter, *provided the
+tau grid is symmetric about 0.5*.** The third-order term is *even* in \(z_\tau\),
+so on a symmetric grid it is orthogonal to the dispersion column; it lands on
+`beta_mu` and on the fit residual. The first term that survives into
+`beta_sigma2` is then \(O(\delta^4)\), and the measured relative error of the
 correction is \(\approx 0.065\,(\delta/\sigma)^2\): 0.07% at 0.1 SD/allele, 0.3% at
 0.2 SD/allele, 0.8% at 0.35, 6.4% at 1.0. The residual *after* correction is
 smaller than the bias by that factor, so it is negligible everywhere a real GWAS
 lives and still small where none does.
+
+**The symmetry is a condition, not a technicality**, and earlier versions of this
+document asserted the orthogonality unconditionally. On an asymmetric grid the
+even term is no longer orthogonal to the column and leaks straight into
+`beta_sigma2`. Measured on `linspace(0.02, 0.70, 45)` the order of the residual
+in \(\delta\) drops from 4.00 to **3.01** and its relative size grows about
+**70x**, with a sign that flips depending on which tail is truncated.
+`check_vqtl_design()` warns when the supplied grid is not symmetric about 0.5;
+the correction is still applied, but its residual is larger than the
+\(O(\delta^4)\) figure above. Use a symmetric grid.
 
 **5. The standard error — it must widen, and it does.**
 ```
@@ -239,13 +297,55 @@ MAF 0.01 unless stated:
 | chi2(20) "mild skew" | 0.63 | 0.6 | 4.1e-07 → **3.4e-08** | 6.1e-04 → **4.7e-08** | 9.9e-01 → **2.4e-07** |
 | chi2(4) "skew" | 1.41 | 3 | 2.4e-05 → **9.3e-06** | 7.2e-01 → **4.4e-01** | 1.0 → **1.0** |
 
-**The determining property is the phenotype's skewness, not its kurtosis.**
+> **Which `W` this table used.** The rows above come from the exact engine, whose
+> scale column is \((q^0_\tau - m_0)/(2 v_0)\). That is **not** what
+> `make_weights_vqtl()` builds: the shipped function builds
+> \(\Phi^{-1}(\tau)/(2\,\mathrm{sd})\) and **ignores its own `q_tau` and `mu`
+> arguments entirely**. The two coincide exactly on a Normal baseline and
+> diverge by up to three orders of magnitude, in both directions, otherwise — so
+> on the non-Normal rows this table answers a slightly different question from
+> the one the shipped code asks. §6 measures the shipped `W` by Monte Carlo and
+> reaches the same conclusion; the two were not reconciled (§9).
 
-* **Symmetric baselines, any kurtosis tested: the correction works.** On t(6) it
-  reduces the MAF 0.30 / Z_mu 60 rate from 4.2e-04 to 3.3e-07, and never makes a
-  cell worse anywhere in the sweep.
-* **Mildly skewed (|skewness| ≲ 0.6): the correction works**, holding the rate
-  within 4.3x nominal out to Z_mu 30 at MAF 0.01, against 2e7x uncorrected.
+### The envelope, and how it depends on the estimator
+
+The bracket "somewhere between 0.63 and 1.41" that the four rows above suggest is
+too generous, and it is not a property of the baseline alone. **The estimator
+choice and the safe skewness limit are coupled.** Corrected rates at 5e-8,
+MAF 0.01, Z_mu 30, **GLS**:
+
+| skewness | 0.63 | 0.71 | 0.82 | 0.89 | 0.95 |
+|---|---|---|---|---|---|
+| corrected rate @5e-8 | 3.8e-10 | 3.6e-09 | 5.0e-07 | 4.8e-05 | **1.00** |
+
+The usable envelope under GLS is therefore about **|skewness| 0.65**, not 1.41:
+by 0.89 the corrected rate is already a thousand times nominal, and by 0.95 it has
+collapsed completely. **Under OLS the envelope runs out to about 1.0.** Pick the
+estimator and the limit together; a GLS scan on a trait with skewness 0.9 is
+outside what this correction can carry, and the same trait under OLS is not.
+
+### It is not skewness, and it is not kurtosis either
+
+**The earlier claim that "the determining property is skewness, not kurtosis" is
+refuted as stated.** At *matched* skewness 0.80 under GLS, a skew-normal baseline
+(excess kurtosis 0.65) leaves **2.0e-04** while chi2(12) (excess kurtosis 1.00)
+leaves **5.0e-07** — 390x apart, with the **lower-kurtosis** distribution the
+worse of the two. Kurtosis does not rescue the claim by substitution, either:
+symmetric t(6), skewness exactly 0, still leaves a **62x** residual.
+
+**The failure is not summarised by either moment alone.** What governs it is how
+far \(f_0'/f_0\) departs from proportionality to \(z_\tau\) across the tau grid —
+a functional property of the whole density that no single moment captures. Treat
+the skewness numbers above as a usable operational proxy for the families
+tested, not as the mechanism.
+
+* **Symmetric baselines: the correction works, but not perfectly.** On t(6) it
+  reduces the MAF 0.30 / Z_mu 60 rate from 4.2e-04 to 3.3e-07 and never makes a
+  cell worse anywhere in the sweep — while still leaving a 62x residual at
+  MAF 0.01 / Z_mu 30.
+* **Mildly skewed (|skewness| ≲ 0.65 under GLS, ≲ 1.0 under OLS): the correction
+  works**, holding the rate within a few times nominal out to Z_mu 30 at
+  MAF 0.01, against 2e7x uncorrected.
 * **Strongly skewed (chi2(4), skewness 1.41): the correction is partial and must
   not be relied on.** It removes roughly half the excess and no more. Two separate
   things go wrong. First, \(f_0'/f_0\) is no longer proportional to \(z_\tau\), so
@@ -255,6 +355,12 @@ MAF 0.01 unless stated:
   the correction is identically zero by construction (0.163 at 0.05, 4.5e-06 at
   5e-8, for Z_mu = 60). That residue comes from the phenotype's shape, not the
   genotype's, and nothing here addresses it.
+* **`dispersion_skew_guard()` is blind to that third mechanism.** `G` is
+  proportional to the genotype skewness, which is *exactly* zero at MAF 0.50, so
+  the guard returns identically zero there for any Z_mu however large. The third
+  mechanism lives exactly at MAF 0.50. Both tools — the guard and the correction
+  — read zero precisely where it is worst. Nothing in the package sees it;
+  transform the phenotype.
 * On skewed baselines the corrected SE is *smaller* than the uncorrected one
   (ratio 0.5–0.99), because `cov_mu_sigma2` is large under `gls` there. That is
   correct delta-method behaviour but removes the conservative margin, so the
@@ -374,7 +480,12 @@ It remains worth computing, for three reasons.
    needs only the magnitude and falls back on `d_resid`. Where EAF is missing,
    the flag is all there is.
 2. **On a skewed baseline the correction is partial** (§5) and the flag's
-   documented conservatism there is still the right tool.
+   documented conservatism there is still the right tool. With one blind spot:
+   `G` is proportional to the genotype skewness, so `dispersion_skew_guard()` is
+   **identically zero at MAF 0.50** (`gskew = 0`) for any `Z_mu` however large.
+   The third mechanism of §5 — dispersion inflation driven by the *phenotype's*
+   shape rather than the genotype's — lives exactly at MAF 0.50, where both the
+   flag and the correction read zero. Neither tool sees it.
 3. **Its meaning inverts into a power warning.** High `G` is now exactly where the
    correction costs power: corrected rates fall to 0.0298 (G = 6.3) and 0.0194
    (G = 25.3) against nominal 0.05, so a genuine dispersion effect at such a
@@ -394,7 +505,23 @@ It remains worth computing, for three reasons.
   `cov_mu_sigma2` is the term that keeps the corrected SE calibrated.
 * **Pass a signed EAF**, oriented to the allele `beta_mu` counts. Stage 1 does not
   emit one; take it from the genotype source. The function refuses rather than
-  guesses, because an unoriented MAF would double the bias half the time.
+  guesses, because an unoriented MAF does not merely fail to correct — it
+  corrects the **wrong way** and is worse than not correcting at all (0.916 to
+  **1.000** at 5e-8 for MAF 0.01 / Z_mu 30, against 1.5e-09 done right). Three
+  things enforce this: an `eaf` column below 0.5 at every variant is refused as a
+  folded-MAF signature; `dispersion_report()` refuses when `eaf` and `maf` are
+  the same values; and `eaf_orientation = "effect"` must be set deliberately.
+* **Pass `W_sd`, the `sd` you gave `make_weights_vqtl()`.**
+  `dispersion_report()` verifies `fit$W` elementwise against
+  `qnorm(taus)/(2*W_sd)` via `check_vqtl_design()` and refuses otherwise. A
+  design merely *named* `beta_sigma2` is not enough: the same Normal model
+  parameterised in the SD over-subtracts by a factor of `2*sd`, and the
+  5-parameter mixture by 2.4x.
+* **Use a tau grid symmetric about 0.5** (§2.4).
+* **Check `attr(result, "na_counts")`.** Variants left uncorrected — an `eaf` of
+  0, 1 or `NA`, or a `cov_mu_sigma2` that breaches Cauchy-Schwarz because it came
+  from a different fit than the SEs — are counted and warned about rather than
+  returned as silent `NA`.
 * **Keep `dispersion_skew_guard()`** for the variants where EAF is missing, for
   skewed baselines, and now as a *power* warning (§ above).
 * **Both columns are reported.** Compare them: a finding where they agree is
@@ -414,11 +541,18 @@ It remains worth computing, for three reasons.
   confirms that assumption down to 1e-3 only.
 * **Covariates with real effects, and the jackknife covariance.** The exact
   engine uses the pooled \(\Sigma_0\) as the reported covariance throughout.
-* **`W` families other than `make_weights_vqtl`.** The correction is refused there
-  by documentation, not by code: `dispersion_report()` checks parameter *names*,
-  not that `W` is the Normal location/scale design.
-* **Baselines between skewness 0.63 and 1.41.** The boundary is bracketed, not
-  located.
+* ~~**`W` families other than `make_weights_vqtl`.** The correction is refused
+  there by documentation, not by code.~~ **Closed.** `check_vqtl_design()` now
+  verifies the numeric identity — `W[, mu_name]` constant 1 and
+  `W[, sigma2_name] == qnorm(taus)/(2*sd)` elementwise — and
+  `dispersion_report()` gates on it by default. What is still *untested* is the
+  behaviour of the correction on other `W` families, because it is now refused
+  rather than measured.
+* ~~**Baselines between skewness 0.63 and 1.41.** The boundary is bracketed, not
+  located.~~ **Located, for the families tested**: about 0.65 under GLS and about
+  1.0 under OLS (§5). What is *not* established is a criterion in terms of the
+  density itself rather than a moment — the skew-normal vs chi2(12) comparison at
+  matched skewness 0.80 shows the moment is a proxy, not the mechanism.
 * **The Monte Carlo and the exact engine use different `W` on non-Normal
   baselines** (§6). Neither is wrong; they were not reconciled.
 * **`w_sd_ratio` != 1** is implemented and documented but not exercised by any

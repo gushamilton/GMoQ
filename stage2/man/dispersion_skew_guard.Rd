@@ -57,6 +57,21 @@ Stage 2 already threads through) together with \code{N}, using
 flags rather than corrects: \code{G} is used against a threshold on its
 magnitude, for which the sign is not needed.
 }
+\section{What this guard is blind to}{
+
+\code{G} is proportional to the genotype skewness, which is \strong{exactly
+zero at MAF 0.50}. The guard is therefore identically zero there, for any
+\eqn{Z_\mu} however large. That is correct for the mechanism it was built for
+--- the genotype-skewness residue really does vanish at MAF 0.50 --- but a
+strongly skewed \emph{phenotype} produces dispersion inflation at MAF 0.50 as
+well (0.163 at nominal 0.05 and \eqn{4.5\times10^{-6}} at
+\eqn{5\times10^{-8}} on a \eqn{\chi^2_4} baseline with \eqn{Z_\mu = 60}).
+That third mechanism lives exactly where this guard reads zero and where
+\code{\link{correct_dispersion_skew}} is identically zero by construction, so
+neither tool sees it. Nothing in this package addresses it; transform the
+phenotype (\code{docs/phenotype_preparation.md}).
+}
+
 \examples{
 # a large mean effect at a rare, strongly skewed genotype
 dispersion_skew_guard(z_mu = c(8, 16, 30), N = 461320, maf = 0.01)

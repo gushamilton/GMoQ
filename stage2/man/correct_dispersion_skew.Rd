@@ -11,9 +11,14 @@ correct_dispersion_skew(
   se_sigma2,
   cov_mu_sigma2 = NULL,
   eaf = NULL,
+  eaf_orientation = NULL,
   mu3_over_var = NULL,
   debias = TRUE,
   w_sd_ratio = 1,
+  W = NULL,
+  W_sd = NULL,
+  taus = NULL,
+  n_min_orient = 10L,
   df = NULL
 )
 }
@@ -30,14 +35,31 @@ sets the number of variants.}
 \code{param_cov_upper}. If \code{NULL} it is taken as zero and a warning is
 issued.}
 
-\item{eaf, mu3_over_var, debias, w_sd_ratio}{See \code{\link{dispersion_skew_bias}}.}
+\item{eaf, eaf_orientation, mu3_over_var, debias, w_sd_ratio}{See
+\code{\link{dispersion_skew_bias}}.}
+
+\item{W}{Optional weight matrix the fit used (\code{fit$W}). When supplied it
+is verified against \code{\link{check_vqtl_design}} and the call refuses if
+the design is not \code{make_weights_vqtl}'s. This function takes
+coefficients rather than a fit, so it \emph{cannot} verify the design unless
+you pass it; \code{\link{dispersion_report}} does so by default.}
+
+\item{W_sd}{The \code{sd} argument that built \code{W}. Required when
+\code{W} is supplied.}
+
+\item{taus}{Optional tau grid for the \code{W} check; recovered from
+\code{rownames(W)} when absent.}
+
+\item{n_min_orient}{Number of distinct \code{eaf} values below 0.5 at which
+the folded-MAF signature becomes conclusive. Default 10.}
 
 \item{df}{Optional degrees of freedom for a t reference; Normal if \code{NULL}.}
 }
 \value{
 A data frame with \code{bias_skew} (the amount subtracted),
 \code{beta_sigma2_skewcorr}, \code{se_sigma2_skewcorr},
-\code{z_sigma2_skewcorr}, \code{p_sigma2_skewcorr}.
+\code{z_sigma2_skewcorr}, \code{p_sigma2_skewcorr}, carrying an
+\code{"na_counts"} attribute.
 }
 \description{
 Removes from \code{beta_sigma2} the second-order residue that a pure location
@@ -82,33 +104,99 @@ Ignoring \eqn{c_l} is not safe: it is the term that keeps the corrected
 statistic calibrated when \code{gls} makes the two parameters strongly
 correlated. Pass \code{param_cov_upper}.
 
-\strong{When this is invalid.}
+\strong{When this is invalid. Read this before using the corrected column.}
 \itemize{
-\item \strong{It needs a signed effect-allele frequency.} \eqn{1 - 2p} is
-odd about \eqn{p = 1/2}; correcting with an unoriented MAF would double
-the bias half the time. Stage 1 does not emit a frequency, so
-\code{eaf} must come from the genotype source.
-\item \strong{It is specific to \code{make_weights_vqtl}} --- a
-location/scale \code{W} on a Normal baseline, where
-\eqn{f_0'/f_0 \propto z_\tau} makes the residue exactly collinear with
-one column. Under a mixture or other \code{W} the residue is not a single
-column and this correction does not apply.
-\item \strong{The baseline should be Normal.} On a non-Normal baseline the
-residue is \eqn{-(\delta^2/2)(\mu_3/\mathrm{Var} g) f_0'(q)/f_0(q)},
-which is no longer proportional to \eqn{z_\tau}; the correction then
-removes only the part of it that the \code{W} column can see. Measured
-behaviour is reported in \code{docs/DISPERSION_SKEW_CORRECTION.md}.
+\item \strong{It needs a signed effect-allele frequency, and getting that
+wrong is worse than not correcting.} \eqn{k = 1 - 2p} is odd about
+\eqn{p = 1/2}, so a \emph{folded} MAF at a variant whose effect allele is
+the major allele makes this function \strong{add} the bias instead of
+removing it: a variant at \eqn{|Z| = 3.27} goes to \eqn{|Z| = 6.20},
+\eqn{p} from \eqn{1.1\times10^{-3}} to \eqn{5.6\times10^{-10}}. At
+MAF 0.01 with \eqn{Z_\mu = 30} the rate at \eqn{5\times10^{-8}} goes to
+\strong{1.000} with a folded \eqn{k}, against 0.916 with no correction at
+all and \eqn{1.5\times10^{-9}} with the right one. Stage 1 emits no
+frequency column, so \code{eaf} must come from the genotype source and is
+very likely to arrive folded. A column that lies below 0.5 at every
+variant is refused; set \code{eaf_orientation = "effect"} to assert the
+orientation deliberately.
+\item \strong{It is specific to \code{make_weights_vqtl}}, and the check is
+on the \emph{numbers} in \code{W}, not its column names. The same Normal
+model built with \code{\link{make_weights_generic}} parameterised in the
+SD rather than the variance has a dispersion column
+\eqn{z_\tau/\mathrm{sd}} instead of \eqn{z_\tau/(2\,\mathrm{sd})}; the
+correction then over-subtracts by a factor of \eqn{2\,\mathrm{sd}} and,
+at \eqn{\mathrm{sd} = 1.3}, drives a truly null estimate from
+\eqn{+1.51\times10^{-2}} to \eqn{-2.41\times10^{-2}}, i.e. 1.6x the
+original bias with the sign flipped. The 5-parameter Normal-mixture
+design with \code{mu_name = "beta_mu1"} over-subtracts by 2.4x. Pass
+\code{W} and \code{W_sd} here, or use \code{\link{dispersion_report}},
+which gates on \code{\link{check_vqtl_design}} by default.
+\item \strong{\code{w_sd_ratio} must match the \code{sd} that built
+\code{W}.} It is (the \code{sd} argument passed to
+\code{\link{make_weights_vqtl}}) divided by (the phenotype SD). With the
+usual \code{make_weights_vqtl(taus, q_tau, mu = mean(y), sd = sd(y))} it
+is 1 and the phenotype SD cancels. If \code{W} was deliberately built on
+another scale and \code{w_sd_ratio} is left at 1, the correction is wrong
+by exactly that ratio --- linearly, with no symptom.
+\item \strong{The baseline must be close to Normal, and how close depends on
+the estimator.} These two are coupled and the choice of estimator moves
+the limit. Corrected rates at \eqn{5\times10^{-8}}, MAF 0.01,
+\eqn{Z_\mu = 30}, \strong{GLS}: skewness 0.63 gives
+\eqn{3.8\times10^{-10}}; 0.71 gives \eqn{3.6\times10^{-9}}; 0.82 gives
+\eqn{5.0\times10^{-7}}; 0.89 gives \eqn{4.8\times10^{-5}}; 0.95 gives
+\strong{1.00}. The usable envelope under GLS is therefore about
+\strong{|skewness| 0.65}, not the 1.4 the uncorrected bracket suggests.
+Under OLS it runs out to about 1.0. Rank-inverse-normal or log transform
+the phenotype (see \code{docs/phenotype_preparation.md}) and this is not a
+live concern.
+\item \strong{The failure is not summarised by skewness alone, nor by
+kurtosis alone.} At matched skewness 0.80 a skew-normal baseline (excess
+kurtosis 0.65) leaves \eqn{2.0\times10^{-4}} under GLS while
+\eqn{\chi^2_{12}} (excess kurtosis 1.00) leaves
+\eqn{5.0\times10^{-7}} --- 390x apart, with the \emph{lower}-kurtosis
+distribution the worse of the two. Symmetric \eqn{t_6}, skewness exactly
+0, still leaves a 62x residual. Neither moment is the determining
+property; what matters is how far \eqn{f_0'/f_0} departs from
+proportionality to \eqn{z_\tau}, which no single moment captures.
+\item \strong{The tau grid should be symmetric about 0.5.} The
+\eqn{O(\delta^3)} term is orthogonal to the dispersion column only then;
+see \code{\link{check_vqtl_design}} for the measured cost of an
+asymmetric grid.
 \item It is second order in \eqn{\delta}; see
 \code{\link{dispersion_skew_bias}} for the residual.
 }
+
+\strong{What the correction costs.} Essentially nothing on null variants and
+nothing measurable on a genuine dispersion effect with no location effect
+(power at \eqn{5\times10^{-8}} unchanged in the fifth decimal). The one real
+cost is at a rare variant carrying a colossal location effect, where the
+correction has genuine variance of its own: \strong{at MAF 0.01 with
+\eqn{Z_\mu = 30} a marginal dispersion effect loses about 26\\% of its honest
+power} (0.372 against an honest 0.50 at \eqn{5\times10^{-8}}; the SE widens by
+a factor 1.094). At MAF 0.01 with \eqn{Z_\mu = 16} the loss is about 12\\%
+(0.562 against 0.50 honest, SE ratio 1.025 --- here the corrected estimator is
+still slightly over-powered). That worst cell is the same cell where the
+\emph{uncorrected} rate is 0.916, and \code{\link{dispersion_skew_guard}}
+flags it with \eqn{G = 6.3}.
+
+\strong{Missing corrections are counted, not hidden.} An \code{eaf} of 0, 1 or
+\code{NA} gives no \eqn{k}; a \code{cov_mu_sigma2} taken from a different fit
+than the standard errors violates Cauchy-Schwarz and yields a negative
+delta-method variance (at \eqn{|c| = 1.01\,\mathrm{se}_\mu
+\mathrm{se}_{\sigma^2}} that is 15,316 variants per 4M). Both produce
+\code{NA}, both are counted, a warning names the counts, and the counts are
+attached as \code{attr(result, "na_counts")}.
 }
 \examples{
-# a 0.2 SD/allele location effect at EAF 0.01, no true dispersion effect
+# a 0.2 SD/allele location effect at EAF 0.01, no true dispersion effect.
+# eaf_orientation asserts that 0.01 is the frequency of the allele beta_mu
+# counts, not a folded MAF -- with one variant the check cannot tell.
 correct_dispersion_skew(beta_mu = 0.2, beta_sigma2 = 0.0392,
                         se_mu = 0.01, se_sigma2 = 0.012,
-                        cov_mu_sigma2 = 0, eaf = 0.01)
+                        cov_mu_sigma2 = 0, eaf = 0.01,
+                        eaf_orientation = "effect")
 }
 \seealso{
 \code{\link{dispersion_skew_bias}}, \code{\link{dispersion_skew_guard}},
-\code{\link{residualise_dispersion}}
+\code{\link{check_vqtl_design}}, \code{\link{residualise_dispersion}}
 }

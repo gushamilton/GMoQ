@@ -12,6 +12,12 @@ dispersion_report(
   maf = NULL,
   n_eff = NULL,
   eaf = NULL,
+  eaf_orientation = NULL,
+  mu3_over_var = NULL,
+  W_sd = NULL,
+  w_sd_ratio = 1,
+  taus = NULL,
+  check_design = TRUE,
   debias = TRUE,
   mu_name = "beta_mu",
   sigma2_name = "beta_sigma2"
@@ -20,7 +26,8 @@ dispersion_report(
 \arguments{
 \item{fit}{Output of \code{param_gwas()} run with \code{return_cov = "upper"} and
 a weight matrix carrying columns named \code{beta_mu} and \code{beta_sigma2}
-(i.e. \code{make_weights_vqtl}).}
+(i.e. \code{make_weights_vqtl}). Its \code{W} element is what the design
+check verifies.}
 
 \item{r_av, se_rav}{Genome-wide coupling and its SE; see \code{\link{estimate_rav}}.
 If \code{r_av} is \code{NULL} the residualised columns are omitted.}
@@ -28,19 +35,48 @@ If \code{r_av} is \code{NULL} the residualised columns are omitted.}
 \item{N}{Sample size, for the skewness guard.}
 
 \item{maf, n_eff}{Allele frequency, or per-variant \code{d_resid}; see
-\code{\link{dispersion_skew_guard}}. If both are \code{NULL} the guard is omitted.}
+\code{\link{dispersion_skew_guard}}. If both are \code{NULL} the guard is
+omitted. \code{maf} is \emph{folded} and is not a substitute for \code{eaf}.}
 
-\item{eaf}{Signed effect-allele frequency. When supplied, the
-genotype-skewness-corrected dispersion columns are added; see
-\code{\link{correct_dispersion_skew}}. This must be oriented to the allele
-\code{beta_mu} counts -- \code{maf} is not a substitute.}
+\item{eaf}{Signed effect-allele frequency, oriented to the allele
+\code{beta_mu} counts. When supplied, the genotype-skewness-corrected
+dispersion columns are added; see \code{\link{correct_dispersion_skew}}.}
+
+\item{eaf_orientation}{Required whenever \code{eaf} is supplied. Set to
+\code{"effect"} to state deliberately that \code{eaf} is the effect-allele
+frequency. There is no default: Stage 1 emits no frequency column, so the
+one you have almost certainly came from a source reporting folded MAF, and
+the sign of \eqn{k = 1 - 2\,\mathrm{eaf}} is what the whole correction turns
+on.}
+
+\item{mu3_over_var}{Optional direct \eqn{\mu_3/\mathrm{Var}(g)}, overriding
+\code{eaf}. Use this for dosages, for non-HWE genotype laws, or when you
+have the signed skewness but not a signed frequency.}
+
+\item{W_sd}{The \code{sd} argument that was passed to
+\code{\link{make_weights_vqtl}} when the fit's \code{W} was built. Required
+when \code{eaf} or \code{mu3_over_var} is supplied and
+\code{check_design = TRUE}.}
+
+\item{w_sd_ratio}{\code{W_sd} divided by the phenotype SD. Leave at 1 for the
+usual \code{make_weights_vqtl(taus, q_tau, mu = mean(y), sd = sd(y))}; see
+\code{\link{dispersion_skew_bias}}.}
+
+\item{taus}{Optional tau grid for the design check; recovered from
+\code{rownames(fit$W)} when absent.}
+
+\item{check_design}{Verify \code{fit$W} numerically before correcting.
+Default \code{TRUE}. Setting it \code{FALSE} is a deliberate act and warns
+prominently.}
 
 \item{debias}{Passed to \code{\link{correct_dispersion_skew}}.}
 
 \item{mu_name, sigma2_name}{Parameter row names to use.}
 }
 \value{
-A data frame with one row per variant.
+A data frame with one row per variant. When the skewness correction is
+applied, \code{attr(result, "na_counts")} carries the count of variants left
+uncorrected and why.
 }
 \description{
 Convenience wrapper that takes the output of \code{\link{param_gwas}} together with
@@ -48,3 +84,28 @@ its \code{param_cov_upper}, and returns a data frame carrying the uncorrected
 dispersion statistic, the mean-variance-residualised one, and the
 genotype-skewness guard, side by side.
 }
+\section{Three ways to get this wrong, and what stops them}{
+
+\strong{1. A folded MAF in \code{eaf}.} \code{maf} is the folded magnitude the
+guard uses; \code{eaf} must be the \emph{signed} frequency of the allele
+\code{beta_mu} counts. Taking both from the same column makes the correction
+add the bias rather than remove it --- 0.916 to \strong{1.000} at
+\eqn{5\times10^{-8}} for MAF 0.01, \eqn{Z_\mu = 30}, against
+\eqn{1.5\times10^{-9}} done right. Passing the same object, or element-wise
+identical values, to \code{maf} and \code{eaf} is refused; so is an \code{eaf}
+column that lies below 0.5 at every variant; and \code{eaf_orientation} must
+be set deliberately.
+
+\strong{2. A \code{W} that is merely \emph{named} \code{beta_sigma2}.} The
+correction is exact for \code{\link{make_weights_vqtl}}'s numbers, not for its
+column names. By default this function verifies \code{fit$W} elementwise with
+\code{\link{check_vqtl_design}} and refuses otherwise, which needs
+\code{W_sd}.
+
+\strong{3. Reading the corrected column without its caveats.} They are in
+\code{\link{correct_dispersion_skew}}: a ~26\\% power loss at MAF 0.01 /
+\eqn{Z_\mu = 30}, a usable skewness envelope of about 0.65 under GLS (about
+1.0 under OLS), and \code{w_sd_ratio} having to match the \code{sd} that built
+\code{W}.
+}
+
