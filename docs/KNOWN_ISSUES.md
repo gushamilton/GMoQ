@@ -1,6 +1,7 @@
 # G-MoQ: validated behaviour and known limitations
 
-Status as of 2026-09-13, against tag `v0.2.0` (`cdbc395`).
+Status as of 2026-09-13, against tag `v0.2.0` (`cdbc395`), plus the
+tail-calibration fix described in 2.1, which post-dates that tag.
 
 This records what has been tested, what was found, and what is not yet
 established. Full evidence lives in the analysis tree under
@@ -49,6 +50,63 @@ reproduces direct counts to 0.4% at 0.05, 0.2% at 1e-3 and 2.4% at 1e-4.
 `1/sqrt(B-1)`. From `ln(ratio) ~ 435 * sd(r)^2`, reaching 1.1x needs
 B ~ 2,300 and 1.05x needs B ~ 4,500. Cost beyond B=500 is not measured;
 the linear cost fit in the analysis tree is not verified that far out.
+
+### 2.1 Fixed for the parameter Wald test
+
+The table above is what happens when `theta/SE` is read against a **normal**
+reference. It should not be. `Sigma` is estimated, so for a fixed contrast `a`,
+
+    a' Sigma_jk a / a' Sigma a  ~  chi2_nu / nu
+
+and `theta/SE` is exactly `t_nu`. Raising B was never the fix; it only shrank
+the gap between the wrong reference and the right one.
+
+Stage 2 now emits a parameter p-value itself, as
+`2 * pt(-|theta/SE|, df = nu)`, instead of leaving downstream code to compute
+`2 * pnorm(-|beta/se|)`. `nu` travels from Stage 1 in
+`<prefix>.cov.meta.json` under `jackknife`, as `nu` (currently
+`n_blocks - 1`, tagged `nu_source: "blocks_minus_one"`) alongside the block
+count itself. Every result row records `ref_dist` and `ref_df`, so which
+reference produced a p-value is visible in the output file.
+
+**The t identity reproduces the measured inflation from a completely
+different direction.** `2*pt(-5.4513, B-1) / 5e-8`, computed from nothing but
+the degrees of freedom, against the simulated values in the table above:
+
+| B | predicted by `t_{B-1}` | measured |
+|---|---|---|
+| 65 | 17.14 | 17.44 |
+| 200 | 2.94 | 3.02 |
+| 500 | 1.57 | 1.62 |
+| 1000 | 1.26 | 1.30 |
+| 2300 | 1.11 | 1.15 |
+
+Agreement to a few percent across a 35-fold range of B. The small, consistent
+excess of the measured values over the prediction is what you would see if the
+*effective* degrees of freedom were slightly below `B - 1`; that is being
+measured separately, and `jackknife.nu` is a separate field from
+`jackknife.n_blocks` precisely so a measured `nu_eff` can replace `B - 1`
+without a format change.
+
+The Stage 1 default block count is now **1000**, not 65.
+
+**Covariance files written before the `jackknife` field existed carry no `nu`.**
+Stage 2 refuses to emit a parameter p-value for them and says so, rather than
+falling back to a normal reference; `theta`, `SE`, `Q` and `Q_pval` are
+unaffected. Pass `nu = n_blocks - 1` to `param_gwas_from_file()` to use such a
+file, or `unknown_nu = "normal"` to reproduce a pre-fix run, which is then
+recorded as `ref_dist = "normal"` in the output.
+
+**Still outstanding: `Q_pval`.** The Lugannani-Rice saddlepoint reference for
+`Q` conditions on `Sigma` as known and inherits the same defect. It is not a
+`pt()` substitution -- `Q` is a quadratic form in a correlated normal vector,
+and the estimation of `Sigma` would have to be propagated through its
+eigenvalue spectrum -- and it is untouched for now.
+
+**No joint multi-parameter Wald test exists in the package**, so nothing
+currently needs an `F_{k, nu-k+1}` (Hotelling) reference. `Q` is a lack-of-fit
+statistic on `T - k` residual degrees of freedom, not a joint test of `k`
+parameters. If one is added it must use `F`, not chi-square.
 
 ## 3. The analytic covariance
 
