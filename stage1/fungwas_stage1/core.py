@@ -84,6 +84,101 @@ def resolve_n_blocks(n_blocks: Optional[int], n_taus: int, flag: str = "--blocks
     return n_blocks
 
 
+#: Tolerance for the covariate-basis orthonormality check performed at every
+#: kernel entry point (see :func:`check_orthonormal_basis`).
+#:
+#: Chosen to sit far above float64 QR noise and far below the smallest instance
+#: of the defect it exists to catch. Both bounds are measured, on the real
+#: UK Biobank BMI covariate matrix (486,254 x 13 = intercept + age + sex + 10
+#: ancestry PCs, of which 461,320 rows are in the chr22 genotype release):
+#:
+#: * **Floor - a correctly built basis.** LAPACK's Householder QR is
+#:   unconditionally backward stable in the orthogonality sense: the deviation
+#:   is O(K**1.5 * eps) irrespective of cond(X) - including for a rank-deficient
+#:   X, whose Q still has orthonormal columns - and forming the Gram matrix adds
+#:   O(sqrt(N) * eps). Measured: 2.3e-14 over all 486,254 rows, 8.4e-15 over the
+#:   461,320 matched rows. 1e-8 is 5.6 orders of magnitude above that, so it
+#:   cannot fire on a basis that was built on the rows it is used on.
+#: * **Ceiling - the smallest realisable instance of the defect.** Dropping even
+#:   a single row from the sample the basis was built on perturbs Q'Q by
+#:   q_i q_i'. Measured: 2.3e-6 for an arbitrary row and 1.3e-4 for the most
+#:   influential one - both at least two orders of magnitude ABOVE 1e-8. The
+#:   production defect (the full 24,934-row mismatch) measured 9.7e-1, eight
+#:   orders above.
+#:
+#: The tolerance therefore leaves no gap: no numerically sound basis fails it,
+#: and no mis-built one passes it. That is why this raises rather than warns -
+#: see :func:`check_orthonormal_basis`.
+#:
+#: Cost: one N-by-K Gram product per kernel call, measured at 14 ms for
+#: (461320, 13) against a ~3.5 s production batch of 500 SNPs, i.e. ~0.4%.
+ORTHONORMAL_BASIS_TOL = 1e-8
+
+
+def check_orthonormal_basis(Q: np.ndarray, tol: float = ORTHONORMAL_BASIS_TOL,
+                            context: str = "Stage 1 kernel") -> float:
+    """Fail loudly unless ``Q`` is orthonormal over the rows it will be applied to.
+
+    Every Stage 1 kernel residualises the genotype as ``g - Q (Q' g)``. That is
+    the orthogonal projection onto the complement of ``col(X)`` **only if**
+    ``Q'Q = I``. If it is not, the covariate-parallel part of ``g`` is only
+    partly removed and what survives leaks into the numerator of every slope: a
+    deterministic bias in ``beta_tau``, with standard errors that are left
+    almost untouched and therefore give no warning that anything is wrong.
+
+    The way this happens in practice is a basis built on one sample and applied
+    to a subset of it - a QR computed on the keep file, then row-subset to the
+    samples that matched the genotype file. Orthonormality over N rows says
+    nothing about orthonormality over n < N of them. On the UK Biobank BMI
+    inputs (486,254 keep rows, 461,320 matched) the row-subset basis reached
+    ``max |Q'Q - I| = 9.7e-1``, with the ancestry-PC columns retaining 3-9% of
+    their norm, and shifted ``beta_tau`` by a median of 0.12 SE and up to
+    2.3 SE - in a consistent direction at all 45 taus.
+
+    Raising is deliberate. The failure is silent by construction, so a warning
+    would be swallowed by the thousands of lines a Stage 1 run already logs; no
+    legitimate caller passes a non-orthonormal basis (the kernels all document
+    ``Q`` as the QR factor); and the tolerance sits 5.6 orders of magnitude above
+    measured QR noise, so a spurious failure is not a realistic risk.
+
+    Parameters
+    ----------
+    Q : array (N, K)
+        Covariate basis, as handed to the kernel.
+    tol : float
+        Maximum tolerated ``max |Q'Q - I|``. See ``ORTHONORMAL_BASIS_TOL``.
+    context : str
+        Included in the error message to identify the caller.
+
+    Returns
+    -------
+    float
+        The measured ``max |Q'Q - I|``.
+
+    Raises
+    ------
+    ValueError
+        If the deviation exceeds ``tol``, or is not finite.
+    """
+    Q = np.asarray(Q, dtype=np.float64)
+    if Q.ndim != 2:
+        raise ValueError(f"Covariate basis Q must be 2-D, got shape {Q.shape} ({context})")
+    gram = Q.T @ Q
+    deviation = float(np.max(np.abs(gram - np.eye(Q.shape[1]))))
+    if not np.isfinite(deviation) or deviation > tol:
+        raise ValueError(
+            f"Covariate basis is not orthonormal over the {Q.shape[0]} rows being "
+            f"analysed: max |Q'Q - I| = {deviation:.6g} > {tol:g} ({context}). "
+            f"The kernels residualise as g - Q (Q' g), which is a projection only if "
+            f"Q'Q = I; otherwise beta_tau is biased while se_tau is not, so nothing "
+            f"downstream can detect it. The usual cause is a basis built on a larger "
+            f"sample and then row-subset (e.g. QR on the keep file, subset to the "
+            f"genotype-matched samples). Build it as np.linalg.qr(X[rows]) on exactly "
+            f"the rows being analysed."
+        )
+    return deviation
+
+
 def residual_sum_squares(G: np.ndarray, Q: np.ndarray) -> np.ndarray:
     """Per-SNP ``D = sum_i g_resid_i^2`` for genotypes residualised on ``Q``.
 
@@ -106,6 +201,7 @@ def residual_sum_squares(G: np.ndarray, Q: np.ndarray) -> np.ndarray:
     Q : array (N, K)
         Orthonormal covariate basis.
     """
+    check_orthonormal_basis(Q, context="residual_sum_squares")
     G = np.asarray(G, dtype=np.float64)
     col_means = np.nanmean(G, axis=0)
     Gi = np.where(np.isnan(G), col_means, G)
@@ -284,6 +380,7 @@ def compute_block_scores(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
         [:, :, 0] = sum(G_resid^2) in block
         [:, :, 1:] = sum(G_resid * Y_resid) in block per tau
     """
+    check_orthonormal_basis(Q, context="compute_block_scores")
     require_cpp_extension("Block-score computation")
     if HAVE_CPP:
         G_f = np.asfortranarray(G, dtype=np.float64)
@@ -329,6 +426,7 @@ def compute_block_scores_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray
     produces them in, so the per-batch ``asfortranarray`` copies of the per-SNP path
     (166 MB + 48 MB at production N) are not made either.
     """
+    check_orthonormal_basis(Q, context="compute_block_scores_panel")
     require_cpp_extension("Panel block-score computation")
     if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_block_scores_panel_static'):
         raise RuntimeError(
@@ -355,6 +453,7 @@ def compute_block_finalize_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarr
     :func:`compute_block_finalize`, so the beta/SE/covariance output is bit-identical to
     that function's.
     """
+    check_orthonormal_basis(Q, context="compute_block_finalize_panel")
     require_cpp_extension("Fused panel block finalization")
     if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_finalize_block_scores_panel_static'):
         raise RuntimeError(
@@ -397,6 +496,7 @@ def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
     denominator) are NaN throughout, matching the NaN convention of
     ``compute_block_scores``.
     """
+    check_orthonormal_basis(Q, context="compute_block_finalize")
     require_cpp_extension("Fused block finalization")
     if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_finalize_block_scores_static'):
         raise RuntimeError(
@@ -453,6 +553,7 @@ def compute_block_scores_multi(G: np.ndarray, RIF_resid_list: list[np.ndarray], 
     if not isinstance(RIF_resid_list, (list, tuple)):
         raise ValueError("RIF_resid_list must be a list of arrays")
 
+    check_orthonormal_basis(Q, context="compute_block_scores_multi")
     require_cpp_extension("Multi-phenotype block-score computation")
     if HAVE_CPP and hasattr(cpp_ext, 'stage1_block_scores_multi'):
         G_f = np.asfortranarray(G, dtype=np.float64)
