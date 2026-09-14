@@ -77,7 +77,17 @@ from typing import Any, Optional, Tuple
 import numpy as np
 
 #: Bumped whenever the on-disk schema gains or changes a field.
-COV_META_VERSION = 3
+#:
+#: Version 4 adds the ``analysis`` block.  It records what the scan was: the
+#: phenotype, the covariate columns, the analysed sample count, the LOCO
+#: predictor, and a fingerprint over all of those plus the tau grid.  None of
+#: it is needed to read the jackknife covariance; it exists so that Stage 2 can
+#: check a *pooled* covariance sidecar (``.sigma0.meta.json``) against the scan
+#: it is being applied to and refuse on any disagreement.  ``Sigma_0`` built on
+#: a different covariate set is wrong in a way that leaves the standard errors
+#: plausible and the point estimates untouched, so nothing downstream can
+#: detect it -- the same silent-failure shape as the normal-reference defect.
+COV_META_VERSION = 4
 
 #: ``nu_source`` value for the analytic delete-one-block jackknife df.
 NU_SOURCE_BLOCKS_MINUS_ONE = "blocks_minus_one"
@@ -149,6 +159,7 @@ def build_cov_meta(
     nu: Optional[float] = None,
     nu_source: Optional[str] = None,
     n_blocks_nonempty: Optional[int] = None,
+    analysis: Optional[dict] = None,
 ) -> dict:
     """Build the ``.cov.meta.json`` payload.
 
@@ -176,6 +187,10 @@ def build_cov_meta(
         no replicate and the degrees of freedom follow the populated count.
         Equal to ``n_blocks`` whenever N is comfortably larger than B, which
         is every production run.
+    analysis : dict, optional
+        Provenance of the scan, from ``pooled_cov.sigma0_analysis_block``.
+        Recorded verbatim so Stage 2 can compare it with the matching field
+        of a ``.sigma0.meta.json`` sidecar and refuse a mismatch.
     """
     if cov_dtype not in ("int8", "float32"):
         raise ValueError(f"cov_dtype must be int8 or float32, got {cov_dtype!r}")
@@ -205,7 +220,7 @@ def build_cov_meta(
     if seed is not None:
         jackknife["seed"] = int(seed)
 
-    return {
+    payload = {
         "cov_meta_version": COV_META_VERSION,
         "cov_dtype": cov_dtype,
         "n_taus": n_taus,
@@ -214,6 +229,9 @@ def build_cov_meta(
         "scale_file": bool(cov_dtype == "int8"),
         "jackknife": jackknife,
     }
+    if analysis is not None:
+        payload["analysis"] = dict(analysis)
+    return payload
 
 
 def write_cov_meta(path: str, meta: dict) -> None:
@@ -267,6 +285,12 @@ def resolve_block_count(meta: dict) -> Optional[int]:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 2:
             return int(value)
     return None
+
+
+def resolve_analysis(meta: dict) -> Optional[dict]:
+    """The ``analysis`` provenance block, if the writer supplied one."""
+    block = meta.get("analysis") if isinstance(meta, dict) else None
+    return block if isinstance(block, dict) else None
 
 
 def resolve_df_model(meta: dict) -> Optional[dict]:

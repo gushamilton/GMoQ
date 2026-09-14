@@ -62,6 +62,13 @@ from .core import (
     require_cpp_extension,
 )
 from .cov_meta import build_cov_meta, write_cov_meta
+from .pooled_cov import (
+    SIGMA0_ALL_CHROM,
+    build_sigma0_meta,
+    compute_sigma0,
+    sigma0_analysis_block,
+    write_sigma0,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -474,7 +481,12 @@ def query_bgi_records_for_rsids(bgen_path: str, requested_rsids: Set[str]) -> Li
 def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Optional[str],
                          keep_file: Optional[str] = None,
                          covar_cols: Optional[list[str]] = None) -> tuple:
-    """Load phenotypes/covariates and return aligned raw inputs for analysis."""
+    """Load phenotypes/covariates and return aligned raw inputs for analysis.
+
+    Returns ``(sample_ids, sample_aliases, y_values, X, covar_cols)`` where
+    ``covar_cols`` are the covariate columns resolved against the file, in the
+    order they occupy ``X`` after the intercept.
+    """
     keep_set = None
     if keep_file:
         log_mem(f"Loading sample keep list from {keep_file}")
@@ -544,7 +556,11 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
     else:
         X = np.ones((n_samples, 1))
 
-    return sample_ids, sample_aliases, y_values, X
+    # covar_cols is returned because the pooled covariance sidecar has to record
+    # exactly which covariate columns entered X, in order: Sigma_0 is the
+    # covariate-residualised influence covariance, so a reader that does not know
+    # the covariate set cannot tell whether it applies to their scan.
+    return sample_ids, sample_aliases, y_values, X, list(covar_cols)
 
 
 def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_cols: list[str],
@@ -1023,6 +1039,13 @@ def main():
     # Output options
     parser.add_argument('--output-rtau', dest='output_rtau', action='store_true',
                         help='Also output R_tau correlation matrix for plugin_cor')
+    parser.add_argument('--no-sigma0', dest='sigma0', action='store_false',
+                        help='Do not write the pooled cross-quantile covariance sidecar '
+                             '(<prefix>.sigma0.tsv.gz + .sigma0.meta.json). The sidecar '
+                             'is one 45x45 matrix per chromosome, costs well under a '
+                             'second to compute, and is what lets Stage 2 use the pooled '
+                             'covariance instead of the per-SNP jackknife.')
+    parser.set_defaults(sigma0=True)
     parser.add_argument('--cov-dtype', dest='cov_dtype', choices=['int8', 'float32'],
                         default='int8',
                         help='Covariance storage dtype: int8 (with .cov.scale.gz sidecar) '
@@ -1072,12 +1095,18 @@ def main():
 
     if use_multi:
         log_mem(f"Loading {len(pheno_cols)} phenotypes in one pass...")
-    sample_ids, sample_aliases, y_values_raw, X_full = load_analysis_inputs(
+    sample_ids, sample_aliases, y_values_raw, X_full, covar_cols_used = load_analysis_inputs(
         args.pheno, pheno_cols, args.covar, keep_file=args.keep, covar_cols=covar_cols
     )
     y_values_full = {col: np.asarray(values, dtype=np.float64) for col, values in y_values_raw.items()}
     loco_predictions = None
+    loco_files = {col: None for col in pheno_cols}
     if args.loco_preds:
+        # Resolved here as well as inside load_loco_predictions so the pooled
+        # covariance sidecar can name the predictor that produced it. A Sigma_0
+        # built without the LOCO adjustment, or with another trait's, is wrong in
+        # exactly the silent way the covariate set is.
+        loco_files = resolve_loco_files(args.loco_preds, pheno_cols)
         loco_predictions, loco_valid_mask = load_loco_predictions(args.loco_preds, pheno_cols, sample_aliases)
         if not np.all(loco_valid_mask):
             dropped = int((~loco_valid_mask).sum())
@@ -1140,6 +1169,28 @@ def main():
     RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
         pheno_cols, y_values_full, X_full, taus, None, None, valid_mask
     )
+
+    # Pooled cross-quantile covariance, Sigma_0 = Psi_r' Psi_r / n, accumulated
+    # from the same residualised RIF the kernel is about to consume -- so it is
+    # a by-product of work already done, and it is built on the post-sample-match
+    # objects by construction (the defect fixed at 4754794 was a basis built on
+    # the keep sample and applied to a subset).
+    #
+    # Without --loco-preds the RIF does not depend on the chromosome, so one
+    # matrix under the key "ALL" covers the whole run. With it, the phenotype is
+    # Y - LOCO(chr) and the matrices are collected per chromosome in the variant
+    # loop below; the build here is then thrown away before any variant is
+    # scored, so it must not be recorded.
+    sigma0_by_chr = [dict() for _ in pheno_cols]
+    sigma0_seconds = 0.0
+    if args.sigma0 and loco_predictions is None:
+        t_s0 = time.perf_counter()
+        for p_idx, rif in enumerate(RIF_resid_list):
+            sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM] = compute_sigma0(rif)
+        sigma0_seconds += time.perf_counter() - t_s0
+        log_mem(f"Sigma_0 accumulated for {len(pheno_cols)} phenotype(s) in "
+                f"{sigma0_seconds:.2f}s")
+
     t_batches = time.perf_counter()
     
     # Assign jackknife blocks
@@ -1230,6 +1281,11 @@ def main():
                 RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
                     pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask
                 )
+                if args.sigma0:
+                    t_s0 = time.perf_counter()
+                    for p_idx, rif in enumerate(RIF_resid_list):
+                        sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
+                    sigma0_seconds += time.perf_counter() - t_s0
                 active_chr = variant_chr
 
             # Extract dosage
@@ -1296,14 +1352,44 @@ def main():
     # Record the jackknife block count (and hence the degrees of freedom of the
     # estimated tau-covariance) so Stage 2 can read theta/SE against a t_nu
     # reference instead of a normal one. See fungwas_stage1/cov_meta.py.
-    cov_meta = build_cov_meta(
-        cov_dtype=args.cov_dtype,
-        n_taus=T,
-        n_blocks=args.blocks,
-        seed=args.seed,
-        n_blocks_nonempty=n_blocks_nonempty,
-    )
-    for meta_path in out_cov_meta_list:
+    #
+    # The pooled covariance sidecar, and the provenance block that lets Stage 2
+    # decide whether it may be used. Both are written per phenotype: Sigma_0 is
+    # the covariance of one trait's influence functions and means nothing for
+    # another's.
+    sigma0_meta_list = []
+    for p_idx, col in enumerate(pheno_cols):
+        chroms = sorted(sigma0_by_chr[p_idx].keys())
+        sigma0_meta_list.append(build_sigma0_meta(
+            phenotype=col,
+            covariates=covar_cols_used,
+            taus=taus,
+            n_samples=N_matched,
+            chromosomes=chroms,
+            loco_predictor=loco_files.get(col),
+            covariate_basis_rank=int(X_full.shape[1]),
+        ))
+    for p_idx, prefix in enumerate(out_prefixes):
+        if not args.sigma0:
+            continue
+        if not sigma0_by_chr[p_idx]:
+            logger.warning(
+                "No Sigma_0 was accumulated for %s (no variants were scored); "
+                "the pooled covariance sidecar is not written.", pheno_cols[p_idx]
+            )
+            continue
+        m_path, s_path = write_sigma0(prefix, sigma0_by_chr[p_idx], sigma0_meta_list[p_idx])
+        logger.info("Wrote pooled covariance: %s, %s", m_path, s_path)
+    log_mem(f"Sigma_0 compute time: {sigma0_seconds:.2f}s")
+    for p_idx, meta_path in enumerate(out_cov_meta_list):
+        cov_meta = build_cov_meta(
+            cov_dtype=args.cov_dtype,
+            n_taus=T,
+            n_blocks=args.blocks,
+            seed=args.seed,
+            n_blocks_nonempty=n_blocks_nonempty,
+            analysis=sigma0_analysis_block(sigma0_meta_list[p_idx]),
+        )
         write_cov_meta(meta_path, cov_meta)
     log_mem(
         f"Batch compute time: {total_compute:.1f}s, write time: {total_write:.1f}s, "
