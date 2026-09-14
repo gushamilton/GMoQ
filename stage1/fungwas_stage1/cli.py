@@ -353,6 +353,103 @@ def load_loco_predictions_for_file(loco_file: str,
     return chr_to_pred, valid_mask
 
 
+def resolve_loco_scale(mode: str,
+                       y: np.ndarray,
+                       per_chr: dict[str, np.ndarray],
+                       pheno: str) -> float:
+    """
+    Return the factor that puts a REGENIE `.loco` prediction on the phenotype's scale.
+
+    REGENIE standardises quantitative phenotypes in step 1, so the predictions it writes
+    to `.loco` are on the standardised scale: their sd is ~0.19-0.36 whatever the
+    phenotype's own sd is. Subtracting them from an unstandardised Y (mode 'none')
+    under-corrects traits with sd > 1 and over-corrects traits with sd < 1.
+
+    The exact factor is REGENIE's `scale_Y`, which is the sd of the phenotype *after*
+    regressing out REGENIE's step-1 covariates (Pheno.cpp::residualize_phenotypes), not
+    the sd of the raw phenotype. Stage 1 cannot compute that directly: REGENIE's step-1
+    covariate set is not an input here and need not match Stage 1's own --covar.
+
+    Modes:
+      'regression' - OLS slope of Y on the prediction, pooled over chromosomes. The
+                     default. Recovers REGENIE's analysed sd to within 0.02% on every
+                     trait that could be ground-truthed, because it needs no knowledge of
+                     the step-1 covariate set and absorbs REGENIE's ridge shrinkage too.
+      'sd'         - multiply by sd(Y). Correct only when the step-1 covariates explain
+                     little of Y; it over-subtracts by 19% for `weight`, whose step-1
+                     covariates (height terms) carry R^2 = 0.30.
+      'none'       - subtract as-is (pre-v0.4.0 behaviour; kept to reproduce old runs).
+      a float      - use that factor verbatim.
+    """
+    finite = np.isfinite(y)
+    y_sd = float(np.std(y[finite])) if finite.any() else float('nan')
+
+    if mode == 'none':
+        scale = 1.0
+    elif mode == 'sd':
+        scale = y_sd
+    elif mode == 'regression':
+        num = 0.0
+        den = 0.0
+        for pred in per_chr.values():
+            ok = finite & np.isfinite(pred)
+            if not ok.any():
+                continue
+            yc = y[ok] - y[ok].mean()
+            pc = pred[ok] - pred[ok].mean()
+            num += float(pc @ yc)
+            den += float(pc @ pc)
+        if den <= 0:
+            raise ValueError(
+                f"--loco-scale regression failed for '{pheno}': the LOCO predictions have "
+                f"zero variance. Use --loco-scale sd."
+            )
+        scale = num / den
+    else:
+        try:
+            scale = float(mode)
+        except ValueError:
+            raise ValueError(f"--loco-scale must be 'sd', 'regression', 'none' or a number; got {mode!r}")
+
+    pred_sds = [float(np.std(v[np.isfinite(v)])) for v in per_chr.values() if np.isfinite(v).any()]
+    pred_sd = float(np.median(pred_sds)) if pred_sds else float('nan')
+    logger.info(
+        "LOCO scale for '%s': mode=%s factor=%.6g (sd(Y)=%.6g, median sd(LOCO)=%.6g, "
+        "effective sd of subtracted term=%.6g)",
+        pheno, mode, scale, y_sd, pred_sd, scale * pred_sd
+    )
+
+    # Guard on the thing that actually matters: whether the adjustment removes variance
+    # or adds it. Measured directly rather than inferred from an sd ratio, so a trait with
+    # strongly predictive covariates cannot trip it spuriously.
+    var_before, var_after, n_used = 0.0, 0.0, 0
+    for pred in per_chr.values():
+        ok = finite & np.isfinite(pred)
+        if not ok.any():
+            continue
+        var_before += float(np.var(y[ok]))
+        var_after += float(np.var(y[ok] - scale * pred))
+        n_used += 1
+    if n_used:
+        var_before /= n_used
+        var_after /= n_used
+        logger.info(
+            "LOCO adjustment for '%s': var(Y) %.6g -> %.6g (%+.1f%%)",
+            pheno, var_before, var_after,
+            100.0 * (var_after - var_before) / var_before if var_before > 0 else float('nan')
+        )
+        if var_after > var_before:
+            logger.warning(
+                "LOCO adjustment for '%s' INCREASES the analysed variance (%.6g -> %.6g). "
+                "Subtracting this term injects noise instead of removing it, which biases "
+                "every non-location quantile effect by sd_correct/sd_analysed. This is the "
+                "signature of an unscaled REGENIE prediction (--loco-scale none); use the "
+                "default --loco-scale regression.",
+                pheno, var_before, var_after
+            )
+    return scale
+
+
 def load_loco_predictions(loco_path: str,
                           pheno_cols: list[str],
                           sample_aliases: list[list[str]]) -> tuple[dict[str, dict[str, np.ndarray]], np.ndarray]:
@@ -942,7 +1039,8 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
 def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np.ndarray],
                               X_full: np.ndarray, taus: np.ndarray,
                               loco_predictions: Optional[dict[str, dict[str, np.ndarray]]],
-                              chrom: Optional[str], valid_mask: np.ndarray) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
+                              chrom: Optional[str], valid_mask: np.ndarray,
+                              loco_scales: Optional[dict[str, float]] = None) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
     """Build residualized RIF matrices for a chromosome, optionally using LOCO-adjusted phenotypes."""
     if loco_predictions is None:
         y_values_chr = {col: y_values_full[col][valid_mask] for col in pheno_cols}
@@ -953,7 +1051,8 @@ def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np
             per_chr = loco_predictions[col]
             if chrom_key not in per_chr:
                 raise ValueError(f"Chromosome {chrom_key} missing from LOCO predictions for phenotype '{col}'")
-            y_values_chr[col] = y_values_full[col] - per_chr[chrom_key]
+            scale = 1.0 if loco_scales is None else loco_scales.get(col, 1.0)
+            y_values_chr[col] = y_values_full[col] - scale * per_chr[chrom_key]
         y_values_chr = {col: y_values_chr[col][valid_mask] for col in pheno_cols}
 
     rif_resid_list, q_chr, q_tau_list = build_rif_residuals(y_values_chr, pheno_cols, X_full[valid_mask], taus)
@@ -992,6 +1091,13 @@ def main():
                         help='File with SNP IDs to process (one per line)')
     parser.add_argument('--keep', default=None,
                         help='File with sample IDs to keep (one per line)')
+    parser.add_argument('--loco-scale', dest='loco_scale', default='regression',
+                        help="How to put REGENIE .loco predictions on the phenotype's scale. "
+                             "'regression' (default) uses the OLS slope of Y on the prediction, "
+                             "pooled over chromosomes; 'sd' multiplies by sd(Y), which is only "
+                             "exact when REGENIE's step-1 covariates explain little of Y; "
+                             "'none' subtracts as-is (pre-v0.4.0 behaviour); or give a number "
+                             "to use it verbatim.")
     parser.add_argument('--loco-preds', dest='loco_preds', default=None,
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
@@ -1101,6 +1207,7 @@ def main():
     y_values_full = {col: np.asarray(values, dtype=np.float64) for col, values in y_values_raw.items()}
     loco_predictions = None
     loco_files = {col: None for col in pheno_cols}
+    loco_scales = None
     if args.loco_preds:
         # Resolved here as well as inside load_loco_predictions so the pooled
         # covariance sidecar can name the predictor that produced it. A Sigma_0
@@ -1108,6 +1215,7 @@ def main():
         # exactly the silent way the covariate set is.
         loco_files = resolve_loco_files(args.loco_preds, pheno_cols)
         loco_predictions, loco_valid_mask = load_loco_predictions(args.loco_preds, pheno_cols, sample_aliases)
+        loco_scales = None  # filled in after the sample mask is applied
         if not np.all(loco_valid_mask):
             dropped = int((~loco_valid_mask).sum())
             log_mem(f"Dropping {dropped} phenotype rows not present in LOCO predictions")
@@ -1115,6 +1223,15 @@ def main():
             sample_aliases = [aliases for aliases, keep in zip(sample_aliases, loco_valid_mask) if keep]
             y_values_full = {col: values[loco_valid_mask] for col, values in y_values_full.items()}
             X_full = X_full[loco_valid_mask]
+
+        # Computed on the LOCO-matched phenotype rows, which is a superset of the rows
+        # that survive the later BGEN sample match. The factor is a property of the
+        # phenotype's scale, not of the analysed subset, so the difference is immaterial
+        # (0.2% for log_bmi: 484,460 rows vs 461,320).
+        loco_scales = {
+            col: resolve_loco_scale(args.loco_scale, y_values_full[col], loco_predictions[col], col)
+            for col in pheno_cols
+        }
         log_mem("LOCO predictions loaded; RIFs will be recomputed per chromosome on Y - LOCO(chr)")
     # NB: the RIF and the covariate basis are NOT built here. They are built after
     # the BGEN sample match below, on exactly the rows that will be analysed. See
@@ -1279,7 +1396,8 @@ def main():
 
                 log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
                 RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
-                    pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask
+                    pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                    loco_scales
                 )
                 if args.sigma0:
                     t_s0 = time.perf_counter()
