@@ -268,6 +268,13 @@ skew.
    replaces the search path rather than prepending, so setting `R_LIBS_USER`
    silently loads the wrong package. Assert the loaded package path; do not
    trust the environment variable.
+3. **A projector is only a projector on the rows it was built from.** Anything
+   used as `M - Q (Q' M)` must have `Q` built by QR of the covariate matrix
+   restricted to exactly the rows being swept. Row-subsetting a basis built on a
+   larger sample destroys orthonormality and biases the point estimate while
+   leaving the standard error intact, so the output looks entirely normal. This
+   happened -- see section 9 -- and `core.check_orthonormal_basis()` now enforces
+   it at every kernel entry point.
 
 ---
 
@@ -330,3 +337,62 @@ replacement at the next re-scan; it removes 92% of the bimodal bias and reduces
 to approximately the current bandwidth for near-normal traits.
 
 `mcv_log_all` (N=9,365) is the one trait where a shape conclusion could move.
+
+## 9. Covariate basis vs sample match (defect, fixed 2026-09-14)
+
+**Affects every version up to and including `v0.3.0`, on the non-LOCO Stage 1
+path only. No published result is affected.**
+
+Up to `v0.3.0`, `stage1/fungwas_stage1/cli.py` built the QR of the covariate
+matrix and the RIF on the full keep sample, then row-subset both to the samples
+that matched the BGEN. The kernels use that basis as a projector,
+`g_resid = g - Q (Q' g)`, which is a projection only if `Q'Q = I`. Columns
+orthonormal over `N` rows are not orthonormal over `n < N` of them, so the
+residualisation was partial and the covariate-parallel part of the genotype that
+survived it leaked into the numerator of every per-tau slope.
+
+Measured on the UK Biobank BMI inputs (486,254 keep rows, 461,320 in the chr22
+genotype release):
+
+| | `max \|Q'Q - I\|` |
+|---|---|
+| basis row-subset from the keep sample | **9.69e-01** |
+| basis built on the matched rows | 8.44e-15 |
+
+This is far worse than the ~5% that `n/N = 0.949` suggests: `diag(Q_sub' Q_sub)`
+falls to 0.031, i.e. the PC1-PC3 columns retain 3-9% of their norm. The genotype
+release is ancestry-restricted while the keep file is built on phenotype
+availability alone, so the 24,934 unmatched samples carry most of the ancestry
+signal (PC1 differs by 3.57 sd between the two groups).
+
+**The damage is a bias, not extra variance.** Non-LOCO Stage 1 over 17,550 real
+chr22 HapMap3 SNPs x 45 taus, before the fix against a correctly rebuilt
+reference: median `|b - b_ref|/se_ref` **0.139**, max **2.98**, mean
+`(z - z_ref)` **+0.173**, and the per-tau signed mean is **positive at all 45
+taus** (+0.033 to +0.277). Standard errors barely move (median
+`|se/se_ref - 1|` 4.9e-3), so the point estimate shifts while the uncertainty
+does not admit it -- nothing downstream can detect it.
+
+**Why no published result is affected.** Every paper Stage 1 run passes
+`--loco-preds`, whose branch rebuilds both the RIF and the QR on the matched
+subset before the first variant is processed. That was confirmed across all 247
+Stage 1 logs, and the fix was verified to leave that path byte-identical.
+
+**The fix** reorders `cli.py` to match first and then build both objects on the
+matched rows -- i.e. the non-LOCO path now calls the same
+`compute_chr_rif_residuals` the LOCO path has always used. It also closes a
+second, much smaller channel for free: `q_tau`, the Silverman bandwidth and
+`f_hat` are now computed on the analysed sample rather than the keep sample
+(separately measured at mean `dz` = -0.0008, so it was never the problem).
+
+**The guard.** `core.check_orthonormal_basis()` now measures `max |Q'Q - I|` at
+every kernel entry point and raises above `core.ORTHONORMAL_BASIS_TOL = 1e-8`.
+The tolerance is bracketed by measurement, not chosen by taste: float64 QR on
+the real matrix gives 2.3e-14, while dropping even a single row gives 2.3e-6.
+1e-8 therefore sits 5.6 orders above the noise and 2.4 orders below the smallest
+realisable instance of the defect, leaving no basis that is numerically sound
+but fails and none that is mis-built but passes. It raises rather than warns
+because the failure is silent by construction and no legitimate caller passes a
+non-orthonormal basis. Cost is about 0.4% of kernel time.
+
+Full analysis and verification: `fungwas_paper/docs/BP1_sample_match.md`.
