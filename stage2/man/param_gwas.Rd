@@ -15,7 +15,10 @@ param_gwas(
   gls_ridge = 1e-08,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr"),
-  q_method = c("chisq_naive", "saddlepoint", "liu", "satterthwaite")
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
+  nu = NULL,
+  nu_source = NULL,
+  unknown_nu = c("omit", "normal", "error")
 )
 }
 \arguments{
@@ -62,6 +65,25 @@ matrix cannot be inverted for GLS.}
 \item{return_cov}{Optional output of parameter covariance derived from Stage 1
 tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle
 matrix), \code{"full"} (K x K x P array), or \code{"mashr"} (Bhat/Shat/V list).}
+
+\item{nu}{Degrees of freedom of the Stage 1 covariance. \code{theta/SE} is
+\code{t_nu} distributed, not normal, because \code{Sigma} is estimated: for
+a fixed contrast \code{a}, \code{a' Sigma_jk a / a' Sigma a ~ chi2_nu/nu}.
+For the delete-one-block jackknife \code{nu = n_blocks - 1};
+\code{param_gwas_from_file()} reads it from the Stage 1
+\code{.cov.meta.json} sidecar. Leave \code{NULL} if unknown and see
+\code{unknown_nu}.}
+
+\item{nu_source}{Free-text provenance for \code{nu}, carried into the output
+so a result can be traced back to how its degrees of freedom were obtained.}
+
+\item{unknown_nu}{What to do when \code{nu} is unknown. \code{"omit"}
+(default) emits no parameter p-value and warns; \code{"normal"} emits the
+old normal-reference p-value and warns, recording
+\code{param_ref_dist = "normal"}; \code{"error"} stops. There is
+deliberately no silent normal fallback: it inflates Type-I error 17x at
+p = 5e-8 when \code{n_blocks = 65}, and being silent is why that went
+unnoticed.}
 }
 \value{
 A list with the following elements:
@@ -69,6 +91,11 @@ A list with the following elements:
 \item{\code{A}}{Mapping matrix (tau-by-parameter).}
 \item{\code{params}}{Estimated parameter values.}
 \item{\code{SE_params}}{Delta-method standard errors of parameter estimates.}
+\item{\code{P_params}}{Two-sided parameter p-values, \code{2 * pt(-|theta/SE|, nu)},
+or \code{NULL} when no reference distribution could be established.}
+\item{\code{param_ref_dist}}{Reference distribution actually used for those
+p-values: "t", "normal" or "none".}
+\item{\code{param_ref_df}}{Degrees of freedom of that reference.}
 \item{\code{Q}}{Vector of Q statistics per SNP (if computed).}
 \item{\code{df}}{Degrees of freedom for Q statistic.}
 }

@@ -165,12 +165,33 @@ quantile_gwas <- function(
 #' @param return_cov Optional output of parameter covariance derived from Stage 1
 #'   tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle
 #'   matrix), \code{"full"} (K x K x P array), or \code{"mashr"} (Bhat/Shat/V list).
+#' @param nu Degrees of freedom of the Stage 1 covariance. \code{theta/SE} is
+#'   \code{t_nu} distributed, not normal, because \code{Sigma} is estimated: for
+#'   a fixed contrast \code{a}, \code{a' Sigma_jk a / a' Sigma a ~ chi2_nu/nu}.
+#'   For the delete-one-block jackknife \code{nu = n_blocks - 1};
+#'   \code{param_gwas_from_file()} reads it from the Stage 1
+#'   \code{.cov.meta.json} sidecar. Leave \code{NULL} if unknown and see
+#'   \code{unknown_nu}.
+#' @param nu_source Free-text provenance for \code{nu}, carried into the output
+#'   so a result can be traced back to how its degrees of freedom were obtained.
+#' @param unknown_nu What to do when \code{nu} is unknown. \code{"omit"}
+#'   (default) emits no parameter p-value and warns; \code{"normal"} emits the
+#'   old normal-reference p-value and warns, recording
+#'   \code{param_ref_dist = "normal"}; \code{"error"} stops. There is
+#'   deliberately no silent normal fallback: it inflates Type-I error 17x at
+#'   p = 5e-8 when \code{n_blocks = 65}, and being silent is why that went
+#'   unnoticed.
 #'
 #' @return A list with the following elements:
 #' \item{\code{W}}{Weight matrix used in the parametric mapping.}
 #' \item{\code{A}}{Mapping matrix (tau-by-parameter).}
 #' \item{\code{params}}{Estimated parameter values.}
 #' \item{\code{SE_params}}{Delta-method standard errors of parameter estimates.}
+#' \item{\code{P_params}}{Two-sided parameter p-values, \code{2 * pt(-|theta/SE|, nu)},
+#'   or \code{NULL} when no reference distribution could be established.}
+#' \item{\code{param_ref_dist}}{Reference distribution actually used for those
+#'   p-values: "t", "normal" or "none".}
+#' \item{\code{param_ref_df}}{Degrees of freedom of that reference.}
 #' \item{\code{Q}}{Vector of Q statistics per SNP (if computed).}
 #' \item{\code{df}}{Degrees of freedom for Q statistic.}
 #' 
@@ -186,13 +207,17 @@ param_gwas <- function(
   gls_ridge = 1e-8,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr"),
-  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite")
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
+  nu = NULL,
+  nu_source = NULL,
+  unknown_nu = c("omit", "normal", "error")
 ) {
   transform <- match.arg(transform)
   se_mode   <- match.arg(se_mode)
   tau_cov_estimator <- match.arg(tau_cov_estimator)
   return_cov <- match.arg(return_cov)
   q_method <- match.arg(q_method)
+  unknown_nu <- match.arg(unknown_nu)
 
   taus    <- stage1$taus
   q_tau   <- stage1$q_tau
@@ -397,11 +422,30 @@ if (se_mode == "diagonal") {
     }
   }
 
+  # Wald p-values for the parameters. Sigma is ESTIMATED (block jackknife), so
+  # theta/SE is t_nu and not normal; see R/tail-reference.R for the identity and
+  # docs/KNOWN_ISSUES.md for the 17x tail cost of getting it wrong.
+  #
+  # Q and Q_pval are deliberately untouched. The saddlepoint reference for Q
+  # conditions on Sigma as known and inherits the same defect, but the fix there
+  # is not a pt() substitution and is tracked separately.
+  param_ref <- .param_reference(
+    nu = if (is.null(nu)) NA_real_ else nu,
+    nu_source = if (is.null(nu_source)) NA_character_ else nu_source,
+    unknown_nu = unknown_nu,
+    where = "this call to param_gwas()"
+  )
+  P_params <- .param_pvalues(params, SE_params, param_ref)
+
   out <- list(
     W         = W,
     A         = A,
     params    = params,
     SE_params = SE_params,
+    P_params  = P_params,
+    param_ref_dist   = param_ref$dist,
+    param_ref_df     = param_ref$df,
+    param_ref_source = param_ref$nu_source,
     Q         = Q_stat,
     df        = Tt - K,
     q_method  = q_method
@@ -441,6 +485,19 @@ if (se_mode == "diagonal") {
 #'   or \code{"mashr"}.
 #' @param param_cov_file Optional output file for parameter covariance upper triangles
 #'   (binary float32, same layout as Stage 1 .cov.gz).
+#' @param cov_meta_file Path to the Stage 1 \code{.cov.meta.json} sidecar that
+#'   records the jackknife block count. Defaults to the \code{.cov.meta.json}
+#'   next to \code{cov_file}. This is where the degrees of freedom for the
+#'   \code{t} reference come from.
+#' @param nu Override for the degrees of freedom. Use it for covariance files
+#'   written before Stage 1 recorded the block count: pass
+#'   \code{nu = n_blocks - 1} for whatever \code{--blocks} that run used.
+#' @param unknown_nu What to do when \code{nu} cannot be determined:
+#'   \code{"omit"} (default) emits no \code{<param>_p} columns and warns,
+#'   \code{"normal"} emits normal-reference p-values and warns, \code{"error"}
+#'   stops. Whatever happens, the returned table carries \code{ref_dist} and
+#'   \code{ref_df} columns so a reader of the results can tell which reference
+#'   distribution produced them.
 #'
 #' @return A data.table with SNP info and parameter estimates
 .validate_cov_ids <- function(stage1_dt, cov_ids_file) {
@@ -617,12 +674,16 @@ param_gwas_from_file <- function(
   tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
   n_threads = 1L,
-  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite")
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
+  cov_meta_file = NULL,
+  nu = NULL,
+  unknown_nu = c("omit", "normal", "error")
 ) {
   se_mode <- match.arg(se_mode)
   return_cov <- match.arg(return_cov)
   tau_cov_estimator <- match.arg(tau_cov_estimator)
   q_method <- match.arg(q_method)
+  unknown_nu <- match.arg(unknown_nu)
   
   if (!requireNamespace("data.table", quietly = TRUE)) {
     stop("data.table package required for param_gwas_from_file")
@@ -694,6 +755,29 @@ param_gwas_from_file <- function(
     plugin_R <- as.matrix(rtau_dt)
   }
   
+  # Degrees of freedom for the t reference on theta/SE. An explicit nu wins;
+  # otherwise read the block count Stage 1 recorded next to the covariance.
+  nu_value <- NA_real_
+  nu_prov <- NA_character_
+  if (!is.null(nu)) {
+    nu_value <- as.numeric(nu)[1]
+    nu_prov <- "user_supplied"
+  } else if (!is.null(cov_file)) {
+    if (is.null(cov_meta_file)) cov_meta_file <- .cov_meta_file(cov_file)
+    cov_meta <- .read_cov_meta(cov_meta_file)
+    if (is.null(cov_meta)) {
+      message("No Stage 1 covariance metadata at ", cov_meta_file,
+              " (covariance predates the block-count field).")
+    }
+    resolved <- .resolve_nu(cov_meta)
+    nu_value <- resolved$nu
+    nu_prov <- resolved$nu_source
+    if (is.finite(nu_value)) {
+      message("Stage 1 covariance degrees of freedom: nu = ", nu_value,
+              " (", nu_prov, ")")
+    }
+  }
+
   # Run param_gwas
   result <- param_gwas(
     stage1 = stage1,
@@ -706,18 +790,31 @@ param_gwas_from_file <- function(
     gls_ridge = gls_ridge,
     n_threads = n_threads,
     return_cov = return_cov,
-    q_method = q_method
+    q_method = q_method,
+    nu = if (is.finite(nu_value)) nu_value else NULL,
+    nu_source = if (is.finite(nu_value)) nu_prov else NULL,
+    unknown_nu = unknown_nu
   )
   
   # Build output data.table
   out_dt <- stage1_dt[, c("snp_id", "chr", "bp", "effect_allele", "other_allele"), with = FALSE]
   
-  # Add parameters and SEs
+  # Add parameters, SEs and p-values. The p-value is emitted by the package on
+  # purpose: downstream code used to derive it as 2 * pnorm(-|beta/se|), which is
+  # the wrong reference and is exactly what this change exists to stop.
   for (i in seq_len(nrow(result$params))) {
     param_name <- rownames(result$params)[i]
     out_dt[[param_name]] <- result$params[i, ]
     out_dt[[paste0(param_name, "_se")]] <- result$SE_params[i, ]
+    if (!is.null(result$P_params)) {
+      out_dt[[paste0(param_name, "_p")]] <- result$P_params[i, ]
+    }
   }
+
+  # Which reference distribution produced those p-values, recorded in the output
+  # itself so a reader of a results file can tell without re-running anything.
+  out_dt$ref_dist <- result$param_ref_dist
+  out_dt$ref_df <- result$param_ref_df
   
   out_dt$Q <- result$Q
   if (!is.null(result$Q_pval)) {
