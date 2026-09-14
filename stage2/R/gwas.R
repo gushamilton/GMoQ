@@ -509,6 +509,26 @@ if (se_mode == "diagonal") {
 #'   or \code{"mashr"}.
 #' @param param_cov_file Optional output file for parameter covariance upper triangles
 #'   (binary float32, same layout as Stage 1 .cov.gz).
+#' @param cov_source Which Stage 1 covariance to use. \code{"jackknife"}
+#'   (default) reads the per-SNP delete-one-block covariance from
+#'   \code{cov_file}; this is what every published result used and it stays
+#'   fully supported. \code{"pooled"} reads the trait-level
+#'   \code{Sigma_0} sidecar from \code{sigma0_file} and forms
+#'   \code{Sigma_v = Sigma_0 / d_resid} per SNP, which reproduces an exact
+#'   per-individual HC0 sandwich to a median diagonal ratio of 1.00000 and a
+#'   median cross-tau correlation deviation of 0.0053 on real chr22 data, against
+#'   the jackknife's 0.725-1.307 5-95\% spread on the variance. The pooled path
+#'   refuses rather than proceeds if the recorded covariate set, tau grid or
+#'   sample count does not match the scan.
+#' @param sigma0_file Path to the Stage 1 \code{.sigma0.tsv.gz} sidecar, required
+#'   when \code{cov_source = "pooled"}. Its \code{.sigma0.meta.json} and the
+#'   scan's \code{.cov.meta.json} must both be present: the second is what the
+#'   first is checked against.
+#' @param require_covariates Optional character vector of covariate column names
+#'   the \code{Sigma_0} sidecar must have been built on. Supply it when you know
+#'   what the scan used and want the mismatch caught here rather than trusted.
+#' @param require_n_samples Optional analysed sample count the \code{Sigma_0}
+#'   sidecar must match.
 #' @param cov_meta_file Path to the Stage 1 \code{.cov.meta.json} sidecar that
 #'   records the jackknife block count. Defaults to the \code{.cov.meta.json}
 #'   next to \code{cov_file}. This is where the degrees of freedom for the
@@ -696,6 +716,10 @@ param_gwas_from_file <- function(
   W,
   se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   cov_file = NULL,
+  cov_source = c("jackknife", "pooled"),
+  sigma0_file = NULL,
+  require_covariates = NULL,
+  require_n_samples = NULL,
   rtau_file = NULL,
   return_cov = c("none", "upper", "full", "mashr"),
   param_cov_file = NULL,
@@ -711,6 +735,7 @@ param_gwas_from_file <- function(
   df_coef = NULL
 ) {
   se_mode <- match.arg(se_mode)
+  cov_source <- match.arg(cov_source)
   return_cov <- match.arg(return_cov)
   tau_cov_estimator <- match.arg(tau_cov_estimator)
   q_method <- match.arg(q_method)
@@ -748,10 +773,40 @@ param_gwas_from_file <- function(
   
   # Load covariance if needed
   cov_data <- NULL
-  if (se_mode == "tau_cov" && is.null(cov_file)) {
+  pooled <- NULL
+  if (se_mode == "tau_cov" && cov_source == "pooled") {
+    # The pooled path deliberately does NOT read cov_file: the whole point is
+    # that the 229-289 bytes/SNP payload does not have to exist. It does read
+    # the scan's .cov.meta.json, because that is what the sidecar is checked
+    # against, and it reads d_resid out of the Stage 1 TSV for the per-SNP scale.
+    if (is.null(sigma0_file)) {
+      stop("cov_source = 'pooled' requires sigma0_file (the Stage 1 ",
+           ".sigma0.tsv.gz sidecar).", call. = FALSE)
+    }
+    message("Loading pooled covariance: ", sigma0_file)
+    d_resid_col <- if (N_EFF_COLUMN %in% names(stage1_dt)) {
+      as.numeric(stage1_dt[[N_EFF_COLUMN]])
+    } else NULL
+    pooled <- .pooled_tau_cov(
+      sigma0_file = sigma0_file,
+      chr = stage1_dt$chr,
+      d_resid = d_resid_col,
+      taus = taus,
+      cov_meta_file = cov_meta_file,
+      require_covariates = require_covariates,
+      require_n_samples = require_n_samples
+    )
+    cov_data <- pooled$cov_data
+    message("Pooled covariance: Sigma_0 on chromosome(s) ",
+            paste(pooled$meta$chromosomes, collapse = ", "), ", ",
+            pooled$meta$n_samples, " samples, ",
+            length(pooled$meta$covariates), " covariates (",
+            paste(pooled$meta$covariates, collapse = ", "), ").")
+  }
+  if (se_mode == "tau_cov" && cov_source == "jackknife" && is.null(cov_file)) {
     stop("se_mode = 'tau_cov' requires cov_file. Use se_mode = 'diagonal' explicitly only for fallback/debug runs.")
   }
-  if (se_mode == "tau_cov" && !is.null(cov_file)) {
+  if (se_mode == "tau_cov" && cov_source == "jackknife" && !is.null(cov_file)) {
     message("Loading covariance file: ", cov_file)
 
     # Validate row alignment if cov IDs sidecar exists
@@ -804,6 +859,20 @@ param_gwas_from_file <- function(
   if (!is.null(nu)) {
     nu_value <- as.numeric(nu)[1]
     nu_prov <- "user_supplied"
+  } else if (!is.null(pooled)) {
+    # The jackknife's t reference exists because Sigma is estimated from B
+    # replicates, giving nu around 800 at B = 1000 and 62 at B = 65. Sigma_0 is
+    # estimated too, but from n individuals, and the same matrix serves every
+    # SNP: its Satterthwaite degrees of freedom are O(n / (1 + kurt/2)), which
+    # on the production chr22 inputs is tens of thousands. t on that many df is
+    # the normal distribution to well past the twelfth significant figure at
+    # p = 5e-8, so the per-SNP nu law simply does not apply here -- but a finite
+    # nu is still recorded rather than asserting normality, because the package
+    # does not assume a reference it cannot name. Pass `nu` to pin a smaller one.
+    nu_value <- as.numeric(pooled$nu)[1]
+    nu_prov <- "pooled_sigma0_n_samples"
+    message("Pooled covariance: reference is t_", format(nu_value, scientific = FALSE),
+            " (numerically normal); the per-SNP jackknife df law does not apply.")
   } else if (!is.null(cov_file)) {
     if (is.null(cov_meta_file)) cov_meta_file <- .cov_meta_file(cov_file)
     cov_meta <- .read_cov_meta(cov_meta_file)
@@ -881,6 +950,10 @@ param_gwas_from_file <- function(
     }
   }
 
+  # Which covariance produced these standard errors, so a results file can be
+  # told apart from one built the other way without re-running anything.
+  out_dt$cov_source <- if (se_mode == "tau_cov") cov_source else NA_character_
+
   # Which reference distribution produced those p-values, and how its degrees of
   # freedom were arrived at, recorded in the output itself so a reader of a
   # results file can tell without re-running anything.
@@ -920,6 +993,10 @@ param_gwas_from_file <- function(
 #' @param cov_file Path to covariance file (.cov.gz) for tau_cov mode. If
 #'   .cov.scale.gz is present, the covariance payload is read as int8 and
 #'   dequantized using per-SNP scales.
+#' @param cov_source \code{"jackknife"} (default) or \code{"pooled"}; see
+#'   \code{param_gwas_from_file}.
+#' @param sigma0_file Path to the Stage 1 \code{.sigma0.tsv.gz}, required when
+#'   \code{cov_source = "pooled"}.
 #' @param unsafe_skip_cov_ids If TRUE, allow tau_cov to proceed without a
 #'   covariate IDs sidecar (not recommended).
 #' @param n_threads Number of OpenMP threads.
@@ -933,11 +1010,14 @@ param_gwas_multi_from_file <- function(
   N,
   se_mode = c("tau_cov", "dwls", "diagonal"),
   cov_file = NULL,
+  cov_source = c("jackknife", "pooled"),
+  sigma0_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
   n_threads = 1L
 ) {
   se_mode <- match.arg(se_mode)
+  cov_source <- match.arg(cov_source)
   if (!requireNamespace("data.table", quietly = TRUE)) {
     stop("data.table package required for param_gwas_multi_from_file")
   }
@@ -964,7 +1044,17 @@ param_gwas_multi_from_file <- function(
   )
 
   cov_data <- NULL
-  if (se_mode == "tau_cov") {
+  if (se_mode == "tau_cov" && cov_source == "pooled") {
+    if (is.null(sigma0_file)) {
+      stop("cov_source = 'pooled' requires sigma0_file.", call. = FALSE)
+    }
+    cov_data <- .pooled_tau_cov(
+      sigma0_file = sigma0_file,
+      chr = stage1_dt$chr,
+      d_resid = if (N_EFF_COLUMN %in% names(stage1_dt)) as.numeric(stage1_dt[[N_EFF_COLUMN]]) else NULL,
+      taus = taus
+    )$cov_data
+  } else if (se_mode == "tau_cov") {
     if (is.null(cov_file)) {
       stop("se_mode = 'tau_cov' requires cov_file.")
     }

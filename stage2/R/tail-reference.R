@@ -149,6 +149,19 @@ N_EFF_COLUMN <- "d_resid"
         c_scale        = .json_number(txt, "c_scale"),
         fallback_n_eff = .json_number(txt, "fallback_n_eff")
       )
+    ),
+    # Provenance of the scan (schema version 4 and later). Only the pooled
+    # covariance path reads it, and it reads it to REFUSE: a Sigma_0 whose
+    # fingerprint disagrees with this block belongs to a different phenotype,
+    # covariate set, tau grid, LOCO predictor or sample, and using it would bias
+    # every standard error in the same direction invisibly.
+    analysis = if (is.na(.json_string(txt, "fingerprint"))) NULL else list(
+      phenotype      = .json_string(txt, "phenotype"),
+      n_samples      = .json_number(txt, "n_samples"),
+      n_covariates   = .json_number(txt, "n_covariates"),
+      covariates     = .json_string_array(txt, "covariates"),
+      loco_predictor = .json_string(txt, "loco_predictor"),
+      fingerprint    = .json_string(txt, "fingerprint")
     )
   )
 }

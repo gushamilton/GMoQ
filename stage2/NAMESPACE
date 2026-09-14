@@ -12,6 +12,7 @@ export(param_gwas_from_file)
 export(param_gwas_multi)
 export(param_gwas_multi_from_file)
 export(quantile_gwas)
+export(read_sigma0)
 
 # C++ exports
 useDynLib(fungwasStage2, .registration = TRUE)
