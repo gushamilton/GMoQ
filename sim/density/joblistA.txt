@@ -1,0 +1,15 @@
+--cell normal_smooth --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/normal_smooth
+--cell lognorm_smooth --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/lognorm_smooth
+--cell bimodal_smooth --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/bimodal_smooth
+--cell bimodal_uneven --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/bimodal_uneven
+--cell round_0p10 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/round_0p10
+--cell round_0p25 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/round_0p25
+--cell round_0p50 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/round_0p50
+--cell round_1p00 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/round_1p00
+--cell floor_05 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/floor_05
+--cell floor_20 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/floor_20
+--cell floor_40 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/floor_40
+--cell ceil_20 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/ceil_20
+--cell count_8 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/count_8
+--cell count_4 --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/count_4
+--cell bimodal_round --s0 0.06 --N 20000 --reps 2000 --rep0 0 --n-null 100 --seed 7 --out /user/work/fh6520/kde_lumpy/runA/bimodal_round

@@ -1,0 +1,8 @@
+--cell normal_smooth --s0 0.02 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s002__normal_smooth
+--cell normal_smooth --s0 0.18 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s018__normal_smooth
+--cell bimodal_smooth --s0 0.02 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s002__bimodal_smooth
+--cell bimodal_smooth --s0 0.18 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s018__bimodal_smooth
+--cell round_0p50 --s0 0.02 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s002__round_0p50
+--cell round_0p50 --s0 0.18 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s018__round_0p50
+--cell floor_20 --s0 0.02 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s002__floor_20
+--cell floor_20 --s0 0.18 --N 20000 --reps 1000 --rep0 0 --n-null 20 --seed 17 --out /user/work/fh6520/kde_lumpy/runD/s018__floor_20
