@@ -1,148 +1,142 @@
 # REGENIE LOCO predictions are standardised; Stage 1 subtracted them raw
 
-Status: confirmed on real data 2026-09-14. Fixed in Stage 1 by `--loco-scale` (default `sd`).
-Pre-v0.4.0 behaviour is `--loco-scale none`.
+Status: confirmed against REGENIE v4.1.2 source and on real data, 2026-09-14.
+Fixed in Stage 1 by `--loco-scale` (default `regression`). Pre-v0.4.0 behaviour is
+`--loco-scale none`.
 
 ## What was wrong
 
-REGENIE standardises quantitative phenotypes to unit variance in step 1, so the
-per-chromosome predictions it writes to `.loco` are on the **standardised** scale.
+REGENIE residualises quantitative phenotypes on the step-1 covariates and then divides
+by the residual sd (`src/Pheno.cpp::residualize_phenotypes`, the step that logs
+`-residualizing and scaling phenotypes...done`):
+
+```cpp
+pheno_data->phenotypes -= ((pheno_data->new_cov * beta.transpose()).array() * masked.array()).matrix();
+pheno_data->scale_Y = pheno_data->phenotypes.colwise().norm().array() / sqrt(Neff - ncov);
+pheno_data->phenotypes.array().rowwise() /= pheno_data->scale_Y.array();
+```
+
+`src/Data.cpp::write_predictions` writes `.loco` straight from `predictions[0]` and never
+multiplies back by `scale_Y`, so the file is on the **standardised** scale. Step 2 is
+consistent with this: it residualises and scales again before `res = phenotypes - blups`,
+then converts betas back to original units at `Step2_Models.cpp:173`.
+
 Stage 1 computed
 
     Y_adj = Y - LOCO(chr)
 
-with no rescaling. That is only correct when `sd(Y) == 1`.
+with no rescaling. That is only correct when the standardising constant is 1.
 
 ## Evidence
 
-Regression of each phenotype on its own chr1 LOCO prediction, UK Biobank, n = 484,460:
+**sd(LOCO) is invariant to the phenotype's units.** chr22, each trait on its own keep set:
 
-| trait      | sd(Y)   | sd(LOCO) | slope(Y ~ LOCO) | slope / sd(Y) | cor   |
-|------------|---------|----------|-----------------|---------------|-------|
-| bmi        | 4.7862  | 0.3356   | 4.6798          | 0.978         | 0.328 |
-| log_bmi    | 0.1665  | 0.3438   | 0.1613          | 0.969         | 0.333 |
-| rint_bmi   | 0.9998  | 0.3431   | 0.9663          | 0.967         | 0.332 |
-| weight     | 15.9102 | 0.2110   | 12.1951         | 0.766         | 0.162 |
+| trait | n | sd(Y) | sd(Y \| step-1 covars) | cov R² | sd(LOCO) | cor |
+|---|---|---|---|---|---|---|
+| bmi | 484,460 | 4.78617 | 4.74888 | 0.016 | 0.34987 | 0.343 |
+| log_bmi | 484,460 | 0.16655 | 0.16483 | 0.021 | 0.35850 | 0.349 |
+| rint_bmi | 484,460 | 0.99983 | 0.98729 | 0.025 | 0.35785 | 0.348 |
+| weight | 484,460 | 15.91019 | 13.32596 | 0.298 | 0.23332 | 0.199 |
+| vitamin_d | 442,632 | 21.11313 | 20.63443 | 0.045 | 0.24368 | 0.234 |
+| testosterone | 419,890 | 1.28313 | 1.28213 | 0.002 | 0.18718 | 0.159 |
 
-Two things fall out:
+`sd(Y)` spans 0.167 to 21.1 — a 127-fold range — while `sd(LOCO)` stays within 0.187 to
+0.359. The predictions carry no memory of the units.
 
-1. `sd(LOCO)` sits in 0.21-0.34 for every trait while `sd(Y)` ranges over two orders
-   of magnitude (0.17 to 15.9). The predictions carry no memory of the phenotype's
-   units - the signature of a standardised predictor.
-2. The regression slope tracks `sd(Y)`, at 0.97 of it for the three BMI traits. The
-   3% shortfall is REGENIE's own ridge shrinkage. So the factor that puts a `.loco`
-   prediction back on the phenotype's scale is `sd(Y)`.
+**Ground truth from REGENIE step 2's own standard errors.** Inverting
+`SE = sd(analysed residual) / (sd(G) sqrt(N-p))` with `var(G) = INFO * 2f(1-f)` over
+chr22 SNPs with INFO > 0.9 and MAF > 0.05, on REGENIE's step-2 sample (n = 461,320):
+
+| trait | REGENIE implied sd | c=0 | c=1 (the bug) | c=sd(Y) | c=sd(Y\|cov) | c=regression |
+|---|---|---|---|---|---|---|
+| log_bmi | 0.154269 | 1.0684 | **2.2065** | 0.9998 | 0.9998 | 0.9997 |
+| bmi | 4.451434 | 1.0660 | 1.0412 | — | 0.9998 | — |
+| weight | 13.057705 | 1.0184 | 1.0156 | 1.0017 | 1.0003 | 1.0002 |
+
+(entries are ratio to REGENIE's implied sd). The back-out reproduces REGENIE to 0.02%.
 
 ## Consequence, by trait
 
-The sign of the error depends on whether `sd(Y)` is above or below 1.
+- **rint_bmi** — right by accident: `sd(Y) = 0.99983`. Strictly the correct factor is the
+  residual sd 0.98729, so it was 1.3% under-corrected — a 0.013% variance difference.
+- **bmi, weight** — under-corrected. Of the variance reduction that correct scaling would
+  achieve, `c=1` delivers **38%** for bmi (22.519 → 21.480 against a target of 19.807) and
+  **15.6%** for weight (176.84 → 175.87 against 170.59). Shape effects attenuate by only
+  4% and 1.5%.
+- **log_bmi** — over-corrected 6.2x, and destructive. Variance goes 0.027168 → 0.115871
+  (sd 0.16483 → 0.34040); the LOCO-derived share of the analysed variance is **76.6%**.
 
-- **rint_bmi** — `sd(Y) = 1.0000`, so `Y - LOCO` was already right. Correct by accident.
-- **bmi, weight** — under-corrected by 4.7x and 12.2x. The subtraction removes ~21% and
-  ~8% of the genetic term it should. Effectively these ran *without* LOCO: valid, because
-  LOCO is uncorrelated with the test chromosome's genotypes, but less powerful than intended.
-- **log_bmi** — over-corrected by 6.2x, and this one is destructive. Subtracting a term of
-  sd 0.344 from a phenotype of sd 0.167 does not remove variance, it injects it:
+Note on "under-corrected is harmless": LOCO's job in UK Biobank is controlling relatedness
+and population structure, not power. Delivering 16-38% of the intended correction means the
+test statistics are correspondingly under-protected against that inflation. That is a
+validity question, not only a power one.
 
-      Var(Y - L) = Var(Y) + Var(L) - 2 Cov(Y, L)
-                 = 0.02772 + 0.11820 - 0.03812 = 0.1078,  sd = 0.328
+## The bug distorts effect estimates, not just their standard errors
 
-  The analysed variable has ~2x the sd of log(BMI) and is roughly 90% injected LOCO noise.
+The mean RIF is `Y` itself, so the tau-averaged effect is unbiased:
+`beta(Y - cL) = beta(Y) - c*beta(L~G) = beta(Y)`, since LOCO excludes the test chromosome.
+**That argument does not extend to the quantile effects.** Adding a term independent of G
+convolves the conditional distribution, and any scale or shape effect attenuates by
+`sd_correct / sd_analysed`. Simulation at N = 300,000 x 20 replicates with injected noise
+of 1.8x:
 
-## Why this matters more for G-MoQ than for a mean GWAS
+```
+pure location shift (b = 0.20)
+  tau      0.10   0.25   0.50   0.75   0.90
+  ratio   1.019  1.012  0.991  0.988  0.972   mean 0.995   <- unbiased
+pure variance effect (log-sd slope 0.20)
+  ratio   0.522  0.538     -    0.536  0.506   theory 1/sqrt(1+1.8^2) = 0.486
+```
 
-Subtracting a variable uncorrelated with the test genotype leaves the mean effect
-unbiased, so it costs power rather than validity. But G-MoQ's object of study *is* the
-shape of the phenotype distribution. Inflating log(BMI)'s variance two-fold compresses
-the density at every quantile, which rescales every RIF effect and changes the quantile
-grid itself. For `log_bmi` the distribution being analysed is not the log-BMI
-distribution.
+For log_bmi the attenuation is `0.154234 / 0.340398 = 0.453`: dispersion effects are more
+than halved *and* their SEs inflate 2.21x, so z on a shape effect drops by about 4.9x.
+
+Confirmed end-to-end on chr22 against REGENIE step 2 (17,550 variants matched):
+
+| mode | cor(beta, REGENIE) | median \|beta\| / \|REGENIE beta\| |
+|------|--------------------|-----------------------------------|
+| `none` (old) | 0.500 | 1.746 |
+| `sd` | 0.993 | 1.007 |
+| `regression` (default) | 0.993 | 1.009 |
+
+Between modes: `cor(mean beta)` none vs regression is 0.4947, and 0.3272 at the median tau.
+The distortion is worst at the median, where the density moves most.
 
 ## The fix
 
 `--loco-scale` on `fungwas_stage1.cli`:
 
-- `sd` (**default**) — multiply by `sd(Y)` on the analysis sample; the exact inverse of
-  REGENIE's standardisation, and what REGENIE step 2 does internally.
-- `regression` — use the OLS slope of `Y` on the prediction, pooled over chromosomes;
-  also absorbs the ~3% ridge shrinkage.
-- `none` — subtract as-is; reproduces pre-v0.4.0 runs.
+- `regression` (**default**) — OLS slope of `Y` on the prediction, pooled over chromosomes.
+- `sd` — multiply by `sd(Y)`.
+- `none` — subtract as-is; reproduces pre-v0.4.0 runs bit-for-bit.
 - a number — use it verbatim.
 
-Stage 1 now logs the factor, `sd(Y)`, the median `sd(LOCO)` and the sd of the term it
-actually subtracts, and warns when that term exceeds 0.6 `sd(Y)` — the signature of the
-bug above.
+**Why `regression` and not `sd`.** The exact factor is REGENIE's `scale_Y`, the sd of the
+trait *after* its step-1 covariates. Stage 1 cannot compute that: REGENIE's step-1 covariate
+set is not an input and need not match Stage 1's `--covar` — for `weight` it does not
+(sex, age, height, height_z2, log_height, height_z3, R² = 0.298), and there `sd(Y)`
+over-subtracts by 19.4%. `regression` needs no knowledge of that set, is the
+variance-minimising factor by construction, and matched REGENIE's analysed sd to within
+0.02% on every trait that could be ground-truthed.
+
+`regression` is not equal to `scale_Y`: the slope is `scale_Y * rho / sd(pred)`, which
+coincides only for a perfectly calibrated prediction. REGENIE's are mildly over-dispersed,
+so the slope sits below `scale_Y` — by 11% for weight, 3% for the BMI traits. Near the
+variance minimum this costs ~0.1%, and it also absorbs REGENIE's ridge shrinkage. Earlier
+notes here attributed the whole `weight` anomaly to shrinkage; most of it is the covariate
+R², with shrinkage tracking the predictor's strength (cor 0.35 → 0.97; cor 0.16-0.20 → 0.85-0.89).
+
+Stage 1 logs the factor and the variance before and after, and warns when the adjustment
+*increases* the analysed variance — measured directly rather than inferred from an sd
+ratio, so a trait with predictive covariates cannot trip it spuriously.
 
 ## Affected outputs
 
-Published `log_bmi` Stage 1 and Stage 2 results, and anything derived from them
-(LDSC, lead SNPs), were produced under `none` and should be regenerated.
-`bmi` and `weight` are under-powered rather than wrong. `rint_bmi` is unaffected.
-LOCOEOF
-ssh bp 'bash -lc "cd /user/work/fh6520/GMoQ_loco && git add -A && git -c user.name=\"Fergus Hamilton\" -c user.email=fh6520@bristol.ac.uk commit -q -F - <<EOF
-stage1: rescale REGENIE LOCO predictions onto the phenotype scale
+Published `log_bmi` Stage 1 and Stage 2 results, and anything derived from them (LDSC,
+lead SNPs), were produced under `none`: effect estimates distorted, shape effects
+attenuated 2.2x, SEs inflated 2.2x. They require regeneration. `bmi` and `weight` received
+38% and 16% of the intended correction — under-powered and under-protected against
+structure, not wrong in their estimates. `rint_bmi` is unaffected.
 
-REGENIE standardises quantitative phenotypes in step 1, so the predictions
-it writes to .loco are on the standardised scale. Stage 1 computed
-Y - LOCO(chr) with no rescaling, which is only correct when sd(Y) == 1.
-
-Measured on UK Biobank (n = 484,460), sd(LOCO) is 0.21-0.34 for every trait
-while sd(Y) spans 0.17 to 15.9, and the slope of Y on LOCO is 0.97 sd(Y) for
-the three BMI traits. The factor is sd(Y).
-
-The sign of the error depends on sd(Y): rint_bmi (sd 1.0) was right by
-accident; bmi and weight were under-corrected 4.7x and 12.2x, so LOCO was
-close to a no-op; log_bmi (sd 0.167) was over-corrected 6.2x, which raises
-the analysed variance from 0.0277 to 0.1078 - the adjusted phenotype is
-roughly 90% injected LOCO noise.
-
-Adds --loco-scale {sd,regression,none,<float>}, default sd. none reproduces
-the old behaviour. Stage 1 now logs the factor and warns when the subtracted
-term exceeds 0.6 sd(Y).
-
-Evidence and per-trait consequences in docs/LOCO_SCALE.md.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-EOF
-git log --oneline -1"' 2>&1 | tail -5
-## Validation against REGENIE step 2
-
-chr22, `log_bmi`, 17,550 variants matched to REGENIE's 17,637 ADD results. REGENIE
-step 2 is the ground truth: it consumes its own LOCO predictions correctly. The
-G-MoQ quantity compared is the mean of `beta_tau` over the 45-point grid, which
-estimates the effect on `E[Y]` and so is directly comparable to REGENIE's `BETA`.
-
-| mode | cor(beta, REGENIE) | median \|beta\| / \|REGENIE beta\| | median SE ratio |
-|------|--------------------|-----------------------------------|-----------------|
-| `none` (old) | 0.500 | 1.746 | 3.343 |
-| `sd` (new default) | **0.993** | **1.007** | 1.534 |
-| `regression` | 0.993 | 1.009 | 1.534 |
-
-Under `sd` the tau-averaged effect recovers REGENIE's additive BETA to 0.7%. Under
-`none` it is 75% too large and only half-correlated with the truth.
-
-`sd` and `regression` are indistinguishable here: cor(beta) between them is 0.99967
-and the median SE ratio 1.00028. `sd` is kept as the default because it is the exact
-inverse of REGENIE's standardisation rather than a quantity fitted from the data.
-
-### Correction: the bug distorts the effect estimates, not just their standard errors
-
-An earlier reading of this defect held that point estimates stay unbiased because LOCO
-excludes the test chromosome and is therefore uncorrelated with the test genotype, so
-only the standard errors inflate. **That is wrong for G-MoQ**, and the chr22 run shows it:
-
-```
-cor(mean beta)        none vs sd = 0.4947   median ratio 0.9523
-cor(median-tau beta)  none vs sd = 0.3272   median ratio 0.7570
-median SE ratio       none / sd  = 2.1784
-median-tau SE ratio   none / sd  = 2.3260
-```
-
-The unbiasedness argument is a property of linear regression and does not survive the
-RIF. `RIF_i(tau) = q_tau + (tau - 1{Y_i <= q_tau}) / f(q_tau)` depends on Y through the
-quantile `q_tau` and the density `f(q_tau)`, both of which move when the analysed
-variable's variance quadruples. The distortion is worst at the median (cor 0.327), where
-the density shifts most.
-
-So the pre-v0.4.0 `log_bmi` results are wrong in their effect estimates as well as
-under-powered, and the SEs inflate by 2.2x on top. Regeneration is required, not optional.
+The paper pipeline invokes the affected path at
+`src/paper/06_run_fungwas_stage1_loco_chr.sh:89`.

@@ -421,12 +421,12 @@ def test_loco_scale_warns_when_subtracted_term_dominates(caplog):
     y, per_chr = _loco_fixture()
     with caplog.at_level(logging.WARNING):
         resolve_loco_scale("none", y, per_chr, "log_bmi")
-    assert any("INCREASE the residual variance" in r.message for r in caplog.records)
+    assert any("INCREASES the analysed variance" in r.message for r in caplog.records)
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         resolve_loco_scale("sd", y, per_chr, "log_bmi")
-    assert not any("INCREASE the residual variance" in r.message for r in caplog.records)
+    assert not any("INCREASES the analysed variance" in r.message for r in caplog.records)
 
 
 def test_rint_like_phenotype_is_unaffected_by_the_fix():
@@ -459,3 +459,69 @@ def test_compute_chr_rif_residuals_applies_the_scale():
     assert np.allclose(unscaled[0], explicit_one[0])
     # and a different factor must actually change the residualised RIF
     assert not np.allclose(unscaled[0], half[0])
+
+
+def _loco_fixture_with_covariates(seed=1, n=6000, cov_r2=0.30, y_sd=15.91, pred_sd=0.2333, rho=0.199):
+    """
+    Like _loco_fixture but with covariates that explain `cov_r2` of Y, and a LOCO
+    prediction built against the *residualised* trait -- which is what REGENIE does
+    (Pheno.cpp::residualize_phenotypes standardises by the residual sd, not sd(Y)).
+    Defaults mimic `weight`, whose step-1 height terms carry R^2 = 0.30.
+    """
+    rng = np.random.default_rng(seed)
+    cov = rng.standard_normal(n)
+    z = rng.standard_normal(n)
+    e = rng.standard_normal(n)
+    resid_std = rho * z + np.sqrt(1.0 - rho ** 2) * e
+    resid_std = (resid_std - resid_std.mean()) / resid_std.std()
+    y_resid_sd = y_sd * np.sqrt(1.0 - cov_r2)
+    y = 70.0 + y_sd * np.sqrt(cov_r2) * cov + y_resid_sd * resid_std
+    pred = pred_sd * z
+    return y, {"22": pred}, cov, y_resid_sd
+
+
+def test_sd_mode_over_subtracts_when_covariates_explain_the_trait():
+    """
+    The factor REGENIE used is the sd of the trait *after* its step-1 covariates, so
+    sd(Y) over-states it whenever those covariates are predictive. Pinned at the real
+    `weight` configuration: R^2 = 0.30 gives sd(Y)/sd(Y_resid) = 1/sqrt(0.70) = 1.195.
+    """
+    from fungwas_stage1.cli import resolve_loco_scale
+    y, per_chr, cov, y_resid_sd = _loco_fixture_with_covariates()
+
+    sd_factor = resolve_loco_scale("sd", y, per_chr, "weight")
+    assert sd_factor / y_resid_sd == pytest.approx(1.0 / np.sqrt(0.70), rel=0.05)
+
+    # regression needs no knowledge of the covariates and is the variance-minimising
+    # factor by construction, so it must leave no more variance than sd does.
+    reg_factor = resolve_loco_scale("regression", y, per_chr, "weight")
+    pred = per_chr["22"]
+    assert np.var(y - reg_factor * pred) <= np.var(y - sd_factor * pred)
+    assert np.var(y - reg_factor * pred) < np.var(y)
+
+    # It lands nearer REGENIE's own scale_Y (the residual sd) than sd(Y) does, but it is
+    # not equal to it: the slope is sd_resid * rho / sd_pred, which coincides with
+    # scale_Y only for a perfectly calibrated prediction. REGENIE's are over-dispersed
+    # (sd_pred > rho), so regression sits slightly below scale_Y -- matching the real
+    # data, where slope/sd(Y_resid) is 0.89 for weight and 0.97 for the BMI traits.
+    assert abs(reg_factor - y_resid_sd) < abs(sd_factor - y_resid_sd)
+    # against the fixture's own parameters, not a quantity re-derived from the data
+    assert reg_factor == pytest.approx(y_resid_sd * 0.199 / 0.2333, rel=0.05)
+
+
+def test_regression_is_the_cli_default():
+    """The default must be the mode that does not need REGENIE's step-1 covariate set."""
+    import argparse, inspect
+    from fungwas_stage1 import cli
+    src = inspect.getsource(cli.main)
+    assert "'--loco-scale', dest='loco_scale', default='regression'" in src
+
+
+def test_variance_guard_is_silent_for_a_predictive_covariate_trait(caplog):
+    """The old sd-ratio heuristic could fire spuriously; the variance check must not."""
+    from fungwas_stage1.cli import resolve_loco_scale
+    import logging
+    y, per_chr, _, _ = _loco_fixture_with_covariates()
+    with caplog.at_level(logging.WARNING):
+        resolve_loco_scale("regression", y, per_chr, "weight")
+    assert not any("INCREASES the analysed variance" in r.message for r in caplog.records)

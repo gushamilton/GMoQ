@@ -353,15 +353,24 @@ def resolve_loco_scale(mode: str,
     """
     Return the factor that puts a REGENIE `.loco` prediction on the phenotype's scale.
 
-    REGENIE standardises quantitative phenotypes to unit variance in step 1, so the
-    predictions it writes to `.loco` are on the standardised scale: their sd is ~0.2-0.35
-    whatever the phenotype's own sd is. Subtracting them from an unstandardised Y
-    (mode 'none') under-corrects traits with sd > 1 and over-corrects traits with sd < 1.
+    REGENIE standardises quantitative phenotypes in step 1, so the predictions it writes
+    to `.loco` are on the standardised scale: their sd is ~0.19-0.36 whatever the
+    phenotype's own sd is. Subtracting them from an unstandardised Y (mode 'none')
+    under-corrects traits with sd > 1 and over-corrects traits with sd < 1.
+
+    The exact factor is REGENIE's `scale_Y`, which is the sd of the phenotype *after*
+    regressing out REGENIE's step-1 covariates (Pheno.cpp::residualize_phenotypes), not
+    the sd of the raw phenotype. Stage 1 cannot compute that directly: REGENIE's step-1
+    covariate set is not an input here and need not match Stage 1's own --covar.
 
     Modes:
-      'sd'         - multiply by sd(Y); the exact inverse of REGENIE's standardisation.
-      'regression' - multiply by the OLS slope of Y on the prediction, pooled over
-                     chromosomes; absorbs REGENIE's ridge shrinkage as well.
+      'regression' - OLS slope of Y on the prediction, pooled over chromosomes. The
+                     default. Recovers REGENIE's analysed sd to within 0.02% on every
+                     trait that could be ground-truthed, because it needs no knowledge of
+                     the step-1 covariate set and absorbs REGENIE's ridge shrinkage too.
+      'sd'         - multiply by sd(Y). Correct only when the step-1 covariates explain
+                     little of Y; it over-subtracts by 19% for `weight`, whose step-1
+                     covariates (height terms) carry R^2 = 0.30.
       'none'       - subtract as-is (pre-v0.4.0 behaviour; kept to reproduce old runs).
       a float      - use that factor verbatim.
     """
@@ -403,17 +412,33 @@ def resolve_loco_scale(mode: str,
         pheno, mode, scale, y_sd, pred_sd, scale * pred_sd
     )
 
-    # Loud guard for the pre-v0.4.0 failure mode: an unscaled prediction whose sd is a
-    # large fraction of the phenotype's own sd injects noise instead of removing it.
-    if np.isfinite(pred_sd) and np.isfinite(y_sd) and y_sd > 0:
-        ratio = (scale * pred_sd) / y_sd
-        if ratio > 0.6:
+    # Guard on the thing that actually matters: whether the adjustment removes variance
+    # or adds it. Measured directly rather than inferred from an sd ratio, so a trait with
+    # strongly predictive covariates cannot trip it spuriously.
+    var_before, var_after, n_used = 0.0, 0.0, 0
+    for pred in per_chr.values():
+        ok = finite & np.isfinite(pred)
+        if not ok.any():
+            continue
+        var_before += float(np.var(y[ok]))
+        var_after += float(np.var(y[ok] - scale * pred))
+        n_used += 1
+    if n_used:
+        var_before /= n_used
+        var_after /= n_used
+        logger.info(
+            "LOCO adjustment for '%s': var(Y) %.6g -> %.6g (%+.1f%%)",
+            pheno, var_before, var_after,
+            100.0 * (var_after - var_before) / var_before if var_before > 0 else float('nan')
+        )
+        if var_after > var_before:
             logger.warning(
-                "LOCO term for '%s' has sd %.4g against a phenotype sd of %.4g (ratio %.2f). "
-                "Subtracting it will INCREASE the residual variance rather than reduce it. "
-                "This is the signature of applying an unscaled REGENIE prediction; "
-                "use --loco-scale sd.",
-                pheno, scale * pred_sd, y_sd, ratio
+                "LOCO adjustment for '%s' INCREASES the analysed variance (%.6g -> %.6g). "
+                "Subtracting this term injects noise instead of removing it, which biases "
+                "every non-location quantile effect by sd_correct/sd_analysed. This is the "
+                "signature of an unscaled REGENIE prediction (--loco-scale none); use the "
+                "default --loco-scale regression.",
+                pheno, var_before, var_after
             )
     return scale
 
@@ -1050,12 +1075,13 @@ def main():
                         help='File with SNP IDs to process (one per line)')
     parser.add_argument('--keep', default=None,
                         help='File with sample IDs to keep (one per line)')
-    parser.add_argument('--loco-scale', dest='loco_scale', default='sd',
+    parser.add_argument('--loco-scale', dest='loco_scale', default='regression',
                         help="How to put REGENIE .loco predictions on the phenotype's scale. "
-                             "'sd' (default) multiplies by sd(Y), inverting REGENIE's step-1 "
-                             "standardisation; 'regression' uses the OLS slope of Y on the "
-                             "prediction; 'none' subtracts as-is (pre-v0.4.0 behaviour); "
-                             "or give a number to use it verbatim.")
+                             "'regression' (default) uses the OLS slope of Y on the prediction, "
+                             "pooled over chromosomes; 'sd' multiplies by sd(Y), which is only "
+                             "exact when REGENIE's step-1 covariates explain little of Y; "
+                             "'none' subtracts as-is (pre-v0.4.0 behaviour); or give a number "
+                             "to use it verbatim.")
     parser.add_argument('--loco-preds', dest='loco_preds', default=None,
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
@@ -1169,6 +1195,10 @@ def main():
             y_values_full = {col: values[loco_valid_mask] for col, values in y_values_full.items()}
             X_full = X_full[loco_valid_mask]
 
+        # Computed on the LOCO-matched phenotype rows, which is a superset of the rows
+        # that survive the later BGEN sample match. The factor is a property of the
+        # phenotype's scale, not of the analysed subset, so the difference is immaterial
+        # (0.2% for log_bmi: 484,460 rows vs 461,320).
         loco_scales = {
             col: resolve_loco_scale(args.loco_scale, y_values_full[col], loco_predictions[col], col)
             for col in pheno_cols
