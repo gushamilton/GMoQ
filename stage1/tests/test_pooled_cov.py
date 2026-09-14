@@ -343,3 +343,54 @@ def test_loco_run_writes_one_matrix_per_chromosome(tmp_path, monkeypatch):
     assert meta["chromosomes"] == ["21", "22"]
     assert meta["loco_predictor"] == str(loco)
     assert not np.allclose(mats["21"], mats["22"])
+
+
+# --- the LOCO scale must be recorded and must enter the fingerprint ---------
+
+def test_loco_scale_is_recorded_in_the_sidecar():
+    """
+    A scan made under the pre-v0.4.0 unscaled behaviour must be distinguishable
+    from a corrected one. Effects differ by a factor of 2.2 on log_bmi, so a
+    sidecar that does not say which mode was used cannot be audited later.
+    """
+    from fungwas_stage1 import pooled_cov
+    meta = pooled_cov.build_sigma0_meta(
+        phenotype="log_bmi", covariates=["age", "sex"],
+        taus=[0.25, 0.5, 0.75], n_samples=1000, chromosomes=["22"],
+        loco_predictor="/path/to/log_bmi.loco",
+        loco_scale_mode="regression", loco_scale_factor=0.160696,
+    )
+    assert meta["loco_scale_mode"] == "regression"
+    assert meta["loco_scale_factor"] == pytest.approx(0.160696)
+    # and it must travel in the block Stage 2 compares
+    blk = pooled_cov.sigma0_analysis_block(meta)
+    assert blk["loco_scale_mode"] == "regression"
+    assert blk["loco_scale_factor"] == pytest.approx(0.160696)
+
+
+def test_loco_scale_changes_the_fingerprint():
+    """
+    Two runs identical but for --loco-scale analyse different variables, so a
+    Sigma_0 from one is invalid for the other. Without this they hash alike and
+    the mismatch guard would pass them.
+    """
+    from fungwas_stage1 import pooled_cov
+    kw = dict(phenotype="log_bmi", covariates=["age"], taus=[0.25, 0.5, 0.75],
+              n_samples=1000, loco_predictor="/p/log_bmi.loco")
+    fp_reg = pooled_cov.analysis_fingerprint(**kw, loco_scale_mode="regression",
+                                             loco_scale_factor=0.1607)
+    fp_none = pooled_cov.analysis_fingerprint(**kw, loco_scale_mode="none",
+                                              loco_scale_factor=1.0)
+    fp_sd = pooled_cov.analysis_fingerprint(**kw, loco_scale_mode="sd",
+                                            loco_scale_factor=0.1665)
+    assert len({fp_reg, fp_none, fp_sd}) == 3
+
+
+def test_fingerprint_unchanged_when_no_loco_adjustment():
+    """Backward compatibility: a run with no LOCO keeps the hash it always had."""
+    from fungwas_stage1 import pooled_cov
+    kw = dict(phenotype="bmi", covariates=["age"], taus=[0.25, 0.5, 0.75],
+              n_samples=1000, loco_predictor=None)
+    assert pooled_cov.analysis_fingerprint(**kw) == \
+           pooled_cov.analysis_fingerprint(**kw, loco_scale_mode=None,
+                                           loco_scale_factor=None)

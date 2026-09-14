@@ -1485,6 +1485,9 @@ def main():
             n_samples=N_matched,
             chromosomes=chroms,
             loco_predictor=loco_files.get(col),
+            loco_scale_mode=(None if loco_scales is None else args.loco_scale),
+            loco_scale_factor=(None if loco_scales is None
+                               else loco_scales.get(col)),
             covariate_basis_rank=int(X_full.shape[1]),
         ))
     for p_idx, prefix in enumerate(out_prefixes):

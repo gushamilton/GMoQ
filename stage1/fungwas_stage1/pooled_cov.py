@@ -141,7 +141,9 @@ def analysis_fingerprint(phenotype: str,
                          covariates: Sequence[str],
                          taus: Sequence[float],
                          n_samples: int,
-                         loco_predictor: Optional[str]) -> str:
+                         loco_predictor: Optional[str],
+                         loco_scale_mode: Optional[str] = None,
+                         loco_scale_factor: Optional[float] = None) -> str:
     """Stable hash over everything ``Sigma_0`` depends on but the genotype.
 
     Two Stage 1 artefacts with the same fingerprint were produced from the same
@@ -153,6 +155,14 @@ def analysis_fingerprint(phenotype: str,
     prediction file to hash it would cost more than the rest of Stage 1, and the
     path is what distinguishes a run with the predictor from one without and one
     trait's predictor from another's.
+
+    The ``--loco-scale`` mode and factor enter too.  Two runs over the same
+    phenotype, covariates, tau grid and predictor but different scales analyse
+    *different variables* -- on a trait like ``log_bmi`` the effect estimates
+    differ by a factor of 2.2 (``docs/LOCO_SCALE.md``) -- so a ``Sigma_0`` from
+    one is not valid for the other, and without this they would hash alike.
+    They default to ``None`` so that a fingerprint computed for a run with no
+    LOCO adjustment is unchanged.
     """
     payload = {
         "phenotype": str(phenotype),
@@ -161,6 +171,12 @@ def analysis_fingerprint(phenotype: str,
         "n_samples": int(n_samples),
         "loco_predictor": None if loco_predictor is None else str(loco_predictor),
     }
+    # Added after schema v1 shipped; omitted entirely when absent so that a run
+    # without a LOCO adjustment keeps the fingerprint it had before.
+    if loco_scale_mode is not None:
+        payload["loco_scale_mode"] = str(loco_scale_mode)
+    if loco_scale_factor is not None:
+        payload["loco_scale_factor"] = round(float(loco_scale_factor), 12)
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:32]
 
@@ -171,6 +187,8 @@ def build_sigma0_meta(phenotype: str,
                       n_samples: int,
                       chromosomes: Sequence[str],
                       loco_predictor: Optional[str] = None,
+                      loco_scale_mode: Optional[str] = None,
+                      loco_scale_factor: Optional[float] = None,
                       covariate_basis_rank: Optional[int] = None,
                       package_version: Optional[str] = None,
                       matrix_file: Optional[str] = None) -> dict:
@@ -194,6 +212,14 @@ def build_sigma0_meta(phenotype: str,
         ``["ALL"]`` when the run had no per-chromosome phenotype adjustment.
     loco_predictor : str, optional
         Resolved ``.loco`` path for this phenotype, or ``None``.
+    loco_scale_mode : str, optional
+        The ``--loco-scale`` mode in force (``regression``, ``sd``, ``none``, or a
+        literal number), or ``None`` when no LOCO adjustment was applied.
+        Recorded because it is not recoverable from the outputs: a scan made
+        under the pre-v0.4.0 unscaled behaviour would otherwise be
+        indistinguishable from a corrected one.  See ``docs/LOCO_SCALE.md``.
+    loco_scale_factor : float, optional
+        The numeric factor actually multiplied into the prediction.
     covariate_basis_rank : int, optional
         ``K``, the number of columns of the orthonormal basis ``Q`` (covariates
         plus intercept).  Recorded for diagnosis only.
@@ -220,10 +246,14 @@ def build_sigma0_meta(phenotype: str,
         "covariate_basis_rank": (None if covariate_basis_rank is None
                                  else int(covariate_basis_rank)),
         "loco_predictor": loco_predictor,
+        "loco_scale_mode": None if loco_scale_mode is None else str(loco_scale_mode),
+        "loco_scale_factor": (None if loco_scale_factor is None
+                              else float(loco_scale_factor)),
         "chromosomes": chromosomes,
         "matrix_file": matrix_file,
         "fingerprint": analysis_fingerprint(
-            phenotype, covariates, taus, n_samples, loco_predictor
+            phenotype, covariates, taus, n_samples, loco_predictor,
+            loco_scale_mode, loco_scale_factor
         ),
     }
 
@@ -327,6 +357,8 @@ def sigma0_analysis_block(meta: dict) -> dict:
         "n_covariates": meta["n_covariates"],
         "covariates": list(meta["covariates"]),
         "loco_predictor": meta["loco_predictor"],
+        "loco_scale_mode": meta.get("loco_scale_mode"),
+        "loco_scale_factor": meta.get("loco_scale_factor"),
         "fingerprint": meta["fingerprint"],
     }
 
