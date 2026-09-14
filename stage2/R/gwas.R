@@ -165,15 +165,29 @@ quantile_gwas <- function(
 #' @param return_cov Optional output of parameter covariance derived from Stage 1
 #'   tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle
 #'   matrix), \code{"full"} (K x K x P array), or \code{"mashr"} (Bhat/Shat/V list).
-#' @param nu Degrees of freedom of the Stage 1 covariance. \code{theta/SE} is
-#'   \code{t_nu} distributed, not normal, because \code{Sigma} is estimated: for
-#'   a fixed contrast \code{a}, \code{a' Sigma_jk a / a' Sigma a ~ chi2_nu/nu}.
-#'   For the delete-one-block jackknife \code{nu = n_blocks - 1};
-#'   \code{param_gwas_from_file()} reads it from the Stage 1
-#'   \code{.cov.meta.json} sidecar. Leave \code{NULL} if unknown and see
-#'   \code{unknown_nu}.
+#' @param nu Explicit degrees of freedom, overriding everything else.
+#'   \code{theta/SE} is \code{t_nu} distributed, not normal, because
+#'   \code{Sigma} is estimated: for a fixed contrast \code{a},
+#'   \code{a' Sigma_jk a / a' Sigma a ~ chi2_nu/nu}. Normally leave this
+#'   \code{NULL} and supply \code{n_blocks} and \code{n_eff} instead, from
+#'   which a per-SNP, per-parameter \code{nu} is computed; a single \code{nu}
+#'   is not defensible, since the measured value ranges 530 to 979 across MAF
+#'   at \code{n_blocks = 1000} and differs by 236 between a scale and a
+#'   location contrast.
 #' @param nu_source Free-text provenance for \code{nu}, carried into the output
 #'   so a result can be traced back to how its degrees of freedom were obtained.
+#' @param n_blocks Number of populated jackknife blocks behind \code{cov_data}.
+#'   \code{param_gwas_from_file()} reads it from \code{.cov.meta.json}.
+#' @param n_eff Per-SNP effective sample size, length \code{ncol(Q_slope)}.
+#'   This is Stage 1's \code{d_resid} column, \code{sum_i g_resid_i^2}.
+#'   Together with \code{n_blocks} it gives the measured law
+#'   \code{1/nu = 1/(n_blocks - 1) + c/n_eff}.
+#' @param df_model Optional list overriding the coefficients of that law
+#'   (\code{c_location}, \code{c_scale}, \code{fallback_n_eff}); normally read
+#'   from the Stage 1 metadata.
+#' @param df_coef Optional override for \code{c} itself: one number, or a
+#'   vector named by parameter. Use it when \code{W} is not a location/scale
+#'   design, since \code{c} was calibrated for one that is.
 #' @param unknown_nu What to do when \code{nu} is unknown. \code{"omit"}
 #'   (default) emits no parameter p-value and warns; \code{"normal"} emits the
 #'   old normal-reference p-value and warns, recording
@@ -191,7 +205,10 @@ quantile_gwas <- function(
 #'   or \code{NULL} when no reference distribution could be established.}
 #' \item{\code{param_ref_dist}}{Reference distribution actually used for those
 #'   p-values: "t", "normal" or "none".}
-#' \item{\code{param_ref_df}}{Degrees of freedom of that reference.}
+#' \item{\code{param_ref_df}}{K x P matrix of degrees of freedom, one per
+#'   parameter per SNP.}
+#' \item{\code{param_ref_source}}{How those degrees of freedom were obtained.}
+#' \item{\code{param_ref_c}}{Satterthwaite coefficient used per parameter.}
 #' \item{\code{Q}}{Vector of Q statistics per SNP (if computed).}
 #' \item{\code{df}}{Degrees of freedom for Q statistic.}
 #' 
@@ -210,7 +227,11 @@ param_gwas <- function(
   q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
   nu = NULL,
   nu_source = NULL,
-  unknown_nu = c("omit", "normal", "error")
+  unknown_nu = c("omit", "normal", "error"),
+  n_blocks = NULL,
+  n_eff = NULL,
+  df_model = NULL,
+  df_coef = NULL
 ) {
   transform <- match.arg(transform)
   se_mode   <- match.arg(se_mode)
@@ -430,8 +451,10 @@ if (se_mode == "diagonal") {
   # conditions on Sigma as known and inherits the same defect, but the fix there
   # is not a pt() substitution and is tracked separately.
   param_ref <- .param_reference(
-    nu = if (is.null(nu)) NA_real_ else nu,
-    nu_source = if (is.null(nu_source)) NA_character_ else nu_source,
+    A = A, P = P,
+    nu = nu, nu_source = nu_source,
+    n_blocks = n_blocks, n_eff = n_eff,
+    df_model = df_model, df_coef = df_coef,
     unknown_nu = unknown_nu,
     where = "this call to param_gwas()"
   )
@@ -445,7 +468,8 @@ if (se_mode == "diagonal") {
     P_params  = P_params,
     param_ref_dist   = param_ref$dist,
     param_ref_df     = param_ref$df,
-    param_ref_source = param_ref$nu_source,
+    param_ref_source = param_ref$source,
+    param_ref_c      = param_ref$c,
     Q         = Q_stat,
     df        = Tt - K,
     q_method  = q_method
@@ -489,15 +513,21 @@ if (se_mode == "diagonal") {
 #'   records the jackknife block count. Defaults to the \code{.cov.meta.json}
 #'   next to \code{cov_file}. This is where the degrees of freedom for the
 #'   \code{t} reference come from.
-#' @param nu Override for the degrees of freedom. Use it for covariance files
-#'   written before Stage 1 recorded the block count: pass
-#'   \code{nu = n_blocks - 1} for whatever \code{--blocks} that run used.
+#' @param nu Override for the degrees of freedom, applied to every SNP and
+#'   every parameter. Normally leave this \code{NULL}: the per-SNP law is
+#'   better, and a constant is not defensible at \code{n_blocks >= 500}.
+#' @param df_coef Optional override for the Satterthwaite coefficient \code{c}:
+#'   one number, or a vector named by parameter. The shipped values (0.88 for a
+#'   location-type contrast, 2.62 for a scale-type one) were calibrated for
+#'   \code{W = [1, q_tau - mean(q_tau)]}; a very different \code{W} needs its
+#'   own.
 #' @param unknown_nu What to do when \code{nu} cannot be determined:
 #'   \code{"omit"} (default) emits no \code{<param>_p} columns and warns,
 #'   \code{"normal"} emits normal-reference p-values and warns, \code{"error"}
 #'   stops. Whatever happens, the returned table carries \code{ref_dist} and
-#'   \code{ref_df} columns so a reader of the results can tell which reference
-#'   distribution produced them.
+#'   \code{ref_df_source} columns, and a \code{<param>_df} column per fitted
+#'   parameter, so a reader of the results can tell exactly which reference
+#'   distribution produced each p-value.
 #'
 #' @return A data.table with SNP info and parameter estimates
 .validate_cov_ids <- function(stage1_dt, cov_ids_file) {
@@ -677,7 +707,8 @@ param_gwas_from_file <- function(
   q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
   cov_meta_file = NULL,
   nu = NULL,
-  unknown_nu = c("omit", "normal", "error")
+  unknown_nu = c("omit", "normal", "error"),
+  df_coef = NULL
 ) {
   se_mode <- match.arg(se_mode)
   return_cov <- match.arg(return_cov)
@@ -755,10 +786,21 @@ param_gwas_from_file <- function(
     plugin_R <- as.matrix(rtau_dt)
   }
   
-  # Degrees of freedom for the t reference on theta/SE. An explicit nu wins;
-  # otherwise read the block count Stage 1 recorded next to the covariance.
-  nu_value <- NA_real_
-  nu_prov <- NA_character_
+  # Degrees of freedom for the t reference on theta/SE.
+  #
+  #   1. an explicit nu from the caller wins;
+  #   2. otherwise the block count from .cov.meta.json plus the per-SNP n_eff
+  #      from the d_resid column give one nu per SNP per parameter;
+  #   3. otherwise the block count alone gives a flat fallback (warned);
+  #   4. otherwise a constant nu recorded in the metadata (warned);
+  #   5. otherwise unknown_nu decides.
+  #
+  # nu = n_blocks - 1 is NOT among these. It is measurably wrong: 801.8 against
+  # 999 at B = 1000, N = 50,000.
+  nu_value <- NULL
+  nu_prov <- NULL
+  n_blocks_value <- NULL
+  df_model_value <- .resolve_df_model(NULL)
   if (!is.null(nu)) {
     nu_value <- as.numeric(nu)[1]
     nu_prov <- "user_supplied"
@@ -769,13 +811,34 @@ param_gwas_from_file <- function(
       message("No Stage 1 covariance metadata at ", cov_meta_file,
               " (covariance predates the block-count field).")
     }
-    resolved <- .resolve_nu(cov_meta)
-    nu_value <- resolved$nu
-    nu_prov <- resolved$nu_source
-    if (is.finite(nu_value)) {
-      message("Stage 1 covariance degrees of freedom: nu = ", nu_value,
-              " (", nu_prov, ")")
+    df_model_value <- .resolve_df_model(cov_meta)
+    b <- .resolve_block_count(cov_meta)
+    if (is.finite(b)) {
+      n_blocks_value <- b
+      message("Stage 1 jackknife blocks: ", b,
+              "; effective df computed per SNP as 1/nu = 1/(B-1) + c/n_eff.")
+    } else {
+      recorded <- .resolve_nu(cov_meta)
+      if (is.finite(recorded$nu)) {
+        nu_value <- recorded$nu
+        nu_prov <- recorded$nu_source
+        warning("Using the constant nu = ", nu_value, " recorded in ",
+                cov_meta_file, " (", nu_prov, "). A constant nu is not ",
+                "defensible at n_blocks >= 500: the effective df varies by SNP ",
+                "and by parameter. Re-run Stage 1 for the per-SNP form.",
+                call. = FALSE)
+      }
     }
+  }
+
+  # Per-SNP effective sample size, if Stage 1 emitted it.
+  n_eff_value <- NULL
+  n_eff_col <- df_model_value$n_eff_column
+  if (n_eff_col %in% names(stage1_dt)) {
+    n_eff_value <- as.numeric(stage1_dt[[n_eff_col]])
+  } else if (!is.null(n_blocks_value)) {
+    message("Stage 1 file has no ", n_eff_col,
+            " column; the effective df will fall back to a flat value.")
   }
 
   # Run param_gwas
@@ -791,9 +854,13 @@ param_gwas_from_file <- function(
     n_threads = n_threads,
     return_cov = return_cov,
     q_method = q_method,
-    nu = if (is.finite(nu_value)) nu_value else NULL,
-    nu_source = if (is.finite(nu_value)) nu_prov else NULL,
-    unknown_nu = unknown_nu
+    nu = nu_value,
+    nu_source = nu_prov,
+    unknown_nu = unknown_nu,
+    n_blocks = n_blocks_value,
+    n_eff = n_eff_value,
+    df_model = df_model_value,
+    df_coef = df_coef
   )
   
   # Build output data.table
@@ -808,13 +875,21 @@ param_gwas_from_file <- function(
     out_dt[[paste0(param_name, "_se")]] <- result$SE_params[i, ]
     if (!is.null(result$P_params)) {
       out_dt[[paste0(param_name, "_p")]] <- result$P_params[i, ]
+      # nu varies by SNP and by parameter, so it is a column per parameter and
+      # not a single number for the run.
+      out_dt[[paste0(param_name, "_df")]] <- result$param_ref_df[i, ]
     }
   }
 
-  # Which reference distribution produced those p-values, recorded in the output
-  # itself so a reader of a results file can tell without re-running anything.
+  # Which reference distribution produced those p-values, and how its degrees of
+  # freedom were arrived at, recorded in the output itself so a reader of a
+  # results file can tell without re-running anything.
   out_dt$ref_dist <- result$param_ref_dist
-  out_dt$ref_df <- result$param_ref_df
+  out_dt$ref_df_source <- if (is.null(result$param_ref_source)) {
+    NA_character_
+  } else {
+    result$param_ref_source
+  }
   
   out_dt$Q <- result$Q
   if (!is.null(result$Q_pval)) {

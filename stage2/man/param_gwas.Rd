@@ -18,7 +18,11 @@ param_gwas(
   q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
   nu = NULL,
   nu_source = NULL,
-  unknown_nu = c("omit", "normal", "error")
+  unknown_nu = c("omit", "normal", "error"),
+  n_blocks = NULL,
+  n_eff = NULL,
+  df_model = NULL,
+  df_coef = NULL
 )
 }
 \arguments{
@@ -66,13 +70,15 @@ matrix cannot be inverted for GLS.}
 tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle
 matrix), \code{"full"} (K x K x P array), or \code{"mashr"} (Bhat/Shat/V list).}
 
-\item{nu}{Degrees of freedom of the Stage 1 covariance. \code{theta/SE} is
-\code{t_nu} distributed, not normal, because \code{Sigma} is estimated: for
-a fixed contrast \code{a}, \code{a' Sigma_jk a / a' Sigma a ~ chi2_nu/nu}.
-For the delete-one-block jackknife \code{nu = n_blocks - 1};
-\code{param_gwas_from_file()} reads it from the Stage 1
-\code{.cov.meta.json} sidecar. Leave \code{NULL} if unknown and see
-\code{unknown_nu}.}
+\item{nu}{Explicit degrees of freedom, overriding everything else.
+\code{theta/SE} is \code{t_nu} distributed, not normal, because
+\code{Sigma} is estimated: for a fixed contrast \code{a},
+\code{a' Sigma_jk a / a' Sigma a ~ chi2_nu/nu}. Normally leave this
+\code{NULL} and supply \code{n_blocks} and \code{n_eff} instead, from
+which a per-SNP, per-parameter \code{nu} is computed; a single \code{nu}
+is not defensible, since the measured value ranges 530 to 979 across MAF
+at \code{n_blocks = 1000} and differs by 236 between a scale and a
+location contrast.}
 
 \item{nu_source}{Free-text provenance for \code{nu}, carried into the output
 so a result can be traced back to how its degrees of freedom were obtained.}
@@ -84,6 +90,22 @@ old normal-reference p-value and warns, recording
 deliberately no silent normal fallback: it inflates Type-I error 17x at
 p = 5e-8 when \code{n_blocks = 65}, and being silent is why that went
 unnoticed.}
+
+\item{n_blocks}{Number of populated jackknife blocks behind \code{cov_data}.
+\code{param_gwas_from_file()} reads it from \code{.cov.meta.json}.}
+
+\item{n_eff}{Per-SNP effective sample size, length \code{ncol(Q_slope)}.
+This is Stage 1's \code{d_resid} column, \code{sum_i g_resid_i^2}.
+Together with \code{n_blocks} it gives the measured law
+\code{1/nu = 1/(n_blocks - 1) + c/n_eff}.}
+
+\item{df_model}{Optional list overriding the coefficients of that law
+(\code{c_location}, \code{c_scale}, \code{fallback_n_eff}); normally read
+from the Stage 1 metadata.}
+
+\item{df_coef}{Optional override for \code{c} itself: one number, or a
+vector named by parameter. Use it when \code{W} is not a location/scale
+design, since \code{c} was calibrated for one that is.}
 }
 \value{
 A list with the following elements:
@@ -95,7 +117,10 @@ A list with the following elements:
 or \code{NULL} when no reference distribution could be established.}
 \item{\code{param_ref_dist}}{Reference distribution actually used for those
 p-values: "t", "normal" or "none".}
-\item{\code{param_ref_df}}{Degrees of freedom of that reference.}
+\item{\code{param_ref_df}}{K x P matrix of degrees of freedom, one per
+parameter per SNP.}
+\item{\code{param_ref_source}}{How those degrees of freedom were obtained.}
+\item{\code{param_ref_c}}{Satterthwaite coefficient used per parameter.}
 \item{\code{Q}}{Vector of Q statistics per SNP (if computed).}
 \item{\code{df}}{Degrees of freedom for Q statistic.}
 }
