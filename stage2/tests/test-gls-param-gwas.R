@@ -17,6 +17,7 @@ Rcpp::sourceCpp(file.path(pkg_root, "src", "stage2_se_helper.cpp"))
 source(file.path(pkg_root, "R", "utils.R"))
 source(file.path(pkg_root, "R", "covariance.R"))
 source(file.path(pkg_root, "R", "weight-functions.R"))
+source(file.path(pkg_root, "R", "tail-reference.R"))
 source(file.path(pkg_root, "R", "gwas.R"))
 
 upper_row_major <- function(Sigma) {

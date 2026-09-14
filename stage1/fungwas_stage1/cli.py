@@ -8,15 +8,28 @@ Usage:
     fungwas-stage1 --bgen data.bgen --pheno pheno.txt --out results/chr22
     
 Outputs:
-    {out}.stage1.tsv.gz  - Beta/SE per SNP per tau
+    {out}.stage1.tsv.gz  - Beta/SE per SNP per tau, plus d_resid (see below)
     {out}.cov.gz         - Upper triangle covariance matrices (binary)
     {out}.cov.ids.tsv.gz - SNP IDs for covariance alignment (one per row)
+    {out}.cov.meta.json  - Covariance layout and jackknife degrees-of-freedom model
     {out}.Rtau.tsv       - Population tau correlation matrix (for plugin_cor)
+
+The final column of the TSV, d_resid, is sum_i g_resid_i^2 for that SNP: the
+denominator of every per-tau slope, and the genotype's effective sample size.
+Stage 2 needs it to work out the effective degrees of freedom of the estimated
+covariance per SNP, which is what makes its t reference correct.
+
+WARNING about the per-tau standard errors in this file.  se_tau_* are jackknife
+estimates, so beta/se at a single tau is t distributed, NOT normal -- and the
+effective degrees of freedom at an extreme tau are far below the block count.
+Measured at N = 50,000 with --blocks 1000: about 835 df at tau = 0.50, but 112
+at tau = 0.02, and 38 at tau = 0.02 for a MAF 0.01 variant. Do not studentise a
+per-tau slope against a normal, against blocks - 1, or against the degrees of
+freedom Stage 2 reports for a fitted parameter. See docs/KNOWN_ISSUES.md 2.2.
 """
 
 import argparse
 import gzip
-import json
 import logging
 import os
 import re
@@ -39,10 +52,16 @@ from .core import (
     compute_block_scores_panel,
     compute_block_finalize_panel,
     compute_covariance_from_blocks,
+    residual_sum_squares,
     resolve_covar_cols,
+    DEFAULT_N_BLOCKS,
+    resolve_n_blocks,
+    count_nonempty_blocks,
+    check_blocks_vs_samples,
     set_numpy_fallback_allowed,
     require_cpp_extension,
 )
+from .cov_meta import build_cov_meta, write_cov_meta
 
 logging.basicConfig(
     level=logging.INFO,
@@ -776,10 +795,13 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 continue
 
             beta, se, Sigma = compute_covariance_from_blocks(snp_stats, args.blocks)
+            # Exactly the denominator the jackknife divides by, summed over blocks.
+            d_resid = float(np.sum(snp_stats[:, 0]))
 
             row = list(info)
             for b, s in zip(beta, se):
                 row.extend([f'{b:.6g}', f'{s:.6g}'])
+            row.append(f'{d_resid:.9g}')
             f_tsv.write('\t'.join(map(str, row)) + '\n')
 
             cov_upper = Sigma[np.triu_indices(n_taus)]
@@ -799,7 +821,8 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
 
 
 def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
-                            f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
+                            f_cov_scale_list, all_betas_list, n_cov_elements, n_taus,
+                            d_resid_batch=None):
     """Write one batch from the fused C++ finalizer output.
 
     Byte-for-byte the same output layout as write_stats_batch; only the arithmetic that
@@ -808,6 +831,12 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
     NaN, and the fused path returns NaN beta/se/cov for exactly those SNPs (the C++
     genotype filter guarantees sum(g_resid^2) >= min_var > 0, so the only way to reach a
     non-positive jackknife denominator is to have failed that filter already).
+
+    The one column that is not bit-identical between the two paths is d_resid. The
+    fused kernel never returns the per-block statistics that carry it, so it is
+    recomputed in NumPy from the same genotypes and the same covariate basis. The two
+    differ only in summation order, which matters nowhere: d_resid feeds the degrees of
+    freedom of a t reference, where a last-bit difference is invisible.
     """
     for p_idx, (betas, se_all, cov_all) in enumerate(fused_list):
         f_tsv = f_tsv_list[p_idx]
@@ -827,6 +856,8 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
             row = list(info)
             for b, s in zip(beta, se):
                 row.extend([f'{b:.6g}', f'{s:.6g}'])
+            d_resid = float(d_resid_batch[j]) if d_resid_batch is not None else float('nan')
+            row.append(f'{d_resid:.9g}')
             f_tsv.write('\t'.join(map(str, row)) + '\n')
 
             if args.cov_dtype == 'int8':
@@ -880,7 +911,8 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
     if fused_list is not None:
         write_stats_batch_fused(
             fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
-            f_cov_scale_list, all_betas_list, n_cov_elements, T
+            f_cov_scale_list, all_betas_list, n_cov_elements, T,
+            d_resid_batch=residual_sum_squares(G_view, Q)
         )
     else:
         write_stats_batch(
@@ -978,7 +1010,9 @@ def main():
     parser.add_argument('--taus', default=default_taus,
                         help='Comma-separated tau values (default: 45 taus from 0.02 to 0.98)')
     parser.add_argument('--blocks', type=int, default=None,
-                        help='Number of jackknife blocks (default: max(taus + 20, 64))')
+                        help=f'Number of jackknife blocks (default: {DEFAULT_N_BLOCKS}). '
+                             'Must exceed the number of taus. Fewer blocks stay correctly '
+                             'sized under the Stage 2 t reference but give a noisier SE.')
     parser.add_argument('--batch-size', dest='batch_size', type=int, default=500,
                         help='SNPs per batch for memory efficiency')
     parser.add_argument('--threads', type=int, default=1,
@@ -1004,21 +1038,10 @@ def main():
     # Parse taus
     taus = np.array([float(t) for t in args.taus.split(',')])
     T = len(taus)
-    if args.blocks is None:
-        args.blocks = max(T + 20, 64)
-        logger.info("Using auto --blocks=%d (max(taus + 20, 64))", args.blocks)
-
-    if args.blocks <= T:
-        parser.error(
-            f"--blocks ({args.blocks}) must be greater than number of taus ({T}). "
-            "Increase --blocks or reduce --taus."
-        )
-    if args.blocks < T + 20:
-        logger.warning(
-            "--blocks=%d is only slightly above taus=%d; covariance may be noisy. "
-            "Consider --blocks >= taus + 20.",
-            args.blocks, T
-        )
+    try:
+        args.blocks = resolve_n_blocks(args.blocks, T, flag="--blocks")
+    except ValueError as exc:
+        parser.error(str(exc))
     
     log_mem(f"Starting FungWas Stage 1 (taus={T}, blocks={args.blocks})")
     logger.info("Note: For Stage 2, consider mean-centering non-intercept columns of your W matrix to reduce collinearity.")
@@ -1096,8 +1119,10 @@ def main():
     t_batches = time.perf_counter()
     
     # Assign jackknife blocks
+    check_blocks_vs_samples(args.blocks, N_matched, flag="--blocks")
     np.random.seed(args.seed)
     block_ids = np.random.randint(0, args.blocks, N_matched).astype(np.int32)
+    n_blocks_nonempty = count_nonempty_blocks(block_ids, args.blocks, flag="--blocks")
     
     # Output setup
     _sanitize_name = sanitize_pheno_name
@@ -1120,6 +1145,10 @@ def main():
     for t in taus:
         # Use 3 decimals to avoid tau label collisions on dense grids (e.g. 100 taus).
         cols.extend([f'beta_tau_{t:.3f}', f'se_tau_{t:.3f}'])
+    # Appended last so that anything parsing the beta/se block by position is
+    # unaffected. This is the genotype's effective sample size, which Stage 2
+    # turns into the per-SNP degrees of freedom of the covariance.
+    cols.append('d_resid')
     
     # Upper triangle size
     n_cov_elements = T * (T + 1) // 2
@@ -1240,18 +1269,27 @@ def main():
             logger.info(f"Wrote R_tau: {rtau_file}")
     
     elapsed = time.time() - t_start
+    # Record the jackknife block count (and hence the degrees of freedom of the
+    # estimated tau-covariance) so Stage 2 can read theta/SE against a t_nu
+    # reference instead of a normal one. See fungwas_stage1/cov_meta.py.
+    cov_meta = build_cov_meta(
+        cov_dtype=args.cov_dtype,
+        n_taus=T,
+        n_blocks=args.blocks,
+        seed=args.seed,
+        n_blocks_nonempty=n_blocks_nonempty,
+    )
     for meta_path in out_cov_meta_list:
-        with open(meta_path, 'w') as f:
-            json.dump({
-                "cov_dtype": args.cov_dtype,
-                "n_taus": int(T),
-                "n_cov_elements": int(n_cov_elements),
-                "record_bytes": int(n_cov_elements if args.cov_dtype == 'int8' else n_cov_elements * 4),
-                "scale_file": bool(args.cov_dtype == 'int8')
-            }, f, indent=2)
+        write_cov_meta(meta_path, cov_meta)
     log_mem(
         f"Batch compute time: {total_compute:.1f}s, write time: {total_write:.1f}s, "
         f"batch total: {time.perf_counter() - t_batches:.1f}s"
+    )
+    logger.info(
+        "Reminder: se_tau_* in the TSV are jackknife estimates. A per-tau Wald test is "
+        "t with FAR fewer degrees of freedom than --blocks-1 at extreme taus "
+        "(~112 at tau=0.02 vs ~835 at tau=0.50, N=50k, B=1000; 38 at tau=0.02 with "
+        "MAF 0.01). See docs/KNOWN_ISSUES.md 2.2 before studentising them."
     )
     log_mem(f"Dropped {skipped_non_biallelic} non-biallelic variants")
     log_mem(f"Done! {total_snps} SNPs in {elapsed:.1f}s ({total_snps/elapsed:.1f} SNPs/s)")

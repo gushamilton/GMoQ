@@ -12,6 +12,17 @@ from typing import Tuple, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+#: Default number of delete-one-block jackknife blocks.
+#:
+#: The covariance is unbiased at any block count, but ``SE_hat`` is noisy:
+#: ``sd(SE_hat)/SE = 1/sqrt(2*(B-1))``, which is 8.8% at B = 65 and 2.2% at
+#: B = 1000. Stage 2 now reads ``theta/SE`` against ``t_{B-1}``, so the test is
+#: correctly sized at any B; what a larger B buys is a tighter denominator and
+#: hence power, not validity. Measured cost of this default relative to the
+#: old B = 65: about +30% Stage 1 wall time and peak memory around 1 GB.
+DEFAULT_N_BLOCKS = 1000
+
 ALLOW_NUMPY_FALLBACK = False
 NUMPY_FALLBACK_WARNING = (
     "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
@@ -38,6 +49,98 @@ def set_numpy_fallback_allowed(allow: bool):
     ALLOW_NUMPY_FALLBACK = allow
     if allow and not HAVE_CPP:
         logger.warning(NUMPY_FALLBACK_WARNING)
+
+
+def resolve_n_blocks(n_blocks: Optional[int], n_taus: int, flag: str = "--blocks") -> int:
+    """Resolve and validate the jackknife block count.
+
+    ``None`` means "use the default". The hard constraint is ``B > T``: the
+    jackknife covariance has rank ``B - 1``, so fewer blocks than taus makes it
+    singular. Below the default the covariance is still unbiased and, with the
+    Stage 2 ``t_{B-1}`` reference, the Wald test is still correctly sized -- it
+    just has a noisier denominator and therefore less power.
+    """
+    if n_blocks is None:
+        n_blocks = DEFAULT_N_BLOCKS
+        logger.info("Using default %s=%d jackknife blocks", flag, n_blocks)
+    n_blocks = int(n_blocks)
+
+    if n_blocks <= n_taus:
+        raise ValueError(
+            f"{flag} ({n_blocks}) must be greater than the number of taus ({n_taus}): "
+            f"the jackknife covariance has rank {flag}-1 and would be singular. "
+            f"Increase {flag} or reduce the tau grid."
+        )
+    if n_blocks < DEFAULT_N_BLOCKS:
+        logger.warning(
+            "%s=%d is below the default of %d. The covariance stays unbiased and "
+            "Stage 2's t_%d reference keeps the test correctly sized, but SE_hat "
+            "carries %.1f%% relative noise (1/sqrt(2*(B-1))) against %.1f%% at the "
+            "default, which costs power.",
+            flag, n_blocks, DEFAULT_N_BLOCKS, n_blocks - 1,
+            100.0 / np.sqrt(2.0 * (n_blocks - 1)),
+            100.0 / np.sqrt(2.0 * (DEFAULT_N_BLOCKS - 1)),
+        )
+    return n_blocks
+
+
+def residual_sum_squares(G: np.ndarray, Q: np.ndarray) -> np.ndarray:
+    """Per-SNP ``D = sum_i g_resid_i^2`` for genotypes residualised on ``Q``.
+
+    ``D`` is the denominator of every per-tau slope, and it is also the
+    genotype's effective sample size: ``N_eff = D^2 / sum_i g_resid_i^4``
+    collapses to ``D`` because a genotype's fourth central moment equals its
+    second (measured ``N_eff/D`` = 1.003 on real imputed dosages). Stage 2
+    needs it to compute the effective degrees of freedom of the jackknife
+    covariance per SNP.
+
+    Used only on the ``--fused-finalize`` path, where the per-block statistics
+    that carry ``D`` are never materialised. Everywhere else ``D`` is read off
+    the block statistics directly, which is exactly the quantity the jackknife
+    divides by.
+
+    Parameters
+    ----------
+    G : array (N, M)
+        Genotype dosages; NaN is mean-imputed per SNP, as in the kernels.
+    Q : array (N, K)
+        Orthonormal covariate basis.
+    """
+    G = np.asarray(G, dtype=np.float64)
+    col_means = np.nanmean(G, axis=0)
+    Gi = np.where(np.isnan(G), col_means, G)
+    R = Gi - Q @ (Q.T @ Gi)
+    return np.einsum("ij,ij->j", R, R)
+
+
+def count_nonempty_blocks(block_ids: np.ndarray, n_blocks: int, flag: str = "--blocks") -> int:
+    """Number of jackknife blocks that actually received a sample.
+
+    Deleting an empty block reproduces the full-sample estimate, so empty
+    blocks contribute no replicate and the degrees of freedom are set by the
+    blocks that are populated, not by the requested count. At the default of
+    1000 blocks this only bites on small datasets; it could not happen at the
+    old default of 65.
+    """
+    n_nonempty = int(np.unique(np.asarray(block_ids)).size)
+    if n_nonempty < n_blocks:
+        logger.warning(
+            "%d of %d jackknife blocks are empty (%d samples for %s=%d). "
+            "Degrees of freedom are set by the %d populated blocks. Lower %s.",
+            n_blocks - n_nonempty, n_blocks, len(block_ids), flag, n_blocks,
+            n_nonempty, flag,
+        )
+    return n_nonempty
+
+
+def check_blocks_vs_samples(n_blocks: int, n_samples: int, flag: str = "--blocks") -> None:
+    """Refuse a block count that cannot be populated by the sample."""
+    if n_blocks > n_samples:
+        raise ValueError(
+            f"{flag} ({n_blocks}) exceeds the number of analysed samples ({n_samples}). "
+            f"Most blocks would be empty and the recorded degrees of freedom would be "
+            f"wrong. Pass an explicit {flag} no larger than {n_samples}."
+        )
 
 
 def require_cpp_extension(context: str = "Stage 1 computation"):
@@ -496,7 +599,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
     covariates : array (N, K), optional
         Covariate matrix (intercept added automatically)
     n_blocks : int, optional
-        Number of jackknife blocks. If None, uses max(T + 20, 64).
+        Number of jackknife blocks. If None, uses DEFAULT_N_BLOCKS (1000).
     seed : int
         Random seed for block assignment
     n_threads : int
@@ -510,28 +613,15 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
         covariances : list of (T, T) arrays - full covariance per SNP
         q_tau : array (T,) - empirical quantiles
         taus : array (T,) - tau levels used
+        d_resid : array (M,) - sum of squared residualised dosages per SNP
     """
     set_numpy_fallback_allowed(allow_numpy_fallback)
     require_cpp_extension("run_stage1")
 
     N, M = G.shape
     T = len(taus)
-    if n_blocks is None:
-        n_blocks = max(T + 20, 64)
-
-    # Jackknife covariance rank is bounded by (n_blocks - 1). Enforce
-    # n_blocks > n_taus for stable tau-covariance estimation in Stage 2.
-    if n_blocks <= T:
-        raise ValueError(
-            f"n_blocks ({n_blocks}) must be greater than number of taus ({T}). "
-            "Increase n_blocks or reduce taus."
-        )
-    if n_blocks < T + 20:
-        logger.warning(
-            "n_blocks=%d is only slightly above n_taus=%d; covariance may be noisy. "
-            "Consider n_blocks >= n_taus + 20 for better stability.",
-            n_blocks, T
-        )
+    n_blocks = resolve_n_blocks(n_blocks, T, flag="n_blocks")
+    check_blocks_vs_samples(n_blocks, N, flag="n_blocks")
     
     # Compute RIF
     logger.info(f"Computing RIF matrix for {T} taus...")
@@ -550,6 +640,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
     # Assign blocks
     np.random.seed(seed)
     block_ids = np.random.randint(0, n_blocks, N).astype(np.int32)
+    n_blocks_nonempty = count_nonempty_blocks(block_ids, n_blocks, flag="n_blocks")
     
     # Compute block scores
     logger.info(f"Computing block scores for {M} SNPs...")
@@ -558,6 +649,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
     # Aggregate results
     betas = np.zeros((M, T))
     ses = np.zeros((M, T))
+    d_resid = np.full(M, np.nan)
     covariances = []
     
     for j in range(M):
@@ -570,6 +662,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
             betas[j] = beta
             ses[j] = se
             covariances.append(Sigma)
+            d_resid[j] = float(np.sum(all_stats[j][:, 0]))
     
     return {
         'betas': betas,
@@ -578,4 +671,6 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
         'q_tau': q_tau,
         'taus': taus,
         'n_blocks': n_blocks,
+        'n_blocks_nonempty': n_blocks_nonempty,
+        'd_resid': d_resid,
     }
