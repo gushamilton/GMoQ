@@ -86,9 +86,7 @@ def test_empty_blocks_are_counted_and_reduce_nu(caplog):
     )
     assert meta["jackknife"]["n_blocks"] == n_blocks
     assert meta["jackknife"]["n_blocks_nonempty"] == n_nonempty
-    assert meta["jackknife"]["nu"] == n_nonempty - 1
-    nu, _ = cov_meta.resolve_nu(meta)
-    assert nu == n_nonempty - 1
+    assert cov_meta.resolve_block_count(meta) == n_nonempty
 
 
 def test_no_empty_blocks_at_production_scale(caplog):
@@ -107,10 +105,10 @@ def test_nonempty_count_cannot_exceed_requested():
         )
 
 
-def test_default_nu_is_999():
+def test_default_block_count_reaches_the_metadata():
     meta = cov_meta.build_cov_meta(
         cov_dtype="int8", n_taus=45, n_blocks=resolve_n_blocks(None, 45), seed=42
     )
-    nu, source = cov_meta.resolve_nu(meta)
-    assert nu == 999.0
-    assert source == cov_meta.NU_SOURCE_BLOCKS_MINUS_ONE
+    assert cov_meta.resolve_block_count(meta) == 1000
+    # 1/(B-1) is only the first term; the realised nu is lower and SNP-specific.
+    assert cov_meta.effective_nu(1000, 9134, cov_meta.C_LOCATION) < 999

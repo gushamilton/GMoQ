@@ -29,24 +29,44 @@ Schema (version 2)::
         "n_blocks": 1000,
         "n_blocks_nonempty": 1000,
         "seed": 42,
-        "nu": 999,
-        "nu_source": "blocks_minus_one"
+        "df_model": {
+          "form": "1/nu = 1/(n_blocks_nonempty - 1) + c / n_eff",
+          "n_eff_column": "d_resid",
+          "c_location": 0.88,
+          "c_scale": 2.62,
+          "fallback_n_eff": 9134,
+          "source": "fungwas_paper/docs/BP1_effective_df.md, 2026-09-14"
+        }
       }
     }
 
-``nu`` is stored explicitly and separately from ``n_blocks`` on purpose.  The
-analytic value for a delete-one-block jackknife is ``B - 1`` (the covariance
-is a sample covariance of ``B`` leave-one-out estimates, so its rank and its
-Wishart degrees of freedom are ``B - 1``), and that is what Stage 1 writes,
-tagged ``nu_source = "blocks_minus_one"``.  A separate workstream is measuring
-whether the *effective* degrees of freedom are materially lower than ``B - 1``;
-when it reports, a better number can be written into the same ``nu`` field with
-a different ``nu_source`` and Stage 2 will pick it up with no format change.
+**There is deliberately no single ``nu`` field.**  Version 2 of this schema
+carried ``nu = n_blocks - 1``.  That is wrong, and measurement says so: at
+``N = 50,000`` the effective degrees of freedom are 62.4 / 445.9 / 801.8 /
+1351.0 at ``B`` = 65 / 500 / 1000 / 2000, well below ``B - 1``.  Worse, a single
+number cannot be right, because ``nu`` varies by SNP (530 to 979 across the MAF
+range at ``B = 1000``) and by fitted parameter (566 for a scale contrast against
+802 for a location one, a gap that *widens* with ``B``).
 
-Files written before this schema existed have no ``jackknife`` block at all.
-They remain readable: ``resolve_nu`` returns ``None`` for them, and Stage 2
-refuses to emit a parameter p-value rather than silently falling back to a
-normal reference.
+What is stable is the law, fitted over 28 cells to a median error of 0.8%::
+
+    1/nu = 1/(B - 1) + c / N_eff        N_eff = D^2 / sum_i g_ri^4
+
+``c = 0.88`` for a location-type contrast and ``2.62`` for a scale-type one.
+``N_eff`` collapses to ``D = sum_i g_ri^2`` because a genotype's fourth central
+moment equals its second (measured ``N_eff/D = 1.003`` on real dosages), and
+``D`` is the denominator Stage 1 already forms for every SNP.  So the whole
+model costs one float per SNP, emitted as the ``d_resid`` column of the TSV,
+plus the constants recorded here.
+
+``fallback_n_eff`` is the production ``N_eff`` at MAF 0.01, used only when
+``d_resid`` is unavailable.  It reproduces the recommended flat values
+(``nu`` = 911 for location, 776 for scale at ``B = 1000``) and, unlike a bare
+constant, generalises to other block counts.
+
+Files written before the ``jackknife`` block existed have none of this.  They
+remain readable: ``resolve_nu`` returns ``None``, and Stage 2 refuses to emit a
+parameter p-value rather than silently falling back to a normal reference.
 """
 
 from __future__ import annotations
@@ -54,13 +74,58 @@ from __future__ import annotations
 import json
 from typing import Any, Optional, Tuple
 
+import numpy as np
+
 #: Bumped whenever the on-disk schema gains or changes a field.
-COV_META_VERSION = 2
+COV_META_VERSION = 3
 
 #: ``nu_source`` value for the analytic delete-one-block jackknife df.
 NU_SOURCE_BLOCKS_MINUS_ONE = "blocks_minus_one"
 
 JACKKNIFE_METHOD = "delete_one_block"
+
+#: Stage 1 TSV column holding ``D = sum_i g_resid^2``, which stands in for N_eff.
+N_EFF_COLUMN = "d_resid"
+
+#: Satterthwaite coefficient for a flat (location-type) contrast over taus.
+C_LOCATION = 0.88
+
+#: Satterthwaite coefficient for a tail-loaded (scale-type) contrast over taus.
+C_SCALE = 2.62
+
+#: N_eff to assume when ``d_resid`` is unavailable: production MAF 0.01, so
+#: conservative at every commoner variant.
+FALLBACK_N_EFF = 9134
+
+DF_MODEL_FORM = "1/nu = 1/(n_blocks_nonempty - 1) + c / n_eff"
+
+DF_MODEL_SOURCE = "fungwas_paper/docs/BP1_effective_df.md, 2026-09-14"
+
+
+def df_model() -> dict:
+    """The degrees-of-freedom law Stage 2 should apply, as recorded on disk."""
+    return {
+        "form": DF_MODEL_FORM,
+        "n_eff_column": N_EFF_COLUMN,
+        "c_location": C_LOCATION,
+        "c_scale": C_SCALE,
+        "fallback_n_eff": FALLBACK_N_EFF,
+        "source": DF_MODEL_SOURCE,
+    }
+
+
+def effective_nu(n_blocks: int, n_eff: float, c: float) -> float:
+    """Effective degrees of freedom of the jackknife covariance for one contrast.
+
+    ``1/nu = 1/(B - 1) + c/N_eff``.  The first term is the nominal jackknife df;
+    the second is the Satterthwaite penalty for unequal block contributions,
+    which is what makes ``nu`` fall short of ``B - 1`` and makes it depend on
+    the SNP through ``N_eff``.
+    """
+    inv = 1.0 / (int(n_blocks) - 1) + float(c) / float(n_eff)
+    if not np.isfinite(inv) or inv <= 0:
+        raise ValueError(f"non-positive 1/nu from n_blocks={n_blocks}, n_eff={n_eff}, c={c}")
+    return 1.0 / inv
 
 
 def jackknife_nu(n_blocks: int) -> int:
@@ -98,9 +163,13 @@ def build_cov_meta(
     seed : int, optional
         Seed used to assign samples to blocks; recorded for reproducibility.
     nu : float, optional
-        Degrees of freedom to advertise to Stage 2.  Defaults to ``B - 1``.
+        A constant ``nu`` to advertise to Stage 2.  Normally omitted: a single
+        ``nu`` is not defensible, because the effective degrees of freedom vary
+        by SNP and by fitted parameter.  Stage 2 computes them from
+        ``df_model`` instead.  Kept only so a caller can pin a value
+        deliberately, and it must then say where the value came from.
     nu_source : str, optional
-        How ``nu`` was arrived at.  Defaults to ``"blocks_minus_one"``.
+        Required whenever ``nu`` is supplied.
     n_blocks_nonempty : int, optional
         Number of blocks that actually received a sample.  Deleting an empty
         block reproduces the full-sample estimate, so empty blocks contribute
@@ -122,19 +191,17 @@ def build_cov_meta(
             f"n_blocks_nonempty ({n_blocks_nonempty}) cannot exceed n_blocks ({n_blocks})"
         )
 
-    if nu is None:
-        nu = jackknife_nu(n_blocks_nonempty)
-        nu_source = NU_SOURCE_BLOCKS_MINUS_ONE
-    elif nu_source is None:
-        raise ValueError("nu_source must be given whenever nu is supplied explicitly")
-
     jackknife: dict[str, Any] = {
         "method": JACKKNIFE_METHOD,
         "n_blocks": n_blocks,
         "n_blocks_nonempty": n_blocks_nonempty,
-        "nu": nu,
-        "nu_source": nu_source,
+        "df_model": df_model(),
     }
+    if nu is not None:
+        if nu_source is None:
+            raise ValueError("nu_source must be given whenever nu is supplied explicitly")
+        jackknife["nu"] = nu
+        jackknife["nu_source"] = nu_source
     if seed is not None:
         jackknife["seed"] = int(seed)
 
@@ -161,27 +228,51 @@ def read_cov_meta(path: str) -> dict:
         return json.load(handle)
 
 
-def resolve_nu(meta: dict) -> Tuple[Optional[float], Optional[str]]:
-    """Resolve the degrees of freedom to use for the Stage 2 t reference.
-
-    Returns ``(nu, nu_source)``.  Resolution order:
-
-    1. an explicit ``jackknife.nu`` (whatever wrote it);
-    2. otherwise ``jackknife.n_blocks - 1``;
-    3. otherwise ``(None, None)`` -- a pre-v2 file that does not record the
-       block count, for which the right reference is simply not knowable.
-    """
+def _jackknife(meta: dict) -> Optional[dict]:
     jk = meta.get("jackknife") if isinstance(meta, dict) else None
-    if not isinstance(jk, dict):
-        return None, None
+    return jk if isinstance(jk, dict) else None
 
+
+def resolve_nu(meta: dict) -> Tuple[Optional[float], Optional[str]]:
+    """Read a constant ``nu`` if one was deliberately recorded.
+
+    Returns ``(None, None)`` otherwise -- including when the block count is
+    known.  There is no ``B - 1`` fallback here on purpose: the effective
+    degrees of freedom are measurably below ``B - 1`` and vary by SNP and by
+    fitted parameter, so deriving a constant from the block count would be
+    manufacturing a number that measurement contradicts.  Use
+    ``resolve_block_count`` plus ``resolve_df_model`` instead.
+    """
+    jk = _jackknife(meta)
+    if jk is None:
+        return None, None
     nu = jk.get("nu")
     if isinstance(nu, (int, float)) and not isinstance(nu, bool) and nu > 0:
-        source = jk.get("nu_source") or NU_SOURCE_BLOCKS_MINUS_ONE
+        source = jk.get("nu_source") or "unrecorded"
         return float(nu), str(source)
-
-    n_blocks = jk.get("n_blocks_nonempty", jk.get("n_blocks"))
-    if isinstance(n_blocks, int) and not isinstance(n_blocks, bool) and n_blocks >= 2:
-        return float(jackknife_nu(n_blocks)), NU_SOURCE_BLOCKS_MINUS_ONE
-
     return None, None
+
+
+def resolve_block_count(meta: dict) -> Optional[int]:
+    """Number of jackknife blocks that carried a replicate.
+
+    Prefers ``n_blocks_nonempty`` over the requested ``n_blocks``: deleting an
+    empty block reproduces the full-sample estimate and contributes nothing.
+    """
+    jk = _jackknife(meta)
+    if jk is None:
+        return None
+    for key in ("n_blocks_nonempty", "n_blocks"):
+        value = jk.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 2:
+            return int(value)
+    return None
+
+
+def resolve_df_model(meta: dict) -> Optional[dict]:
+    """The recorded degrees-of-freedom law, if the writer supplied one."""
+    jk = _jackknife(meta)
+    if jk is None:
+        return None
+    model = jk.get("df_model")
+    return model if isinstance(model, dict) else None

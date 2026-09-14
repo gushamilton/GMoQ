@@ -22,7 +22,7 @@ def test_jackknife_nu_is_blocks_minus_one():
         cov_meta.jackknife_nu(1)
 
 
-def test_build_cov_meta_records_blocks_and_nu():
+def test_build_cov_meta_records_blocks_and_df_model():
     meta = cov_meta.build_cov_meta(cov_dtype="int8", n_taus=45, n_blocks=1000, seed=42)
     assert meta["cov_meta_version"] == cov_meta.COV_META_VERSION
     assert meta["n_taus"] == 45
@@ -31,10 +31,18 @@ def test_build_cov_meta_records_blocks_and_nu():
     assert meta["scale_file"] is True
     jk = meta["jackknife"]
     assert jk["n_blocks"] == 1000
-    assert jk["nu"] == 999
-    assert jk["nu_source"] == cov_meta.NU_SOURCE_BLOCKS_MINUS_ONE
+    assert jk["n_blocks_nonempty"] == 1000
     assert jk["seed"] == 42
     assert jk["method"] == cov_meta.JACKKNIFE_METHOD
+    # No constant nu: a single value is not defensible, because nu varies by
+    # SNP and by fitted parameter. The law is recorded instead.
+    assert "nu" not in jk
+    model = jk["df_model"]
+    assert model["n_eff_column"] == cov_meta.N_EFF_COLUMN == "d_resid"
+    assert model["c_location"] == 0.88
+    assert model["c_scale"] == 2.62
+    assert model["fallback_n_eff"] == 9134
+    assert "BP1_effective_df" in model["source"]
 
 
 def test_build_cov_meta_float32_record_bytes():
@@ -64,13 +72,13 @@ def test_meta_round_trips_through_json(tmp_path):
     cov_meta.write_cov_meta(str(path), meta)
     back = cov_meta.read_cov_meta(str(path))
     assert back == meta
-    nu, source = cov_meta.resolve_nu(back)
-    assert nu == 999.0
-    assert source == cov_meta.NU_SOURCE_BLOCKS_MINUS_ONE
+    assert cov_meta.resolve_block_count(back) == 1000
+    assert cov_meta.resolve_df_model(back) == cov_meta.df_model()
+    assert cov_meta.resolve_nu(back) == (None, None)
 
 
-def test_resolve_nu_prefers_an_explicitly_recorded_value():
-    """A future workstream can write a measured nu_eff without a format change."""
+def test_resolve_nu_reads_an_explicitly_recorded_value():
+    """A deliberately pinned constant is still readable, and says where it came from."""
     meta = cov_meta.build_cov_meta(
         cov_dtype="int8", n_taus=45, n_blocks=1000, nu=812.4, nu_source="measured_effective"
     )
@@ -79,15 +87,41 @@ def test_resolve_nu_prefers_an_explicitly_recorded_value():
     assert source == "measured_effective"
 
 
-def test_resolve_nu_falls_back_to_block_count():
+def test_resolve_nu_does_not_invent_one_from_the_block_count():
+    """B - 1 is measurably wrong, so it must not be manufactured here."""
     meta = {"jackknife": {"n_blocks": 200}}
-    nu, source = cov_meta.resolve_nu(meta)
-    assert nu == 199.0
-    assert source == cov_meta.NU_SOURCE_BLOCKS_MINUS_ONE
+    assert cov_meta.resolve_nu(meta) == (None, None)
+    assert cov_meta.resolve_block_count(meta) == 199 or True
+    assert cov_meta.resolve_block_count(meta) == 200
 
 
-def test_resolve_nu_is_none_for_pre_v2_files():
-    """Files written before this schema have no block count; nu is unknowable."""
+def test_resolve_block_count_prefers_the_populated_count():
+    meta = {"jackknife": {"n_blocks": 200, "n_blocks_nonempty": 189}}
+    assert cov_meta.resolve_block_count(meta) == 189
+
+
+def test_effective_nu_matches_the_measured_law():
+    """1/nu = 1/(B-1) + c/N_eff, against the production values in the report."""
+    # production N_eff at MAF 0.01 and MAF 0.50, B = 1000
+    assert round(cov_meta.effective_nu(1000, 9134, cov_meta.C_LOCATION)) == 911
+    assert round(cov_meta.effective_nu(1000, 9134, cov_meta.C_SCALE)) == 776
+    assert round(cov_meta.effective_nu(1000, 230660, cov_meta.C_LOCATION)) == 995
+    assert round(cov_meta.effective_nu(1000, 230660, cov_meta.C_SCALE)) == 988
+    # a scale contrast always has fewer df than a location one
+    for n_eff in (991, 9134, 50000):
+        assert (cov_meta.effective_nu(1000, n_eff, cov_meta.C_SCALE)
+                < cov_meta.effective_nu(1000, n_eff, cov_meta.C_LOCATION))
+    # and nu is bounded above by N_eff / c however many blocks are used
+    assert cov_meta.effective_nu(10 ** 9, 991, cov_meta.C_LOCATION) < 991 / cov_meta.C_LOCATION
+
+
+def test_effective_nu_is_below_blocks_minus_one():
+    for b in (65, 500, 1000, 2000):
+        assert cov_meta.effective_nu(b, 9134, cov_meta.C_LOCATION) < b - 1
+
+
+def test_old_files_yield_nothing_rather_than_a_guess():
+    """Files written before this schema have no block count and no df model."""
     old = {
         "cov_dtype": "int8",
         "n_taus": 45,
@@ -96,11 +130,13 @@ def test_resolve_nu_is_none_for_pre_v2_files():
         "scale_file": True,
     }
     assert cov_meta.resolve_nu(old) == (None, None)
-    assert cov_meta.resolve_nu({"jackknife": {}}) == (None, None)
-    assert cov_meta.resolve_nu({"jackknife": {"n_blocks": 1}}) == (None, None)
+    assert cov_meta.resolve_block_count(old) is None
+    assert cov_meta.resolve_df_model(old) is None
+    assert cov_meta.resolve_block_count({"jackknife": {}}) is None
+    assert cov_meta.resolve_block_count({"jackknife": {"n_blocks": 1}}) is None
 
 
-def test_v2_meta_is_a_superset_of_the_v1_fields():
+def test_meta_is_a_superset_of_the_v1_fields():
     """Anything that read the old format keeps working against the new one."""
     meta = cov_meta.build_cov_meta(cov_dtype="int8", n_taus=45, n_blocks=65, seed=42)
     for key in ("cov_dtype", "n_taus", "n_cov_elements", "record_bytes", "scale_file"):

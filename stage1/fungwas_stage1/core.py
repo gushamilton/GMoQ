@@ -84,6 +84,35 @@ def resolve_n_blocks(n_blocks: Optional[int], n_taus: int, flag: str = "--blocks
     return n_blocks
 
 
+def residual_sum_squares(G: np.ndarray, Q: np.ndarray) -> np.ndarray:
+    """Per-SNP ``D = sum_i g_resid_i^2`` for genotypes residualised on ``Q``.
+
+    ``D`` is the denominator of every per-tau slope, and it is also the
+    genotype's effective sample size: ``N_eff = D^2 / sum_i g_resid_i^4``
+    collapses to ``D`` because a genotype's fourth central moment equals its
+    second (measured ``N_eff/D`` = 1.003 on real imputed dosages). Stage 2
+    needs it to compute the effective degrees of freedom of the jackknife
+    covariance per SNP.
+
+    Used only on the ``--fused-finalize`` path, where the per-block statistics
+    that carry ``D`` are never materialised. Everywhere else ``D`` is read off
+    the block statistics directly, which is exactly the quantity the jackknife
+    divides by.
+
+    Parameters
+    ----------
+    G : array (N, M)
+        Genotype dosages; NaN is mean-imputed per SNP, as in the kernels.
+    Q : array (N, K)
+        Orthonormal covariate basis.
+    """
+    G = np.asarray(G, dtype=np.float64)
+    col_means = np.nanmean(G, axis=0)
+    Gi = np.where(np.isnan(G), col_means, G)
+    R = Gi - Q @ (Q.T @ Gi)
+    return np.einsum("ij,ij->j", R, R)
+
+
 def count_nonempty_blocks(block_ids: np.ndarray, n_blocks: int, flag: str = "--blocks") -> int:
     """Number of jackknife blocks that actually received a sample.
 
@@ -584,6 +613,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
         covariances : list of (T, T) arrays - full covariance per SNP
         q_tau : array (T,) - empirical quantiles
         taus : array (T,) - tau levels used
+        d_resid : array (M,) - sum of squared residualised dosages per SNP
     """
     set_numpy_fallback_allowed(allow_numpy_fallback)
     require_cpp_extension("run_stage1")
@@ -619,6 +649,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
     # Aggregate results
     betas = np.zeros((M, T))
     ses = np.zeros((M, T))
+    d_resid = np.full(M, np.nan)
     covariances = []
     
     for j in range(M):
@@ -631,6 +662,7 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
             betas[j] = beta
             ses[j] = se
             covariances.append(Sigma)
+            d_resid[j] = float(np.sum(all_stats[j][:, 0]))
     
     return {
         'betas': betas,
@@ -640,4 +672,5 @@ def run_stage1(G: np.ndarray, Y: np.ndarray,
         'taus': taus,
         'n_blocks': n_blocks,
         'n_blocks_nonempty': n_blocks_nonempty,
+        'd_resid': d_resid,
     }
