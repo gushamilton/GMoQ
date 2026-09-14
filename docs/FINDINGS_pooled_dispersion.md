@@ -1,5 +1,17 @@
 # Is the pooled covariance safe as G-MoQ's default?
 
+> **Update.** §5 below proposes flagging dispersion findings at `G >= 0.2`. That
+> artefact has since been *corrected* rather than only flagged —
+> `correct_dispersion_skew()`, see `docs/DISPERSION_SKEW_CORRECTION.md`. After
+> correction the 5e-8 rate is within 1.03x nominal everywhere in this document's
+> sweep, including the `G = 25` cells, so the flag is no longer what bounds false
+> positives on a Normal baseline. It is still needed where the correction cannot
+> be applied (no signed allele frequency) or is only partial (strongly skewed
+> phenotypes), and its meaning otherwise inverts into a *power* warning: high `G`
+> is now where the corrected statistic under-rejects. Everything else below
+> stands as measured; the exact rates in Table 1 are reproduced to every
+> published digit by the correction study's engine.
+
 **Short answer: yes for the scan, no for the loci the scan finds — but the reason is
 not the one the estimator has been charged with, and the proposed fallback does not fix it.**
 

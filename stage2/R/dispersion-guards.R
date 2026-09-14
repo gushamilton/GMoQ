@@ -23,8 +23,19 @@
 ##      `beta_sigma2` in full.  It is QUADRATIC in the mean effect, is per-variant in
 ##      the genotype skewness, vanishes identically at MAF 0.5, and survives every
 ##      transformation of the phenotype.  A single genome-wide slope cannot absorb it,
-##      so `residualise_dispersion()` is the wrong tool; `dispersion_skew_guard()`
-##      flags it instead.
+##      so `residualise_dispersion()` is the wrong tool.
+##
+##      This is BIAS, not a variance error, so it can be SUBTRACTED rather than only
+##      flagged.  `correct_dispersion_skew()` does that.  Because the residue is not
+##      merely proportional to the dispersion weight column but is exactly
+##          delta^2 * (mu3/Var g) * W[, "beta_sigma2"],
+##      and because every Stage 2 projection A = (W'S^-1 W)^-1 W'S^-1 satisfies AW = I,
+##      the induced bias in `beta_sigma2` is exactly delta^2 * (mu3/Var g) and the
+##      induced bias in `beta_mu` is exactly zero -- for ols, gls, dwls and plugin_cor
+##      alike, on any tau grid, with the phenotype SD cancelling out entirely.
+##      `dispersion_skew_guard()` remains, for the cases where the correction cannot be
+##      applied: it needs only the MAGNITUDE of the genotype skewness, while the
+##      correction needs its SIGN and hence a signed effect-allele frequency.
 ##
 ## The two are orthogonal: (a) is linear in the mean effect and common across variants,
 ## (b) is quadratic and variant-specific.  Applying (a) does not touch (b) and vice versa.
@@ -289,12 +300,17 @@ residualise_dispersion <- function(beta_mu, beta_sigma2, se_mu, se_sigma2,
 #' @param N Sample size, for the skewness guard.
 #' @param maf,n_eff Allele frequency, or per-variant \code{d_resid}; see
 #'   \code{\link{dispersion_skew_guard}}. If both are \code{NULL} the guard is omitted.
+#' @param eaf Signed effect-allele frequency. When supplied, the
+#'   genotype-skewness-corrected dispersion columns are added; see
+#'   \code{\link{correct_dispersion_skew}}. This must be oriented to the allele
+#'   \code{beta_mu} counts -- \code{maf} is not a substitute.
+#' @param debias Passed to \code{\link{correct_dispersion_skew}}.
 #' @param mu_name,sigma2_name Parameter row names to use.
 #'
 #' @return A data frame with one row per variant.
 #' @export
 dispersion_report <- function(fit, r_av = NULL, se_rav = 0, N = NULL,
-                              maf = NULL, n_eff = NULL,
+                              maf = NULL, n_eff = NULL, eaf = NULL, debias = TRUE,
                               mu_name = "beta_mu", sigma2_name = "beta_sigma2") {
   if (is.null(fit$params) || is.null(fit$SE_params)) {
     stop("fit must carry params and SE_params from param_gwas().")
@@ -331,10 +347,257 @@ dispersion_report <- function(fit, r_av = NULL, se_rav = 0, N = NULL,
   if (!is.null(r_av)) {
     out <- cbind(out, residualise_dispersion(a, v, sa, sv, cl, r_av, se_rav))
   }
+  if (!is.null(eaf)) {
+    out <- cbind(out, correct_dispersion_skew(a, v, sa, sv, cl, eaf = eaf,
+                                              debias = debias))
+  }
   if (!is.null(maf) || !is.null(n_eff)) {
     out$G_skew_guard <- dispersion_skew_guard(out$z_mu, N = N, maf = maf, n_eff = n_eff)
     out$flag_skew <- !is.na(out$G_skew_guard) & abs(out$G_skew_guard) >= 0.2
   }
   rownames(out) <- NULL
   out
+}
+
+
+#' Predicted genotype-skewness bias in the dispersion parameter
+#'
+#' Returns the bias that a pure location effect induces in \code{beta_sigma2},
+#' i.e. the quantity \code{\link{correct_dispersion_skew}} subtracts.
+#'
+#' @details
+#' \strong{The result.} For \eqn{Y = \mu + \delta g + \varepsilon} with
+#' \eqn{\varepsilon} independent of \eqn{g}, the RIF-OLS estimand at level
+#' \eqn{\tau} is not \eqn{\delta} but
+#' \deqn{b(\tau) = h'(\bar g) + \tfrac{1}{2} h''(\bar g)\,\mu_3/\mathrm{Var}(g)
+#'               = \delta + \frac{\delta^2}{2\sigma}\,\frac{\mu_3}{\mathrm{Var}(g)}\,
+#'                 z_\tau + O(\delta^3),}
+#' \eqn{z_\tau = \Phi^{-1}(\tau)}, \eqn{\sigma} the phenotype SD,
+#' \eqn{\mu_3 = E[(g - \bar g)^3]}. For \eqn{g \sim \mathrm{Binom}(2, p)},
+#' \eqn{\mu_3/\mathrm{Var}(g) = 1 - 2p}.
+#'
+#' \strong{Why this lands entirely on one coefficient.}
+#' \code{\link{make_weights_vqtl}} builds the dispersion column as
+#' \eqn{W_{\sigma^2}(\tau) = z_\tau/(2\sigma)}. The bias above is therefore
+#' \emph{exactly} \eqn{\delta^2 (\mu_3/\mathrm{Var}\,g)} times that column --- not
+#' merely proportional to it, the same vector. Stage 2 forms
+#' \eqn{\hat\theta = A b} with \eqn{A = (W'S^{-1}W)^{-1}W'S^{-1}} for some
+#' weighting \eqn{S}, and every such \eqn{A} satisfies \eqn{AW = I}. Hence
+#' \deqn{A \cdot \mathrm{bias} = \delta^2\,\frac{\mu_3}{\mathrm{Var}(g)}\;e_2 ,}
+#' so the induced bias in \eqn{\hat\beta_{\sigma^2}} is
+#' \eqn{\delta^2 \mu_3/\mathrm{Var}(g)} exactly, the induced bias in
+#' \eqn{\hat\beta_\mu} is exactly zero, and both statements hold for
+#' \code{ols}, \code{gls}, \code{dwls} and \code{plugin_cor} alike, for any
+#' \eqn{\tau} grid. Two consequences worth stating plainly:
+#' \itemize{
+#'   \item \eqn{\sigma} \strong{cancels}. It appears in the bias and again in the
+#'     weight column, so the correction needs no phenotype SD and no new Stage 1
+#'     output. (\code{w_sd_ratio} exists only for the unusual case where the
+#'     \code{sd} passed to \code{make_weights_vqtl} was not the phenotype SD.)
+#'   \item Correcting \eqn{b(\tau)} before the projection and correcting the
+#'     coefficient after it are \emph{identical}, not merely similar. Correcting
+#'     afterwards is chosen because it is O(1) per variant and needs no refit.
+#' }
+#'
+#' \strong{Order of the expansion.} The derivation is second order in
+#' \eqn{\delta}. The third-order term is even in \eqn{z_\tau}, so it is
+#' orthogonal to the dispersion column and lands on \eqn{\beta_\mu} and on the
+#' fit residual instead. The first term that survives into
+#' \eqn{\beta_{\sigma^2}} is therefore \eqn{O(\delta^4)}: measured against an
+#' exact population calculation the relative error of this correction is
+#' \eqn{\approx 0.065\,(\delta/\sigma)^2}, i.e. 0.07\% at 0.1 SD per allele and
+#' 0.3\% at 0.2 SD per allele. It is the \emph{residual} bias after correction
+#' that matters, and it is smaller than the correction by that factor.
+#'
+#' @param beta_mu Numeric vector of estimated location coefficients.
+#' @param se_mu Numeric vector of their standard errors. Required when
+#'   \code{debias = TRUE}.
+#' @param eaf Frequency of the allele that \code{beta_mu} counts --- the
+#'   \strong{effect} allele frequency, not the folded MAF. The sign of
+#'   \eqn{1 - 2p} is the sign of the bias, so a folded MAF is not enough; see
+#'   \code{\link{correct_dispersion_skew}}. Length 1 or \code{length(beta_mu)}.
+#' @param mu3_over_var Optional direct value of \eqn{\mu_3/\mathrm{Var}(g)},
+#'   overriding \code{eaf}. Use this for dosages, or for any genotype law where
+#'   the Hardy-Weinberg identity \eqn{\mu_3/\mathrm{Var}(g) = 1 - 2p} does not
+#'   hold.
+#' @param debias Subtract \eqn{\mathrm{Var}(\hat\delta)} from \eqn{\hat\delta^2}.
+#'   \eqn{E[\hat\delta^2] = \delta^2 + \mathrm{se}_\mu^2}, so the raw square
+#'   over-states the bias by one squared standard error; subtracting it makes
+#'   the correction unbiased. The estimate can then go negative, which is
+#'   correct behaviour for an unbiased estimator of a non-negative quantity and
+#'   is not truncated. Default \code{TRUE}.
+#' @param w_sd_ratio Ratio (\code{sd} passed to \code{make_weights_vqtl}) /
+#'   (phenotype SD). Leave at 1 unless \code{W} was deliberately built on a
+#'   different scale.
+#'
+#' @return Numeric vector, the predicted bias in \code{beta_sigma2}.
+#' @seealso \code{\link{correct_dispersion_skew}}, \code{\link{dispersion_skew_guard}}
+#' @export
+dispersion_skew_bias <- function(beta_mu, se_mu = NULL, eaf = NULL,
+                                 mu3_over_var = NULL, debias = TRUE,
+                                 w_sd_ratio = 1) {
+  beta_mu <- as.numeric(beta_mu)
+  n <- length(beta_mu)
+  k <- .skew_k(eaf, mu3_over_var, n)
+  if (isTRUE(debias)) {
+    if (is.null(se_mu)) {
+      stop("se_mu is required when debias = TRUE (the correction subtracts ",
+           "Var(beta_mu_hat) from beta_mu_hat^2). Pass se_mu, or set debias = FALSE.")
+    }
+    se_mu <- as.numeric(se_mu)
+    if (length(se_mu) == 1L) se_mu <- rep(se_mu, n)
+    if (length(se_mu) != n) stop("se_mu must be length 1 or length(beta_mu).")
+    delta2 <- beta_mu^2 - se_mu^2
+  } else {
+    delta2 <- beta_mu^2
+  }
+  as.numeric(w_sd_ratio) * k * delta2
+}
+
+## mu3/Var(g), from an effect-allele frequency under Hardy-Weinberg, or given.
+.skew_k <- function(eaf, mu3_over_var, n) {
+  if (!is.null(mu3_over_var)) {
+    k <- as.numeric(mu3_over_var)
+    if (length(k) == 1L) k <- rep(k, n)
+    if (length(k) != n) stop("mu3_over_var must be length 1 or length(beta_mu).")
+    return(k)
+  }
+  if (is.null(eaf)) {
+    stop("Supply either eaf (the EFFECT allele frequency, signed) or mu3_over_var. ",
+         "Note that the folded MAF is not sufficient: 1 - 2p changes sign under ",
+         "p -> 1 - p, so an unoriented frequency would correct in the wrong ",
+         "direction half the time. dispersion_skew_guard() needs only the ",
+         "magnitude and so can fall back on d_resid; this correction cannot.")
+  }
+  p <- as.numeric(eaf)
+  if (length(p) == 1L) p <- rep(p, n)
+  if (length(p) != n) stop("eaf must be length 1 or length(beta_mu).")
+  k <- rep(NA_real_, n)
+  ok <- is.finite(p) & p > 0 & p < 1
+  k[ok] <- 1 - 2 * p[ok]
+  k
+}
+
+
+#' Correct the dispersion parameter for genotype-skewness bias
+#'
+#' Removes from \code{beta_sigma2} the second-order residue that a pure location
+#' effect leaves behind when the genotype distribution is skewed, and widens the
+#' standard error to pay for the estimation of that residue.
+#'
+#' @details
+#' The corrected estimate is
+#' \deqn{\tilde\beta_{\sigma^2} = \hat\beta_{\sigma^2}
+#'        - k\,(\hat\beta_\mu^2 - \mathrm{se}_\mu^2),\qquad k = \mu_3/\mathrm{Var}(g) = 1 - 2p,}
+#' see \code{\link{dispersion_skew_bias}} for why this is the right quantity and
+#' why it is exact for \code{ols} and \code{gls} alike.
+#'
+#' \strong{Why \eqn{\hat\delta} from the same fit, and why no iteration.}
+#' The bias is exactly collinear with the dispersion weight column, so it is
+#' absorbed by \eqn{\hat\beta_{\sigma^2}} \emph{in full} and
+#' \eqn{\hat\beta_\mu} carries none of it (verified exactly: the induced bias in
+#' \eqn{\hat\beta_\mu} is below \eqn{10^{-4}} of the bias in
+#' \eqn{\hat\beta_{\sigma^2}} at 0.2 SD per allele). \eqn{\hat\beta_\mu} is
+#' therefore an unbiased input to its own correction, there is no feedback loop,
+#' and iterating would change nothing. What \eqn{\hat\beta_\mu} \emph{is} is
+#' noisy and correlated with \eqn{\hat\beta_{\sigma^2}}; both are handled in the
+#' variance below, and the upward bias of the square is handled by
+#' \code{debias}.
+#'
+#' \strong{The standard error must widen, and it does.} The correction is a
+#' function of an estimate, so
+#' \deqn{\mathrm{Var}(\tilde\beta_{\sigma^2}) = \mathrm{se}_{\sigma^2}^2
+#'    + 4k^2\hat\beta_\mu^2\,\mathrm{se}_\mu^2 + 2k^2\,\mathrm{se}_\mu^4
+#'    - 4k\,\hat\beta_\mu\,c_l ,}
+#' where \eqn{c_l} is the within-variant sampling covariance from
+#' \code{param_cov_upper}. The middle two terms are the exact variance of
+#' \eqn{k\hat\beta_\mu^2} under joint normality (\eqn{4\delta^2 s^2 + 2s^4},
+#' with \eqn{\hat\beta_\mu^2} in place of \eqn{\delta^2}); the last is
+#' \eqn{-2\mathrm{Cov}(\hat\beta_{\sigma^2}, k\hat\beta_\mu^2)} using
+#' \eqn{\mathrm{Cov}(X, Y^2) = 2E[Y]\mathrm{Cov}(X,Y)}. The expression is
+#' non-negative for any admissible \eqn{c_l}, since
+#' \eqn{|4k\hat\beta_\mu c_l| \le \mathrm{se}_{\sigma^2}^2 + 4k^2\hat\beta_\mu^2
+#' \mathrm{se}_\mu^2} by Cauchy-Schwarz and AM-GM.
+#'
+#' Ignoring \eqn{c_l} is not safe: it is the term that keeps the corrected
+#' statistic calibrated when \code{gls} makes the two parameters strongly
+#' correlated. Pass \code{param_cov_upper}.
+#'
+#' \strong{When this is invalid.}
+#' \itemize{
+#'   \item \strong{It needs a signed effect-allele frequency.} \eqn{1 - 2p} is
+#'     odd about \eqn{p = 1/2}; correcting with an unoriented MAF would double
+#'     the bias half the time. Stage 1 does not emit a frequency, so
+#'     \code{eaf} must come from the genotype source.
+#'   \item \strong{It is specific to \code{make_weights_vqtl}} --- a
+#'     location/scale \code{W} on a Normal baseline, where
+#'     \eqn{f_0'/f_0 \propto z_\tau} makes the residue exactly collinear with
+#'     one column. Under a mixture or other \code{W} the residue is not a single
+#'     column and this correction does not apply.
+#'   \item \strong{The baseline should be Normal.} On a non-Normal baseline the
+#'     residue is \eqn{-(\delta^2/2)(\mu_3/\mathrm{Var} g) f_0'(q)/f_0(q)},
+#'     which is no longer proportional to \eqn{z_\tau}; the correction then
+#'     removes only the part of it that the \code{W} column can see. Measured
+#'     behaviour is reported in \code{docs/DISPERSION_SKEW_CORRECTION.md}.
+#'   \item It is second order in \eqn{\delta}; see
+#'     \code{\link{dispersion_skew_bias}} for the residual.
+#' }
+#'
+#' @param beta_mu Numeric vector of estimated location coefficients; its length
+#'   sets the number of variants.
+#' @param beta_sigma2 Estimated dispersion coefficients, length 1 or
+#'   \code{length(beta_mu)}.
+#' @param se_mu,se_sigma2 Their standard errors, length 1 or \code{length(beta_mu)}.
+#' @param cov_mu_sigma2 Within-variant sampling covariance between the two, from
+#'   \code{param_cov_upper}. If \code{NULL} it is taken as zero and a warning is
+#'   issued.
+#' @param eaf,mu3_over_var,debias,w_sd_ratio See \code{\link{dispersion_skew_bias}}.
+#' @param df Optional degrees of freedom for a t reference; Normal if \code{NULL}.
+#'
+#' @return A data frame with \code{bias_skew} (the amount subtracted),
+#'   \code{beta_sigma2_skewcorr}, \code{se_sigma2_skewcorr},
+#'   \code{z_sigma2_skewcorr}, \code{p_sigma2_skewcorr}.
+#'
+#' @examples
+#' # a 0.2 SD/allele location effect at EAF 0.01, no true dispersion effect
+#' correct_dispersion_skew(beta_mu = 0.2, beta_sigma2 = 0.0392,
+#'                         se_mu = 0.01, se_sigma2 = 0.012,
+#'                         cov_mu_sigma2 = 0, eaf = 0.01)
+#' @seealso \code{\link{dispersion_skew_bias}}, \code{\link{dispersion_skew_guard}},
+#'   \code{\link{residualise_dispersion}}
+#' @export
+correct_dispersion_skew <- function(beta_mu, beta_sigma2, se_mu, se_sigma2,
+                                    cov_mu_sigma2 = NULL, eaf = NULL,
+                                    mu3_over_var = NULL, debias = TRUE,
+                                    w_sd_ratio = 1, df = NULL) {
+  beta_mu <- as.numeric(beta_mu); n <- length(beta_mu)
+  rc <- function(x, nm) {
+    x <- as.numeric(x)
+    if (length(x) == 1L) x <- rep(x, n)
+    if (length(x) != n) stop(nm, " must be length 1 or length(beta_mu).")
+    x
+  }
+  beta_sigma2 <- rc(beta_sigma2, "beta_sigma2")
+  se_mu <- rc(se_mu, "se_mu"); se_sigma2 <- rc(se_sigma2, "se_sigma2")
+  if (is.null(cov_mu_sigma2)) {
+    warning("cov_mu_sigma2 not supplied; assuming the within-variant sampling ",
+            "covariance between beta_mu and beta_sigma2 is zero. Under GLS it ",
+            "is not, and the corrected SE will be wrong -- pass param_cov_upper.")
+    cov_mu_sigma2 <- rep(0, n)
+  }
+  cov_mu_sigma2 <- rc(cov_mu_sigma2, "cov_mu_sigma2")
+
+  k <- .skew_k(eaf, mu3_over_var, n) * as.numeric(w_sd_ratio)
+  bias <- dispersion_skew_bias(beta_mu, se_mu = se_mu, mu3_over_var = k,
+                               debias = debias, w_sd_ratio = 1)
+  est <- beta_sigma2 - bias
+  v <- se_sigma2^2 + 4 * k^2 * beta_mu^2 * se_mu^2 + 2 * k^2 * se_mu^4 -
+       4 * k * beta_mu * cov_mu_sigma2
+  v[!is.finite(v) | v < 0] <- NA_real_
+  se <- sqrt(v)
+  z <- est / se
+  p <- if (is.null(df)) 2 * stats::pnorm(-abs(z)) else 2 * stats::pt(-abs(z), df = df)
+  data.frame(bias_skew = bias, beta_sigma2_skewcorr = est,
+             se_sigma2_skewcorr = se, z_sigma2_skewcorr = z,
+             p_sigma2_skewcorr = p)
 }

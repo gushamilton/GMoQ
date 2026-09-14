@@ -328,8 +328,19 @@ on transportability (§5), not on power.
   `v = d_resid/N ~= 2p(1-p)` and `gskew = sqrt((1-2v)/v)`. That recovers the
   magnitude but **not the sign**, since `2p(1-p)` cannot separate `p` from `1-p`.
   This is why the guard flags rather than corrects — a threshold on |G| does not
-  need the sign. Emitting an allele frequency from Stage 1 would remove the
-  restriction and is the obvious follow-up.
+  need the sign.
+
+- **`dispersion_skew_bias(...)` / `correct_dispersion_skew(...)`** — mechanism (b)
+  is bias, so it can be **subtracted**, not only flagged. The residue is not merely
+  proportional to the dispersion weight column but is exactly
+  `delta^2 * (mu3/Var g)` times it, and every Stage 2 projection satisfies
+  `A W = I`, so the induced bias in `beta_sigma2` is exactly `delta^2 (1 - 2p)`,
+  the induced bias in `beta_mu` is exactly zero, and the phenotype SD cancels.
+  Subtracting it removes the artefact: the worst false-positive rate in the sweep
+  falls from 0.91 to 1.5e-09 at 5e-8, at no measurable cost on null variants or on
+  genuine dispersion effects. It needs a **signed** effect-allele frequency, which
+  is exactly what the guard does without — so the two are complementary rather
+  than alternatives. See `docs/DISPERSION_SKEW_CORRECTION.md`.
 
 - **`estimate_rav(...)`** — the genome-wide coupling, as a method of moments
   corrected for two contaminations an ordinary regression suffers:

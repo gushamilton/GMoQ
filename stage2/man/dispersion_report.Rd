@@ -11,6 +11,8 @@ dispersion_report(
   N = NULL,
   maf = NULL,
   n_eff = NULL,
+  eaf = NULL,
+  debias = TRUE,
   mu_name = "beta_mu",
   sigma2_name = "beta_sigma2"
 )
@@ -27,6 +29,13 @@ If \code{r_av} is \code{NULL} the residualised columns are omitted.}
 
 \item{maf, n_eff}{Allele frequency, or per-variant \code{d_resid}; see
 \code{\link{dispersion_skew_guard}}. If both are \code{NULL} the guard is omitted.}
+
+\item{eaf}{Signed effect-allele frequency. When supplied, the
+genotype-skewness-corrected dispersion columns are added; see
+\code{\link{correct_dispersion_skew}}. This must be oriented to the allele
+\code{beta_mu} counts -- \code{maf} is not a substitute.}
+
+\item{debias}{Passed to \code{\link{correct_dispersion_skew}}.}
 
 \item{mu_name, sigma2_name}{Parameter row names to use.}
 }

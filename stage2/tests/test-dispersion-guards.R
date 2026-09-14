@@ -165,4 +165,127 @@ w2 <- tryCatch({ dispersion_report(list(params = fake$params, SE_params = fake$S
 stopifnot(identical(w2, "warned"))
 ok("warns when param_cov_upper is absent")
 
+
+
+cat("\n== dispersion_skew_bias / correct_dispersion_skew ==\n")
+
+## --- the identity the whole correction rests on: A W = I, so the bias vector
+## --- (which IS delta^2 k times the dispersion column) projects onto
+## --- beta_sigma2 in full and onto beta_mu not at all -- for ols AND gls.
+TAUS <- seq(0.02, 0.98, length.out = 45)
+zt <- qnorm(TAUS); sdY <- 1.3
+Wv <- make_weights_vqtl(TAUS, q_tau = sdY * zt, mu = 0, sd = sdY)
+Sig <- outer(TAUS, TAUS, pmin) - outer(TAUS, TAUS) + diag(1e-8, length(TAUS))
+delta <- 0.2; pfreq <- 0.01; kk <- 1 - 2 * pfreq
+bias_b <- (delta^2 / (2 * sdY)) * kk * zt          # the derived bias in b(tau)
+for (nm in c("ols", "gls")) {
+  A <- if (nm == "ols") solve(crossprod(Wv), t(Wv)) else
+       solve(t(Wv) %*% solve(Sig) %*% Wv, t(Wv) %*% solve(Sig))
+  stopifnot(near(A %*% Wv, diag(2), 1e-10))
+  proj <- drop(A %*% bias_b)
+  stopifnot(abs(proj[1]) < 1e-12)                 # nothing lands on the location term
+  stopifnot(near(proj[2], delta^2 * kk, 1e-12))   # all of it lands on the scale term
+}
+ok("A W = I, so the bias projects onto beta_sigma2 in full: identical for ols and gls")
+
+## correcting b(tau) BEFORE the projection == correcting the coefficient AFTER
+b_obs <- rep(delta, length(TAUS)) + bias_b
+for (nm in c("ols", "gls")) {
+  A <- if (nm == "ols") solve(crossprod(Wv), t(Wv)) else
+       solve(t(Wv) %*% solve(Sig) %*% Wv, t(Wv) %*% solve(Sig))
+  before <- drop(A %*% (b_obs - bias_b))
+  after  <- drop(A %*% b_obs) - c(0, delta^2 * kk)
+  stopifnot(near(before, after, 1e-12))
+}
+ok("correcting b(tau) first and correcting the coefficient after are identical")
+
+## --- the point estimate ---------------------------------------------------
+stopifnot(near(dispersion_skew_bias(0.2, 0.0, eaf = 0.01), 0.04 * 0.98, 1e-12))
+ok("bias = (1 - 2p) * beta_mu^2")
+stopifnot(near(dispersion_skew_bias(0.2, 0.01, eaf = 0.01),
+               0.98 * (0.04 - 1e-4), 1e-12))
+ok("debias subtracts Var(beta_mu_hat) from beta_mu_hat^2")
+stopifnot(near(dispersion_skew_bias(0.2, 0.01, eaf = 0.01, debias = FALSE),
+               0.98 * 0.04, 1e-12))
+ok("debias = FALSE leaves the raw square")
+
+stopifnot(abs(dispersion_skew_bias(5, 0.01, eaf = 0.5)) < 1e-15)
+ok("exactly zero at EAF 0.5, for any beta_mu")
+
+## a dispersion effect is invariant under an allele flip, and so is the correction:
+## flipping sends p -> 1-p and beta -> -beta, and both b(tau) and the bias change sign.
+stopifnot(near(dispersion_skew_bias(0.2, 0.01, eaf = 0.01),
+               -dispersion_skew_bias(-0.2, 0.01, eaf = 0.99), 1e-14))
+ok("covariant under an allele flip")
+
+## the sign is not recoverable from an unoriented frequency, so it is refused
+stopifnot(inherits(try(dispersion_skew_bias(0.2, 0.01), silent = TRUE), "try-error"))
+ok("refuses to guess: an effect-allele frequency or mu3_over_var is mandatory")
+
+## dosages / non-HWE: mu3_over_var overrides the 1 - 2p identity
+stopifnot(near(dispersion_skew_bias(0.2, 0.0, mu3_over_var = 0.37), 0.04 * 0.37, 1e-12))
+ok("mu3_over_var overrides the Hardy-Weinberg identity")
+
+## --- the standard error ---------------------------------------------------
+bm <- 0.2; sm <- 0.01; ss <- 0.012; cl <- 1.3e-5; kk <- 1 - 2 * 0.01
+cc <- correct_dispersion_skew(bm, 0.05, sm, ss, cl, eaf = 0.01)
+v_expect <- ss^2 + 4 * kk^2 * bm^2 * sm^2 + 2 * kk^2 * sm^4 - 4 * kk * bm * cl
+stopifnot(near(cc$se_sigma2_skewcorr, sqrt(v_expect), 1e-14))
+ok("SE is the stated delta-method variance including the within-variant covariance")
+stopifnot(cc$se_sigma2_skewcorr > ss)
+ok("the SE widens: the correction is estimated, and that is paid for")
+
+## non-negative for any admissible covariance (|c| <= se_mu * se_sigma2)
+cg <- seq(-1, 1, by = 0.05) * sm * ss
+vv <- correct_dispersion_skew(rep(bm, length(cg)), rep(0.05, length(cg)),
+                              sm, ss, cg, eaf = 0.01)
+stopifnot(all(is.finite(vv$se_sigma2_skewcorr)), all(vv$se_sigma2_skewcorr > 0))
+ok("variance stays positive across the whole admissible covariance range")
+
+## length-1 arguments recycle against beta_mu
+r1 <- correct_dispersion_skew(c(0.1, 0.2), 0.05, sm, ss, cl, eaf = 0.01)
+r2 <- correct_dispersion_skew(c(0.1, 0.2), c(0.05, 0.05), c(sm, sm),
+                              c(ss, ss), c(cl, cl), eaf = c(0.01, 0.01))
+stopifnot(near(unlist(r1), unlist(r2), 1e-14), nrow(r1) == 2L)
+ok("length-1 arguments recycle to length(beta_mu)")
+
+## on a null variant the correction is a no-op to within its own noise
+nn <- correct_dispersion_skew(0, 0.001, sm, ss, 0, eaf = 0.01)
+## the whole correction is then -k*se_mu^2, which is a hundredth of a standard error
+stopifnot(abs(nn$bias_skew) / ss < 0.01, nn$se_sigma2_skewcorr / ss < 1.0001)
+ok("costs essentially nothing when there is no location effect")
+
+## --- end to end: a pure location effect at a skewed genotype --------------
+## RIF-OLS b(tau) generated at the POPULATION estimand, plus sampling noise, so
+## every rejection of beta_sigma2 is false by construction.
+set.seed(11)
+Nrep <- 20000
+kk <- 1 - 2 * 0.01
+A <- solve(crossprod(Wv), t(Wv))
+V <- A %*% Sig %*% t(A) / 4000          # a plausible parameter covariance
+th <- c(0.2, 0.2^2 * kk)                 # truth: location 0.2, dispersion ZERO + bias
+L <- chol(V)
+Z <- matrix(rnorm(2 * Nrep), nrow = 2)
+hat <- th + t(L) %*% Z
+se1 <- sqrt(V[1, 1]); se2 <- sqrt(V[2, 2]); c12 <- V[1, 2]
+r_unc <- mean(abs(hat[2, ] / se2) > 1.959964)
+cc <- correct_dispersion_skew(hat[1, ], hat[2, ], se1, se2, c12, eaf = 0.01)
+r_cor <- mean(abs(cc$z_sigma2_skewcorr) > 1.959964)
+cat(sprintf("   false dispersion rate at 0.05: %.4f uncorrected, %.4f corrected (nominal 0.05)\n",
+            r_unc, r_cor))
+stopifnot(r_unc > 0.20)                  # the artefact is there
+stopifnot(abs(r_cor - 0.05) < 0.01)      # and the correction removes it
+ok("a pure location effect's false dispersion rate returns to nominal")
+
+## --- dispersion_report wiring ---------------------------------------------
+rep3 <- dispersion_report(fake, N = 461320, maf = 0.3, eaf = 0.3)
+stopifnot(all(c("bias_skew", "beta_sigma2_skewcorr", "se_sigma2_skewcorr",
+                "z_sigma2_skewcorr", "p_sigma2_skewcorr") %in% names(rep3)))
+ok("dispersion_report adds the corrected columns when eaf is supplied")
+stopifnot(near(rep3$beta_sigma2, v_hat[1:P], 1e-12))
+ok("and still preserves the uncorrected estimate verbatim")
+rep4 <- dispersion_report(fake, N = 461320, maf = 0.3)
+stopifnot(!("beta_sigma2_skewcorr" %in% names(rep4)))
+ok("no eaf supplied => no corrected columns invented")
+
 cat("\nAll dispersion-guard tests passed.\n")
