@@ -353,3 +353,109 @@ def test_resolve_loco_files_is_invariant_to_python_hash_seed(tmp_path: Path):
             capture_output=True, text=True, env=env, check=True,
         )
         assert json.loads(out.stdout) == expected, f"mapping changed under PYTHONHASHSEED={seed}"
+
+
+# --- LOCO scaling (docs/LOCO_SCALE.md) --------------------------------------
+
+def _loco_fixture(seed=0, n=4000, y_sd=0.1665, pred_sd=0.3438, rho=0.333):
+    """
+    A phenotype and a *standardised* LOCO prediction, mimicking REGENIE: the
+    prediction's sd is fixed regardless of the phenotype's own sd, and the
+    correlation between them is rho. Matches the log_bmi row of docs/LOCO_SCALE.md.
+    """
+    rng = np.random.default_rng(seed)
+    z = rng.standard_normal(n)
+    e = rng.standard_normal(n)
+    y_std = rho * z + np.sqrt(1.0 - rho ** 2) * e
+    y = 3.3 + y_sd * y_std
+    pred = pred_sd * z
+    return y, {"22": pred}
+
+
+def test_resolve_loco_scale_sd_recovers_phenotype_scale():
+    from fungwas_stage1.cli import resolve_loco_scale
+    y, per_chr = _loco_fixture()
+    scale = resolve_loco_scale("sd", y, per_chr, "log_bmi")
+    assert scale == pytest.approx(np.std(y), rel=1e-12)
+
+
+def test_resolve_loco_scale_regression_matches_ols_slope():
+    from fungwas_stage1.cli import resolve_loco_scale
+    y, per_chr = _loco_fixture()
+    scale = resolve_loco_scale("regression", y, per_chr, "log_bmi")
+    pred = per_chr["22"]
+    expected = np.cov(y, pred, ddof=1)[0, 1] / np.var(pred, ddof=1)
+    assert scale == pytest.approx(expected, rel=1e-10)
+
+
+def test_resolve_loco_scale_none_and_literal():
+    from fungwas_stage1.cli import resolve_loco_scale
+    y, per_chr = _loco_fixture()
+    assert resolve_loco_scale("none", y, per_chr, "log_bmi") == 1.0
+    assert resolve_loco_scale("0.25", y, per_chr, "log_bmi") == pytest.approx(0.25)
+    with pytest.raises(ValueError):
+        resolve_loco_scale("nonsense", y, per_chr, "log_bmi")
+
+
+def test_unscaled_loco_inflates_variance_but_scaled_loco_reduces_it():
+    """
+    The defect in one assertion: for a phenotype with sd < sd(LOCO), subtracting
+    the raw prediction increases the residual variance. Scaling by sd(Y) reduces it.
+    """
+    from fungwas_stage1.cli import resolve_loco_scale
+    y, per_chr = _loco_fixture()
+    pred = per_chr["22"]
+
+    var_raw = np.var(y, ddof=1)
+    var_unscaled = np.var(y - pred, ddof=1)
+    var_scaled = np.var(y - resolve_loco_scale("sd", y, per_chr, "log_bmi") * pred, ddof=1)
+
+    assert var_unscaled > 3.0 * var_raw          # injects noise: ~3.9x in the real data
+    assert var_scaled < var_raw                  # removes it
+    assert var_scaled == pytest.approx((1.0 - 0.333 ** 2) * var_raw, rel=0.05)
+
+
+def test_loco_scale_warns_when_subtracted_term_dominates(caplog):
+    from fungwas_stage1.cli import resolve_loco_scale
+    import logging
+    y, per_chr = _loco_fixture()
+    with caplog.at_level(logging.WARNING):
+        resolve_loco_scale("none", y, per_chr, "log_bmi")
+    assert any("INCREASE the residual variance" in r.message for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        resolve_loco_scale("sd", y, per_chr, "log_bmi")
+    assert not any("INCREASE the residual variance" in r.message for r in caplog.records)
+
+
+def test_rint_like_phenotype_is_unaffected_by_the_fix():
+    """sd(Y) == 1 is the one case where the old behaviour was already correct."""
+    from fungwas_stage1.cli import resolve_loco_scale
+    y, per_chr = _loco_fixture(y_sd=1.0, pred_sd=0.3431)
+    y = y - y.mean()
+    assert resolve_loco_scale("sd", y, per_chr, "rint_bmi") == pytest.approx(1.0, rel=0.02)
+
+
+def test_compute_chr_rif_residuals_applies_the_scale():
+    y, per_chr = _loco_fixture(n=800)
+    taus = np.linspace(0.1, 0.9, 9)
+    X = np.ones((y.size, 1))
+    mask = np.ones(y.size, dtype=bool)
+
+    unscaled, _, _ = compute_chr_rif_residuals(
+        ["log_bmi"], {"log_bmi": y}, X, taus, {"log_bmi": per_chr}, "22", mask
+    )
+    half, _, _ = compute_chr_rif_residuals(
+        ["log_bmi"], {"log_bmi": y}, X, taus, {"log_bmi": per_chr}, "22", mask,
+        loco_scales={"log_bmi": 0.5}
+    )
+    explicit_one, _, _ = compute_chr_rif_residuals(
+        ["log_bmi"], {"log_bmi": y}, X, taus, {"log_bmi": per_chr}, "22", mask,
+        loco_scales={"log_bmi": 1.0}
+    )
+
+    # omitting loco_scales must stay identical to an explicit factor of 1
+    assert np.allclose(unscaled[0], explicit_one[0])
+    # and a different factor must actually change the residualised RIF
+    assert not np.allclose(unscaled[0], half[0])
