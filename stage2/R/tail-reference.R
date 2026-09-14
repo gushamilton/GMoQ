@@ -69,6 +69,10 @@ C_SCALE_DEFAULT <- 2.62
 #' @keywords internal
 FALLBACK_N_EFF_DEFAULT <- 9134
 
+#' Highest \code{.cov.meta.json} schema version this Stage 2 understands
+#' @keywords internal
+COV_META_VERSION_MAX <- 4L
+
 #' Stage 1 TSV column carrying the per-SNP N_eff
 #' @keywords internal
 N_EFF_COLUMN <- "d_resid"
@@ -133,37 +137,49 @@ N_EFF_COLUMN <- "d_resid"
 .read_cov_meta <- function(path) {
   if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
   if (requireNamespace("jsonlite", quietly = TRUE)) {
-    return(jsonlite::fromJSON(path, simplifyVector = TRUE))
-  }
-  txt <- paste(readLines(path, warn = FALSE), collapse = " ")
-  list(
-    cov_meta_version = .json_number(txt, "cov_meta_version"),
-    jackknife = list(
-      n_blocks          = .json_number(txt, "n_blocks"),
-      n_blocks_nonempty = .json_number(txt, "n_blocks_nonempty"),
-      nu                = .json_number(txt, "nu"),
-      nu_source         = .json_string(txt, "nu_source"),
-      df_model = list(
-        n_eff_column   = .json_string(txt, "n_eff_column"),
-        c_location     = .json_number(txt, "c_location"),
-        c_scale        = .json_number(txt, "c_scale"),
-        fallback_n_eff = .json_number(txt, "fallback_n_eff")
+    m <- jsonlite::fromJSON(path, simplifyVector = TRUE)
+  } else {
+    txt <- paste(readLines(path, warn = FALSE), collapse = " ")
+    m <- list(
+      cov_meta_version = .json_number(txt, "cov_meta_version"),
+      jackknife = list(
+        n_blocks          = .json_number(txt, "n_blocks"),
+        n_blocks_nonempty = .json_number(txt, "n_blocks_nonempty"),
+        nu                = .json_number(txt, "nu"),
+        nu_source         = .json_string(txt, "nu_source"),
+        df_model = list(
+          n_eff_column   = .json_string(txt, "n_eff_column"),
+          c_location     = .json_number(txt, "c_location"),
+          c_scale        = .json_number(txt, "c_scale"),
+          fallback_n_eff = .json_number(txt, "fallback_n_eff")
+        )
+      ),
+      # Provenance of the scan (schema version 4 and later). Only the pooled
+      # covariance path reads it, and it reads it to REFUSE: a Sigma_0 whose
+      # fingerprint disagrees with this block belongs to a different phenotype,
+      # covariate set, tau grid, LOCO predictor or sample, and using it would bias
+      # every standard error in the same direction invisibly.
+      analysis = if (is.na(.json_string(txt, "fingerprint"))) NULL else list(
+        phenotype      = .json_string(txt, "phenotype"),
+        n_samples      = .json_number(txt, "n_samples"),
+        n_covariates   = .json_number(txt, "n_covariates"),
+        covariates     = .json_string_array(txt, "covariates"),
+        loco_predictor = .json_string(txt, "loco_predictor"),
+        loco_scale_mode = .json_string(txt, "loco_scale_mode"),
+        loco_scale_factor = .json_number(txt, "loco_scale_factor"),
+        fingerprint    = .json_string(txt, "fingerprint")
       )
-    ),
-    # Provenance of the scan (schema version 4 and later). Only the pooled
-    # covariance path reads it, and it reads it to REFUSE: a Sigma_0 whose
-    # fingerprint disagrees with this block belongs to a different phenotype,
-    # covariate set, tau grid, LOCO predictor or sample, and using it would bias
-    # every standard error in the same direction invisibly.
-    analysis = if (is.na(.json_string(txt, "fingerprint"))) NULL else list(
-      phenotype      = .json_string(txt, "phenotype"),
-      n_samples      = .json_number(txt, "n_samples"),
-      n_covariates   = .json_number(txt, "n_covariates"),
-      covariates     = .json_string_array(txt, "covariates"),
-      loco_predictor = .json_string(txt, "loco_predictor"),
-      fingerprint    = .json_string(txt, "fingerprint")
     )
-  )
+  }
+  # Validate schema version
+  v <- suppressWarnings(as.numeric(m$cov_meta_version)[1L])
+  if (is.finite(v) && v > COV_META_VERSION_MAX) {
+    stop("Covariance metadata ", path, " declares schema version ",
+         m$cov_meta_version, ", which this version of fungwasStage2 does not ",
+         "understand (it reads up to ", COV_META_VERSION_MAX, "). Upgrade the ",
+         "package rather than reading a schema it may misinterpret.", call. = FALSE)
+  }
+  m
 }
 
 #' First finite positive scalar among its arguments

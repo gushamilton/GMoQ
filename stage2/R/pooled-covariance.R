@@ -146,6 +146,8 @@ SIGMA0_META_VERSION_MAX <- 1L
       n_covariates        = .json_number(txt, "n_covariates"),
       covariates          = .json_string_array(txt, "covariates"),
       loco_predictor      = .json_string(txt, "loco_predictor"),
+      loco_scale_mode     = .json_string(txt, "loco_scale_mode"),
+      loco_scale_factor   = .json_number(txt, "loco_scale_factor"),
       chromosomes         = .json_string_array(txt, "chromosomes"),
       fingerprint         = .json_string(txt, "fingerprint")
     )
@@ -287,6 +289,10 @@ read_sigma0 <- function(sigma0_file) {
       as.character(s0_meta$covariates), as.character(analysis$covariates))
   cmp("loco_predictor", "the LOCO predictor",
       s0_meta$loco_predictor, analysis$loco_predictor)
+  cmp("loco_scale_mode", "the LOCO scale mode",
+      s0_meta$loco_scale_mode, analysis$loco_scale_mode)
+  cmp("loco_scale_factor", "the LOCO scale factor",
+      s0_meta$loco_scale_factor, analysis$loco_scale_factor)
   cmp("fingerprint", "the analysis fingerprint",
       s0_meta$fingerprint, analysis$fingerprint)
 

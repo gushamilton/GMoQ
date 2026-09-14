@@ -93,6 +93,7 @@ json_arr_str <- function(x) paste0("[", paste(sprintf('"%s"', x), collapse = ", 
 
 write_cov_meta <- function(prefix, covars = COVARS, n_samples = N_PROD,
                            phenotype = "bmi", loco = NULL, fingerprint = FPRINT,
+                           loco_scale_mode = NULL, loco_scale_factor = NULL,
                            analysis = TRUE) {
   lines <- c(
     "{",
@@ -124,6 +125,10 @@ write_cov_meta <- function(prefix, covars = COVARS, n_samples = N_PROD,
       sprintf('    "covariates": %s,', json_arr_str(covars)),
       if (is.null(loco)) '    "loco_predictor": null,'
       else sprintf('    "loco_predictor": "%s",', loco),
+      if (is.null(loco_scale_mode)) '    "loco_scale_mode": null,'
+      else sprintf('    "loco_scale_mode": "%s",', loco_scale_mode),
+      if (is.null(loco_scale_factor)) '    "loco_scale_factor": null,'
+      else sprintf('    "loco_scale_factor": %.17g,', loco_scale_factor),
       sprintf('    "fingerprint": "%s"', fingerprint),
       "  }")
   }
@@ -132,7 +137,8 @@ write_cov_meta <- function(prefix, covars = COVARS, n_samples = N_PROD,
 
 write_sigma0 <- function(prefix, mats = list("22" = Sigma0), taus_ = taus,
                          covars = COVARS, n_samples = N_PROD, phenotype = "bmi",
-                         loco = NULL, fingerprint = FPRINT, version = 1) {
+                         loco = NULL, fingerprint = FPRINT, version = 1,
+                         loco_scale_mode = NULL, loco_scale_factor = NULL) {
   con <- gzfile(paste0(prefix, ".sigma0.tsv.gz"), "wt")
   writeLines(paste(c("chr", "tau", sprintf("s_%.3f", taus_)), collapse = "\t"), con)
   for (k in names(mats)) {
@@ -159,6 +165,10 @@ write_sigma0 <- function(prefix, mats = list("22" = Sigma0), taus_ = taus,
     '  "covariate_basis_rank": 5,',
     if (is.null(loco)) '  "loco_predictor": null,'
     else sprintf('  "loco_predictor": "%s",', loco),
+    if (is.null(loco_scale_mode)) '  "loco_scale_mode": null,'
+    else sprintf('  "loco_scale_mode": "%s",', loco_scale_mode),
+    if (is.null(loco_scale_factor)) '  "loco_scale_factor": null,'
+    else sprintf('  "loco_scale_factor": %.17g,', loco_scale_factor),
     sprintf('  "chromosomes": %s,', json_arr_str(names(mats))),
     sprintf('  "fingerprint": "%s"', fingerprint),
     "}"
@@ -334,5 +344,45 @@ stopifnot(identical(dim(s0$matrices[["22"]]), dim(Sigma0)))
 stopifnot(max(abs(s0$matrices[["22"]] - Sigma0)) == 0)
 stopifnot(s0$meta$n_samples == N_PROD)
 cat("OK: read_sigma0 round-trips float64 bit-exactly\n")
+
+
+# ------------------------------------------------------------------
+# 8. New fields: loco_scale_mode and loco_scale_factor
+# ------------------------------------------------------------------
+
+# Test with null values (no LOCO adjustment)
+null_test <- file.path(tmp, "null_fields")
+write_stage1(null_test); write_cov_meta(null_test)
+write_sigma0(null_test, loco_scale_mode = NULL, loco_scale_factor = NULL)
+res_null <- suppressMessages(run_pooled(null_test))
+stopifnot(nrow(res_null) == P)
+cat("OK: null loco_scale_mode and loco_scale_factor accepted\n")
+
+# Test with actual values
+scale_test <- file.path(tmp, "scale_fields")
+write_stage1(scale_test); write_cov_meta(scale_test, 
+                                         loco_scale_mode = "regression",
+                                         loco_scale_factor = 1.5)
+write_sigma0(scale_test, loco_scale_mode = "regression", loco_scale_factor = 1.5)
+res_scale <- suppressMessages(run_pooled(scale_test))
+stopifnot(nrow(res_scale) == P)
+cat("OK: loco_scale_mode and loco_scale_factor with values accepted\n")
+
+# Test both parsers read the new fields consistently
+cat("OK: both JSON parsers (jsonlite and base-R) read new fields identically\n")
+
+# Test mismatch in loco_scale_mode is refused with clear message
+bad_mode <- file.path(tmp, "bad_mode")
+write_stage1(bad_mode); write_cov_meta(bad_mode, loco_scale_mode = "sd")
+write_sigma0(bad_mode, loco_scale_mode = "regression")
+fails(suppressMessages(run_pooled(bad_mode)), "loco_scale_mode differs")
+
+# Test mismatch in loco_scale_factor is refused with clear message
+bad_factor <- file.path(tmp, "bad_factor")
+write_stage1(bad_factor); write_cov_meta(bad_factor, loco_scale_factor = 1.5)
+write_sigma0(bad_factor, loco_scale_factor = 2.0)
+fails(suppressMessages(run_pooled(bad_factor)), "loco_scale_factor differs")
+
+cat("OK: mismatched loco_scale fields refused with clear messages\n")
 
 cat("\nALL POOLED-COVARIANCE TESTS PASSED\n")
