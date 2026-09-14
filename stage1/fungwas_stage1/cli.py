@@ -16,7 +16,6 @@ Outputs:
 
 import argparse
 import gzip
-import json
 import logging
 import os
 import re
@@ -43,6 +42,7 @@ from .core import (
     set_numpy_fallback_allowed,
     require_cpp_extension,
 )
+from .cov_meta import build_cov_meta, write_cov_meta
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1240,15 +1240,17 @@ def main():
             logger.info(f"Wrote R_tau: {rtau_file}")
     
     elapsed = time.time() - t_start
+    # Record the jackknife block count (and hence the degrees of freedom of the
+    # estimated tau-covariance) so Stage 2 can read theta/SE against a t_nu
+    # reference instead of a normal one. See fungwas_stage1/cov_meta.py.
+    cov_meta = build_cov_meta(
+        cov_dtype=args.cov_dtype,
+        n_taus=T,
+        n_blocks=args.blocks,
+        seed=args.seed,
+    )
     for meta_path in out_cov_meta_list:
-        with open(meta_path, 'w') as f:
-            json.dump({
-                "cov_dtype": args.cov_dtype,
-                "n_taus": int(T),
-                "n_cov_elements": int(n_cov_elements),
-                "record_bytes": int(n_cov_elements if args.cov_dtype == 'int8' else n_cov_elements * 4),
-                "scale_file": bool(args.cov_dtype == 'int8')
-            }, f, indent=2)
+        write_cov_meta(meta_path, cov_meta)
     log_mem(
         f"Batch compute time: {total_compute:.1f}s, write time: {total_write:.1f}s, "
         f"batch total: {time.perf_counter() - t_batches:.1f}s"
