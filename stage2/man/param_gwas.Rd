@@ -52,14 +52,26 @@ param_gwas(
 \code{se_mode = "diagonal"} explicitly only for fallback/debug runs.}
 
 \item{tau_cov_estimator}{Estimator used when \code{se_mode = "tau_cov"} and
-covariance data are available. Defaults to \code{"gls"}: the per-SNP
-tau-by-tau covariance is used as the weight matrix for generalized least
-squares, which is the efficient (minimum-variance) estimator under the
-Stage 1 covariance and gives correctly calibrated SEs and Q statistics
-when the quantile estimates are strongly correlated across taus.
-\code{"ols"} remains fully available and preserves the fixed unweighted
-projection with covariance-propagated SEs; it is consistent but less
-efficient, and is retained for reproducing earlier runs.}
+covariance data are available. Defaults to \code{"ols"}: the fixed
+unweighted projection with covariance-propagated SEs.
+
+\code{"gls"} uses the per-SNP tau-by-tau covariance as the weight matrix,
+and is the efficient estimator when the fitted model is correct. Measured
+on 28 known-truth cells at 20,000 replicates (see \code{docs/OLS_VS_GLS.md}),
+GLS estimates are 17-24 percent less variable than OLS on the additive,
+sigma2 and kurtosis parameters, at the same coverage: both give 0.9499
+under the null against a 0.95 nominal.
+
+OLS is the default because it degrades more gracefully when the fitted
+model is wrong. Where lack of fit exceeds three per-tau standard errors,
+GLS coverage falls to 0.9359 against OLS's 0.9448 and its bias is four
+times larger (0.128 against 0.033 empirical SDs); it also appears most
+efficient there, because the estimates cluster tightly around the wrong
+answer. Those cells are concentrated at rare MAF and skewed phenotypes
+carrying a scale effect, which is where a variance-QTL claim would live.
+
+Prefer \code{"gls"} for analyses whose model fit has been checked --
+\code{Q} measures exactly the separating quantity per variant.}
 
 \item{gls_ridge}{Relative diagonal ridge added only when a per-SNP covariance
 matrix cannot be inverted for GLS.}

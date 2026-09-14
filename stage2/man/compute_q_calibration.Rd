@@ -27,7 +27,7 @@ Numeric matrix (n_snps x 6): c1, c2, c3, c4, p_saddle, n_eig.
 }
 \description{
 Computes, for each SNP, the power sums of the eigenvalues of
-\code{D^-1/2 M Sigma M' D^-1/2} together with a saddlepoint tail
+\code{D^-1/2 M Sigma t(M) D^-1/2} together with a saddlepoint tail
 probability for the observed \code{Q}. Uses \code{Sigma} only; it never
 inverts or factorises it, so it is valid on the stored int8 covariance.
 }
