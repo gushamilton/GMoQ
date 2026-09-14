@@ -375,13 +375,13 @@ cat("OK: both JSON parsers (jsonlite and base-R) read new fields identically\n")
 bad_mode <- file.path(tmp, "bad_mode")
 write_stage1(bad_mode); write_cov_meta(bad_mode, loco_scale_mode = "sd")
 write_sigma0(bad_mode, loco_scale_mode = "regression")
-fails(suppressMessages(run_pooled(bad_mode)), "loco_scale_mode differs")
+fails(suppressMessages(run_pooled(bad_mode)), "the LOCO scale mode differs")
 
 # Test mismatch in loco_scale_factor is refused with clear message
 bad_factor <- file.path(tmp, "bad_factor")
 write_stage1(bad_factor); write_cov_meta(bad_factor, loco_scale_factor = 1.5)
 write_sigma0(bad_factor, loco_scale_factor = 2.0)
-fails(suppressMessages(run_pooled(bad_factor)), "loco_scale_factor differs")
+fails(suppressMessages(run_pooled(bad_factor)), "the LOCO scale factor differs")
 
 cat("OK: mismatched loco_scale fields refused with clear messages\n")
 
