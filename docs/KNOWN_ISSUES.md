@@ -268,3 +268,65 @@ skew.
    replaces the search path rather than prepending, so setting `R_LIBS_USER`
    silently loads the wrong package. Assert the loaded package path; do not
    trust the environment variable.
+
+---
+
+## 7. Residual calibration gap for scale parameters (as of 2026-09-14)
+
+The `t`-reference fix removes most, but not all, of the tail miscalibration.
+Measured on a single simulation containing both null and causal variants
+(200 replicates, 2.24M null tests), actual/nominal Type-I error at B=1000:
+
+| parameter | p=0.05 | p=1e-3 | p=1e-4 |
+|---|---|---|---|
+| location (`mu`) | 1.001 | 1.042 | 1.125 |
+| scale | 1.006 | **1.074** | **1.357** |
+
+Location parameters are within 1.3 standard errors of nominal everywhere.
+Scale parameters sit 2.6-3.1 standard errors above it; pooling two independent
+arms gives 1.066 +/- 0.023, i.e. 2.9 SE. That is real, not Monte Carlo noise.
+
+For context the fix removes 93% of the gap: at p=5e-8 the sequence is
+normal 1.566, `t_{B-1}` 1.251, per-SNP `nu` 1.037.
+
+The cause is not the degrees-of-freedom law, which was checked independently
+on the same panel and is correct to within 1% (implied `c` 0.86 against 0.88
+shipped for location, 2.72 against 2.62 for scale). The residual is that `r =
+SE_hat/SE_true` is slightly heavier-tailed than `sqrt(chi2_nu/nu)` for a scale
+contrast, which the `t` reference assumes exactly.
+
+**Consequence**: scale and shape parameters are mildly anti-conservative in the
+tail. Treat a scale-parameter p-value near a threshold with more caution than a
+location-parameter one. This was not measured at production sample size, where
+the margin is expected to be smaller.
+
+## 8. Kernel density bandwidth (as of 2026-09-14)
+
+`stage1/fungwas_stage1/core.py` selects the bandwidth as
+`h = 1.06 * np.std(Y) * N**(-0.2)` -- Silverman's rule without a robustness
+guard. For bimodal phenotypes the standard deviation is inflated by the
+separation between modes, making `h` 3.2-3.4x too wide.
+
+Measured distortion in `f_hat` on real phenotypes: `bmi` 0.41%, `log_bmi`
+0.17%, `weight` 0.64%, `jcv_log_all` 2.78%, **`testosterone` 15.85%**,
+**`mcv_log_all` 22.07%**.
+
+Downstream consequence is small. Because `b_tau` and `se_tau` are both
+proportional to `1/f_hat`, the density cancels from any single-quantile Wald
+test. It does not cancel from `Q`. Recomputing `Q` under a Sheather-Jones
+bandwidth on 8,000 real SNPs per trait moves the median by +0.08 (bmi/additive)
+and +0.003 (testosterone/skew), but +0.82, or +6.7%, for `mcv_log_all`. Model
+selection over the four BMI models flips 34 of 7,992 SNPs (0.43%), every one a
+tie.
+
+The direction is **conservative**: correcting the bandwidth makes `Q` larger,
+so the current rule does not manufacture apparent lack of fit.
+
+**Do not** replace it with `0.9 * min(sd, IQR/1.34)`. For the bimodal traits the
+mode separation inflates the IQR more than the standard deviation, so the
+`min()` never binds and the rule degenerates to a flat rescaling -- inert
+exactly where the problem is. A Sheather-Jones plug-in is the recommended
+replacement at the next re-scan; it removes 92% of the bimodal bias and reduces
+to approximately the current bandwidth for near-normal traits.
+
+`mcv_log_all` (N=9,365) is the one trait where a shape conclusion could move.
