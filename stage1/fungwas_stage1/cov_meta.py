@@ -27,6 +27,7 @@ Schema (version 2)::
       "jackknife": {
         "method": "delete_one_block",
         "n_blocks": 1000,
+        "n_blocks_nonempty": 1000,
         "seed": 42,
         "nu": 999,
         "nu_source": "blocks_minus_one"
@@ -82,6 +83,7 @@ def build_cov_meta(
     seed: Optional[int] = None,
     nu: Optional[float] = None,
     nu_source: Optional[str] = None,
+    n_blocks_nonempty: Optional[int] = None,
 ) -> dict:
     """Build the ``.cov.meta.json`` payload.
 
@@ -99,6 +101,12 @@ def build_cov_meta(
         Degrees of freedom to advertise to Stage 2.  Defaults to ``B - 1``.
     nu_source : str, optional
         How ``nu`` was arrived at.  Defaults to ``"blocks_minus_one"``.
+    n_blocks_nonempty : int, optional
+        Number of blocks that actually received a sample.  Deleting an empty
+        block reproduces the full-sample estimate, so empty blocks contribute
+        no replicate and the degrees of freedom follow the populated count.
+        Equal to ``n_blocks`` whenever N is comfortably larger than B, which
+        is every production run.
     """
     if cov_dtype not in ("int8", "float32"):
         raise ValueError(f"cov_dtype must be int8 or float32, got {cov_dtype!r}")
@@ -106,8 +114,16 @@ def build_cov_meta(
     n_blocks = int(n_blocks)
     n_cov_elements = n_taus * (n_taus + 1) // 2
 
+    if n_blocks_nonempty is None:
+        n_blocks_nonempty = n_blocks
+    n_blocks_nonempty = int(n_blocks_nonempty)
+    if n_blocks_nonempty > n_blocks:
+        raise ValueError(
+            f"n_blocks_nonempty ({n_blocks_nonempty}) cannot exceed n_blocks ({n_blocks})"
+        )
+
     if nu is None:
-        nu = jackknife_nu(n_blocks)
+        nu = jackknife_nu(n_blocks_nonempty)
         nu_source = NU_SOURCE_BLOCKS_MINUS_ONE
     elif nu_source is None:
         raise ValueError("nu_source must be given whenever nu is supplied explicitly")
@@ -115,6 +131,7 @@ def build_cov_meta(
     jackknife: dict[str, Any] = {
         "method": JACKKNIFE_METHOD,
         "n_blocks": n_blocks,
+        "n_blocks_nonempty": n_blocks_nonempty,
         "nu": nu,
         "nu_source": nu_source,
     }
@@ -163,7 +180,7 @@ def resolve_nu(meta: dict) -> Tuple[Optional[float], Optional[str]]:
         source = jk.get("nu_source") or NU_SOURCE_BLOCKS_MINUS_ONE
         return float(nu), str(source)
 
-    n_blocks = jk.get("n_blocks")
+    n_blocks = jk.get("n_blocks_nonempty", jk.get("n_blocks"))
     if isinstance(n_blocks, int) and not isinstance(n_blocks, bool) and n_blocks >= 2:
         return float(jackknife_nu(n_blocks)), NU_SOURCE_BLOCKS_MINUS_ONE
 

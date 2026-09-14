@@ -39,6 +39,10 @@ from .core import (
     compute_block_finalize_panel,
     compute_covariance_from_blocks,
     resolve_covar_cols,
+    DEFAULT_N_BLOCKS,
+    resolve_n_blocks,
+    count_nonempty_blocks,
+    check_blocks_vs_samples,
     set_numpy_fallback_allowed,
     require_cpp_extension,
 )
@@ -978,7 +982,9 @@ def main():
     parser.add_argument('--taus', default=default_taus,
                         help='Comma-separated tau values (default: 45 taus from 0.02 to 0.98)')
     parser.add_argument('--blocks', type=int, default=None,
-                        help='Number of jackknife blocks (default: max(taus + 20, 64))')
+                        help=f'Number of jackknife blocks (default: {DEFAULT_N_BLOCKS}). '
+                             'Must exceed the number of taus. Fewer blocks stay correctly '
+                             'sized under the Stage 2 t reference but give a noisier SE.')
     parser.add_argument('--batch-size', dest='batch_size', type=int, default=500,
                         help='SNPs per batch for memory efficiency')
     parser.add_argument('--threads', type=int, default=1,
@@ -1004,21 +1010,10 @@ def main():
     # Parse taus
     taus = np.array([float(t) for t in args.taus.split(',')])
     T = len(taus)
-    if args.blocks is None:
-        args.blocks = max(T + 20, 64)
-        logger.info("Using auto --blocks=%d (max(taus + 20, 64))", args.blocks)
-
-    if args.blocks <= T:
-        parser.error(
-            f"--blocks ({args.blocks}) must be greater than number of taus ({T}). "
-            "Increase --blocks or reduce --taus."
-        )
-    if args.blocks < T + 20:
-        logger.warning(
-            "--blocks=%d is only slightly above taus=%d; covariance may be noisy. "
-            "Consider --blocks >= taus + 20.",
-            args.blocks, T
-        )
+    try:
+        args.blocks = resolve_n_blocks(args.blocks, T, flag="--blocks")
+    except ValueError as exc:
+        parser.error(str(exc))
     
     log_mem(f"Starting FungWas Stage 1 (taus={T}, blocks={args.blocks})")
     logger.info("Note: For Stage 2, consider mean-centering non-intercept columns of your W matrix to reduce collinearity.")
@@ -1096,8 +1091,10 @@ def main():
     t_batches = time.perf_counter()
     
     # Assign jackknife blocks
+    check_blocks_vs_samples(args.blocks, N_matched, flag="--blocks")
     np.random.seed(args.seed)
     block_ids = np.random.randint(0, args.blocks, N_matched).astype(np.int32)
+    n_blocks_nonempty = count_nonempty_blocks(block_ids, args.blocks, flag="--blocks")
     
     # Output setup
     _sanitize_name = sanitize_pheno_name
@@ -1248,6 +1245,7 @@ def main():
         n_taus=T,
         n_blocks=args.blocks,
         seed=args.seed,
+        n_blocks_nonempty=n_blocks_nonempty,
     )
     for meta_path in out_cov_meta_list:
         write_cov_meta(meta_path, cov_meta)
