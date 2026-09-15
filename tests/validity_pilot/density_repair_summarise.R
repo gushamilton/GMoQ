@@ -60,6 +60,10 @@ for (i in seq_len(nrow(keys))) {
       bias_scientific_finite_datasets = sum(is.finite(sci_bias)),
       cover_projection = if (attempted) proj_cover_n / attempted else NA_real_,
       cover_scientific = if (attempted) sci_cover_n / attempted else NA_real_,
+      cover_projection_mcse = if (attempted) sqrt((proj_cover_n / attempted) *
+                                                  (1 - proj_cover_n / attempted) / attempted) else NA_real_,
+      cover_scientific_mcse = if (attempted) sqrt((sci_cover_n / attempted) *
+                                                  (1 - sci_cover_n / attempted) / attempted) else NA_real_,
       cover_projection_finite = if (sum(finite_z_proj)) proj_cover_n / sum(finite_z_proj) else NA_real_,
       cover_scientific_finite = if (sum(finite_z_sci)) sci_cover_n / sum(finite_z_sci) else NA_real_,
       stringsAsFactors = FALSE)
