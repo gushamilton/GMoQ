@@ -1,0 +1,16 @@
+cell,run_dir,run_source,stage_source_commits,stage_paths,truth_kind,stage_json_count,matches_pilot_final_payload,run_directory_cleaned_before_run
+combined_common,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+combined_rare,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+combined_small_common,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+cov_both_common,pilot_linear,48171e3,48171e3,current;y_first,reference_mc,2,TRUE;TRUE,TRUE
+cov_both_rare,pilot_linear,48171e3,48171e3,current;y_first,reference_mc,2,TRUE;TRUE,TRUE
+mean_common,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+mean_rare,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+normal_combined_common,pilot_linear,48171e3,48171e3,current,normal_linear_exact,1,no_common_file,TRUE
+normal_mean_common,pilot_linear,48171e3,48171e3,current,normal_linear_exact,1,no_common_file,TRUE
+normal_variance_common,pilot_linear,48171e3,48171e3,current,normal_linear_exact,1,no_common_file,TRUE
+normal_variance_strong_common,pilot_linear,48171e3,48171e3,current,normal_linear_exact,1,no_common_file,TRUE
+null_common,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+null_rare,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+scale_common,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
+scale_rare,pilot_linear,48171e3,48171e3,current,conditional_cdf_background_mc,1,TRUE,TRUE
