@@ -12,6 +12,12 @@ Stage 2 (R/C++) maps that quantile profile onto the parameters of a distribution
 choose, with standard errors that respect the Stage 1 covariance. The two stages are separate
 packages in one repository and are installed separately.
 
+The primary workflow is **OLS with pooled covariance**. Stage 1 writes the pooled
+`Sigma_0` sidecar by default; Stage 2 scales it by each SNP's residual genotype
+variation. Per-SNP jackknife covariance remains available as an explicit comparison.
+Pooled covariance is a working approximation: validation must include true variance
+effects and covariate structure, not just null phenotypes.
+
 **FungWas** allows you to test SNP associations with:
 - **Variance** (vQTLs)
 - **Mixture components** (e.g., latent subtypes in a disease)
@@ -102,9 +108,8 @@ files compatible with `param_gwas_from_file`.
 
 ## Testing
 
-Both stages ship their own checks. Run Stage 1's from the repository root and Stage 2's from
-inside `stage2/tests/` (the Stage 2 scripts call `devtools::document()`, so they must be run from
-somewhere inside the package tree).
+Both stages ship their own checks. Tests should use the installed package and must not
+regenerate package documentation or modify `NAMESPACE`.
 
 ### Stage 1 (pytest)
 
@@ -122,11 +127,12 @@ PYTHONPATH=stage1 python -m pytest stage1/tests/ -q
 ```bash
 R CMD INSTALL -l "$R_LIBS_USER" stage2/
 cd stage2/tests
-for t in test-*.R; do Rscript "$t" || echo "FAILED: $t"; done
+for t in test-*.R; do Rscript --vanilla "$t" || exit 1; done
 ```
 
-Known issue: `stage2/tests/test-plink-files.R` hard-codes a PLINK path on a developer's own
-laptop and cannot run elsewhere. `stage2/tests/test-qstat.R` needs the `fitdistrplus` package.
+Some scripts are large simulation demonstrations or require optional dependencies/data;
+the CI workflow lists the fast assertion-based regression checks separately.
+`test-plink-files.R` requires `GMOQ_PLINK_PREFIX`; `test-qstat.R` needs `fitdistrplus`.
 
 ### End-to-end check (synthetic data only)
 
@@ -167,9 +173,14 @@ fungwas-stage1 \
     --out results/chr22 \
     --threads 16
 ```
-*Produces `results/chr22.stage1.tsv.gz` (estimates) and `results/chr22.cov.gz` (covariance).*
+*Produces `results/chr22.stage1.tsv.gz` (estimates), per-SNP covariance files, and
+`results/chr22.sigma0.tsv.gz` with metadata (pooled covariance).*
 By default, Stage 1 writes covariance in compact int8 format with sidecar
 `results/chr22.cov.scale.gz` (dequantization scales).
+
+The default grid is 45 quantiles from 0.02 to 0.98, with 1,000 jackknife blocks.
+When supplying REGENIE LOCO predictions, Stage 1 uses `--loco-scale regression`
+by default to convert predictions to the phenotype's scale before subtraction.
 
 See [Stage 1 Documentation](stage1/README.md) for full CLI options.
 
@@ -211,9 +222,10 @@ See [Stage 2 Documentation](stage2/README.md) for full details.
 ```r
 library(fungwasStage2)
 
-# 1. Define your model (e.g., vQTL / Variance effects)
-#    We need the derivative of quantiles w.r.t mean and sd.
-taus <- seq(0.1, 0.9, 0.05)
+# 1. Define a Normal location/variance model on the Stage 1 grid.
+#    This example assumes a baseline SD of 1; use the analysed phenotype's
+#    baseline SD for your model (after the same preprocessing as Stage 1).
+taus <- round(seq(0.02, 0.98, length.out = 45), 3)
 # This helper builds the weight matrix W
 W <- make_weights_vqtl(taus, qnorm(taus), mu = 0, sd = 1)
 
@@ -221,8 +233,10 @@ W <- make_weights_vqtl(taus, qnorm(taus), mu = 0, sd = 1)
 results <- param_gwas_from_file(
   stage1_file = "results/chr22.stage1.tsv.gz",
   W = W,
-  se_mode = "tau_cov",         # Use accurate jackknife covariance from Stage 1
-  cov_file = "results/chr22.cov.gz"
+  se_mode = "tau_cov",
+  tau_cov_estimator = "ols",
+  cov_source = "pooled",
+  sigma0_file = "results/chr22.sigma0.tsv.gz"
 )
 
 # 3. Save or analyze
@@ -236,7 +250,7 @@ See [SLURM Templates](docs/slurm_templates/) for example submission scripts.
 
 ### Standard Error Modes
 Stage 2 supports different methods for SE calculation (`param_gwas` argument `se_mode`):
--   `tau_cov`: **Recommended**. Uses the exact per-SNP covariance matrix computed in Stage 1. Most accurate and works with both legacy float32 `.cov.gz` and int8 `.cov.gz` + `.cov.scale.gz`.
+-   `tau_cov`: **Recommended**. Uses full cross-quantile covariance. With `cov_source="pooled"`, this is `Sigma_0 / d_resid`; with `cov_source="jackknife"`, it is the estimated per-SNP covariance. The latter supports float32 and int8 storage. These are covariance estimates, not exact sampling covariances.
 -   `plugin_cor`: Uses a single correlation matrix for all SNPs (from null distribution). Faster, good for initial scans.
 -   `diagonal`: Assumes independence between quantiles. Least accurate, not recommended for final results.
 

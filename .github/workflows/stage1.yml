@@ -40,4 +40,4 @@ jobs:
       - name: Run Stage 1 regression tests
         working-directory: stage1
         run: |
-          pytest -q tests/test_loco.py tests/test_jk_ols_equivalence.py tests/test_jk_equivalence.py
+          pytest -q tests/

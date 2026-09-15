@@ -18,7 +18,7 @@ jobs:
 
       - name: Install Stage 2 dependencies
         run: |
-          Rscript -e 'install.packages(c("Rcpp", "RcppArmadillo", "data.table", "ggplot2"), repos = "https://cloud.r-project.org")'
+          Rscript --vanilla -e 'install.packages(c("Rcpp", "RcppArmadillo", "data.table", "ggplot2", "jsonlite", "knitr", "rmarkdown", "testthat"), repos = "https://cloud.r-project.org")'
 
       - name: Install fungwasStage2
         run: |
@@ -26,5 +26,13 @@ jobs:
 
       - name: Run fast Stage 2 regression scripts
         run: |
-          /usr/bin/time -p Rscript stage2/tests/test-cov-ids-mandatory.R
-          /usr/bin/time -p Rscript stage2/tests/test-model-tournament.R
+          for script in test-cov-ids-mandatory.R test-model-tournament.R test-pooled-covariance.R test-t-reference.R test-dispersion-guards.R test-gls-qpval.R test-q-negative-eigenvalues.R test-namespace-dynlib.R; do
+            Rscript --vanilla "stage2/tests/$script"
+          done
+
+      # Legacy demonstration scripts include large simulations and optional data.
+      # Run the assertion-based regressions above separately from package checks.
+      - name: Build and check installed package structure and examples
+        run: |
+          R CMD build stage2
+          R CMD check --no-manual --no-tests fungwasStage2_*.tar.gz
