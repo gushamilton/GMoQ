@@ -22,3 +22,18 @@ bprun --cpus 2 --mem 4G --time 00:30:00 \
   --reps 60 --n 10000 --seed 20260915 --out \
   repo/experiments/testosterone-gap-20260915-02/diagnostic.json
 ```
+
+Source commit: `b45a93d` (runner fix plus BP syntax-check support). The
+diagnostic ran as Slurm job `18970538` on `bp1-compute015` through `bprun`,
+which invokes `srun --mpi=pmi2`; the output is also retained at the BP path
+`/user/work/fh6520/gmoq_finish_20260915/validity/testosterone-gap-20260915-02/diagnostic.json`.
+The corrected runner's R syntax check passed as job `18970555` on the same
+compute node.
+
+Results: the historical mismatched arm estimated mean gamma `0.035918` (truth
+`0.08`), while the same-density arm estimated `0.079556`; the mean model-PDF /
+Stage-1-KDE ratio was `1.13293` (mean minimum `0.43787`, mean maximum
+`1.22954`). The RIF/CDF identity error was at most `1.79e-13`. These results
+support the density correction as the production cause of the attenuation in
+this isolated model. They do not establish nuisance-fit uncertainty,
+genome-wide calibration, or the actual UK Biobank testosterone result.
