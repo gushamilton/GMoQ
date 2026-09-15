@@ -65,8 +65,10 @@ Empirical effect truth is unknown, so this establishes execution and traceable
 preprocessing rather than unbiasedness.
 An exploratory two-parameter fit using the paper's cached BMI weights is
 excluded from validated empirical evidence: those weights were built on raw
-BMI without this log-BMI LOCO preprocessing. The matched baseline has been
-generated, but its two-parameter fit has not yet been run.
+BMI without this log-BMI LOCO preprocessing. The corrected fit has now run
+using the exact matched log-BMI baseline and serialized tau grid. Its
+[provenance and aggregate result](../scripts/validation/real_chr22_empirical_provenance.md)
+are preserved separately from that excluded fit.
 
 ## Statistical findings
 
@@ -104,10 +106,27 @@ does not itself validate pooled uncertainty under strong covariate-driven
 heteroscedasticity. This remains an unresolved correctness limitation for that
 setting, not a passing result or merely a signal-confirmation concern.
 
+A follow-up [independent covariance diagnostic](../stage2/tests/robust_probe/README.md)
+used 1,000 fresh datasets. Genotype-weighted HC0 substantially reduced the
+correlated low-frequency variance-null rejection from .268 (pooled) to .070,
+similar to .067 for jackknife. These comparisons use a fixed Normal cutoff
+for all methods to diagnose covariance scaling; they are not a replay of the
+package's full t-reference inference. The residual .070 rejection is still
+above .05, so this does not yet certify a production repair. The experiment
+does not change the package covariance path.
+
 The strong centered-linear variance pilot also has a measurable finite-sample
-projection bias: -0.00912 with MCSE 0.00218, about 0.42 empirical SD. Its cause
-has not been isolated. It must not be described as negligible relative to
-Monte Carlo uncertainty or hidden by a coverage average across parameters.
+projection bias: -0.00912 with MCSE 0.00218, about 0.42 empirical SD. It must
+not be described as negligible relative to Monte Carlo uncertainty or hidden
+by a coverage average across parameters. A subsequent
+[paired density diagnosis](../tests/validity_pilot/evidence/DENSITY_DIAGNOSIS.md)
+identified KDE smoothing as a cause: at v=.24, empirical KDE versus exact
+density changed the estimate by -.003989 ± .000324 at N=10,000 and
+-.001834 ± .000146 at N=100,000. Using population quantiles and exact density
+gave negligible measured projection bias. The diagnostic uses fresh single-SNP
+datasets, so its absolute bias need not equal the earlier six-SNP pilot.
+This identifies a repair target; no density correction has yet been validated
+or introduced into production.
 
 See [the estimand contract](ESTIMAND.md) for units and interpretation. These
 checks do not establish calibration at genome-wide tails, unbiased effects in
