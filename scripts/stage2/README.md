@@ -136,7 +136,10 @@ literal trait directory and trait-specific `chrNN` root. The legacy
 
 The testosterone `skew` builder uses the exact Stage 1 Silverman KDE density at
 the empirical quantiles when constructing W, matching the density that scaled
-the Stage 1 RIF. The correction is recorded in the weight provenance and does
-not alter the installed package. Keep full logs and all individual-level
-inputs on BP; only aggregate W, baseline summaries, and Stage 2 result files
-belong in any exportable evidence bundle.
+the Stage 1 RIF. When the canonical 45-level grid is identified from the
+three-decimal TSV labels, the builder also recovers the full-precision grid
+used by the production runner; custom grids remain at their serialized
+precision. The correction and tau-grid provenance are recorded in the weight
+RDS. Keep full logs and all individual-level inputs on BP; only aggregate W,
+baseline summaries and Stage 2 result files belong in any exportable evidence
+bundle.

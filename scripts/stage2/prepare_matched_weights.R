@@ -116,17 +116,26 @@ if (length(beta_cols) != 45L) {
   stop("Expected 45 serialized beta_tau_* columns in ", stage1_file,
        "; found ", length(beta_cols), ".", call. = FALSE)
 }
-taus <- as.numeric(sub("^beta_tau_", "", beta_cols))
-if (any(!is.finite(taus)) || any(diff(taus) <= 0)) {
+tau_labels <- as.numeric(sub("^beta_tau_", "", beta_cols))
+if (any(!is.finite(tau_labels)) || any(diff(tau_labels) <= 0)) {
   stop("Stage 1 tau columns are not finite and strictly increasing.", call. = FALSE)
 }
-## Stage 1 keeps the full grid in metadata but serialises column labels to
-## three decimals; Stage 2 indexes by those labels.  Pin the rounded form
-## here and carry it unchanged into each RDS.
+## Stage 1 labels the canonical grid to three decimals, but the production
+## runner may pass the underlying full-precision linspace.  Recover that
+## canonical grid when the labels identify it; preserve custom grids at the
+## precision available in their labels.  The labels remain the sole column
+## indexing key, while the recovered values keep Stage 2 thresholds/densities
+## on the same probabilities used by Stage 1.
 expected_taus <- round(seq(0.02, 0.98, length.out = 45L), 3L)
-if (!isTRUE(all.equal(taus, expected_taus, tolerance = 5e-7))) {
+if (!isTRUE(all.equal(tau_labels, expected_taus, tolerance = 5e-7))) {
   stop("Stage 1 tau grid is not the pinned 45-level grid; refusing to build W.",
        call. = FALSE)
+}
+taus_full <- seq(0.02, 0.98, length.out = 45L)
+taus <- if (isTRUE(all.equal(round(taus_full, 3L), tau_labels, tolerance = 5e-7))) {
+  taus_full
+} else {
+  tau_labels
 }
 
 ## Keep files are two-column FID/IID lists without a header.  Stage 1 keys this
@@ -562,6 +571,12 @@ provenance <- list(
   family = family,
   n_samples = nrow(ph),
   taus = taus,
+  tau_labels = tau_labels,
+  tau_grid_source = if (identical(taus, taus_full)) {
+    "canonical_full_precision_linspace_recovered_from_three_decimal_labels"
+  } else {
+    "serialized_three_decimal_labels"
+  },
   covariates = covar_cols,
   loco_scale_mode = loco_scale_mode,
   loco_scale_factor = unname(scale_factor),
