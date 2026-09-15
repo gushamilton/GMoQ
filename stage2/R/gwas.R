@@ -584,8 +584,19 @@ if (se_mode == "diagonal") {
   out
 }
 
+.fread_path <- function(path, ...) {
+  ## data.table's direct .gz reader depends on R.utils, which is absent on
+  ## some otherwise valid BP R4.5.1 nodes.  Stream gzip through fread(cmd=)
+  ## instead so the package has a consistent input contract across nodes.
+  if (grepl("\\.gz$", path, ignore.case = TRUE)) {
+    data.table::fread(cmd = paste("gzip -dc --", shQuote(path)), ...)
+  } else {
+    data.table::fread(path, ...)
+  }
+}
+
 .validate_cov_ids <- function(stage1_dt, cov_ids_file) {
-  cov_ids_dt <- data.table::fread(cov_ids_file)
+  cov_ids_dt <- .fread_path(cov_ids_file)
   if (!("snp_id" %in% names(cov_ids_dt))) {
     stop("Covariance IDs file missing snp_id column: ", cov_ids_file)
   }
@@ -869,7 +880,7 @@ param_gwas_from_file <- function(
   
   # Read Stage 1
   message("Reading Stage 1 file: ", stage1_file)
-  stage1_dt <- data.table::fread(stage1_file)
+  stage1_dt <- .fread_path(stage1_file)
   data.table::setDT(stage1_dt)
   stage1_n_raw <- nrow(stage1_dt)
   stage1_dt_raw <- data.table::copy(stage1_dt)
@@ -1162,7 +1173,7 @@ param_gwas_multi_from_file <- function(
   }
 
   message("Reading Stage 1 file: ", stage1_file)
-  stage1_dt <- data.table::fread(stage1_file)
+  stage1_dt <- .fread_path(stage1_file)
   data.table::setDT(stage1_dt)
   # Covariance payloads and their IDs are indexed against the unfiltered Stage 1
   # rows. Keep that table for validation before dropping duplicated/multiallelic
