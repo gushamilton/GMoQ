@@ -104,7 +104,8 @@ NumericMatrix fit_multi_models_tau_cov(const arma::mat& beta_stage1,
   if (offsets.size() < P) {
     stop("offsets must have at least one entry per SNP.");
   }
-  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  NumericVector scales;
+  if (cov_scales.isNotNull()) scales = NumericVector(cov_scales);
   if (scales.size() != 0 && scales.size() < P) {
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }

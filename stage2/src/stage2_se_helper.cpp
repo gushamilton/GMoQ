@@ -33,7 +33,8 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
   // However, cov_vec is in memory, so it fits in R vector (max 2^31-1 elements).
   // The offsets passed here are from the .idx file, which are BYTE offsets.
   // cov_vec is a vector of floats (4 bytes).
-  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  NumericVector scales;
+  if (cov_scales.isNotNull()) scales = NumericVector(cov_scales);
   if (scales.size() != 0 && scales.size() < n_snps) {
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }
@@ -119,7 +120,8 @@ NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets,
   arma::mat Sigma(K, K, arma::fill::zeros);
   NumericMatrix out_cov(n_snps, n_cov_params);
 
-  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  NumericVector scales;
+  if (cov_scales.isNotNull()) scales = NumericVector(cov_scales);
   if (scales.size() != 0 && scales.size() < n_snps) {
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }
@@ -204,7 +206,8 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
   if (offsets.size() < n_snps) {
     stop("offsets must have at least one entry per SNP.");
   }
-  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  NumericVector scales;
+  if (cov_scales.isNotNull()) scales = NumericVector(cov_scales);
   if (scales.size() != 0 && scales.size() < n_snps) {
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }
@@ -493,7 +496,8 @@ NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets
   const int n_snps = offsets.size();
   const int n_cov_elements = K * (K + 1) / 2;
 
-  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  NumericVector scales;
+  if (cov_scales.isNotNull()) scales = NumericVector(cov_scales);
   if (scales.size() != 0 && scales.size() < n_snps) {
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }

@@ -26,6 +26,10 @@ source(file.path(pkg_root, "R", "gwas.R"))
 source(file.path(pkg_root, "R", "param_gwas.R"))
 
 assert_close <- function(x, y, tol = 2e-10, label = "value") {
+  if (is.null(x) || is.null(y)) stop(label, " is unexpectedly NULL")
+  if (length(x) != length(y) || !identical(dim(x), dim(y))) {
+    stop(label, " dimensions differ")
+  }
   ok <- is.na(x) == is.na(y)
   if (any(!ok)) stop(label, " NA pattern differs")
   if (any(ok & !is.na(x))) {
@@ -160,12 +164,13 @@ assert_close(gls_dense$param_cov_upper, gls_compact$param_cov_upper,
 fits <- lapply(list(dense = dense, compact = compact), function(cd) {
   param_gwas(stage1, transform = "custom_W", transform_args = list(W = W),
              se_mode = "tau_cov", cov_data = cd, tau_cov_estimator = "ols",
-             return_cov = "upper", q_method = "satterthwaite", nu = 100)
+             return_cov = "upper", q_method = "saddlepoint", nu = 100)
 })
 assert_close(fits[[1]]$params, fits[[2]]$params, label = "OLS parameters")
 assert_close(fits[[1]]$SE_params, fits[[2]]$SE_params, label = "OLS SE")
 assert_close(fits[[1]]$Q, fits[[2]]$Q, label = "OLS Q")
 assert_close(fits[[1]]$Q_pval, fits[[2]]$Q_pval, label = "OLS Q p-value")
+assert_close(fits[[1]]$P_params, fits[[2]]$P_params, label = "OLS parameter p-values")
 assert_close(fits[[1]]$param_cov_upper, fits[[2]]$param_cov_upper,
              label = "OLS parameter covariance")
 
