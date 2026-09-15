@@ -245,6 +245,24 @@ results <- param_gwas_from_file(
 head(results) # Contains betas and SEs for 'beta_mu' and 'beta_sigma2'
 ```
 
+Keep pooled covariance for the primary scan. To compare a result with the
+retained per-SNP jackknife, use the same Stage 1 file and weights:
+
+```r
+jackknife_results <- param_gwas_from_file(
+  stage1_file = "results/chr22.stage1.tsv.gz",
+  W = W,
+  se_mode = "tau_cov",
+  tau_cov_estimator = "ols",
+  cov_source = "jackknife",
+  cov_file = "results/chr22.cov.gz"
+)
+```
+
+The OLS point estimates are unchanged; covariance and reference calibration
+can change the standard errors and p-values. Keep the covariance sidecars
+beside the `.cov.gz` file so the reader can check variant alignment and metadata.
+
 ### HPC Submission
 See [SLURM Templates](docs/slurm_templates/) for example submission scripts.
 
