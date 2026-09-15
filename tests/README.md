@@ -17,11 +17,18 @@ Four tiers, each runnable on its own:
 
 ```bash
 export GMOQ_WORK=/some/scratch                 # never inside the repo
-export GMOQ_DEP_LIB=/path/to/cran/library
+export GMOQ_DEP_LIB=/path/to/cran/library   # must contain R.utils
 export GMOQ_CONDA_SH=$HOME/miniforge3/etc/profile.d/conda.sh
 bash tests/run_tier0.sh
 Rscript --vanilla tests/report.R $GMOQ_WORK/results
 ```
+
+`GMOQ_DEP_LIB` must contain **`R.utils`**. The package itself streams gzipped
+Stage 1 input without it (`92fef3a`), but several tier 0/1 scripts call
+`data.table::fread()` on a `.gz` directly, and `fread` hard-errors without
+`R.utils`. Its absence makes `t1_end_to_end.R`, `t1_families.R`,
+`t1_refusals.R` and `stage2/tests/test-pooled-covariance.R` fail *after* their
+real assertions have passed, which reads as a package defect and is not one.
 
 `tests/report.R` writes the single artefact a human reads:
 `RELEASE_REPORT.md` and `RELEASE_REPORT.json`, with a verdict of
