@@ -17,7 +17,7 @@ Status key: **DONE** (committed, with evidence) / **OPEN** (known, not done) /
 | # | Item | Status |
 |---|---|---|
 | A1 | **The input pipeline has never been checked against ground truth.** `extract_dosage`, `match_samples`, `load_analysis_inputs`, `read_keep_ids`, `write_stats_batch` have zero test references; both tests touching `get_variants_bgen` monkeypatch it away; all six simulation campaigns call `core.run_stage1()` directly. Everything passes today and nothing would notice if it were wrong. Tier 4 of `test/suite` is built and unrun. | **OPEN** |
-| A2 | **No sample-match-rate guard.** `cli.py:1262` logs `Matched N/M` and proceeds. `match_samples` keys on FID alone while LOCO matching uses five aliases, so an ID-convention mismatch silently analyses a small non-random subset. Three lines to fix; protects every future user rather than every future test. | **OPEN** |
+| ~~A2~~ | ~~**No sample-match-rate guard.** `cli.py:1262` logs `Matched N/M` and proceeds. `match_samples` keys on FID alone while LOCO matching uses five aliases, so an ID-convention mismatch silently analyses a small non-random subset. Three lines to fix; protects every future user rather than every future test. | **OPEN** |
 
 ## B. Decisions the evidence does not yet settle
 

@@ -1091,6 +1091,17 @@ def main():
                         help='File with SNP IDs to process (one per line)')
     parser.add_argument('--keep', default=None,
                         help='File with sample IDs to keep (one per line)')
+    parser.add_argument('--min-sample-match', dest='min_sample_match',
+                        type=float, default=0.01,
+                        help="Refuse to run if fewer than this fraction of phenotype "
+                             "samples match the BGEN (default 0.01). Catches an "
+                             "ID-convention mismatch, which produces a near-total "
+                             "failure to match and would otherwise run silently on "
+                             "whatever happened to collide. A partial overlap is "
+                             "legitimate -- a phenotype file routinely holds samples "
+                             "absent from a given BGEN -- so anything between this "
+                             "threshold and 50%% warns rather than refuses. Set to 0 "
+                             "to disable entirely.")
     parser.add_argument('--loco-scale', dest='loco_scale', default='regression',
                         help="How to put REGENIE .loco predictions on the phenotype's scale. "
                              "'regression' (default) uses the OLS slope of Y on the prediction, "
@@ -1260,6 +1271,41 @@ def main():
     N_matched = len(bgen_indices)
 
     log_mem(f"Matched {N_matched}/{N} samples to BGEN")
+
+    # A partial sample match is the dangerous case, not a total one. Zero overlap
+    # fails loudly downstream; a 3% overlap runs to completion on a small,
+    # non-random subset and produces attenuated effects with inflated SEs that are
+    # internally consistent and wrong. match_samples keys on the phenotype file's
+    # FID alone, while the LOCO reader resolves five aliases (fid, iid, fid_iid,
+    # "fid iid", fid:iid), so a cohort whose BGEN IDs are FID_IID matches LOCO and
+    # then silently drops every sample here.
+    match_frac = (N_matched / N) if N else 0.0
+    if args.min_sample_match > 0 and 0.0 < match_frac < 0.50 \
+            and match_frac >= args.min_sample_match:
+        logger.warning(
+            "Only %d of %d phenotype samples (%.1f%%) matched the BGEN. That is "
+            "legitimate when the phenotype file covers a wider cohort than this "
+            "genotype release, but it is also what a partial ID-convention "
+            "collision looks like. Check that the analysed subset is the one you "
+            "intended.", N_matched, N, 100 * match_frac)
+    if args.min_sample_match > 0 and match_frac < args.min_sample_match:
+        preview = ", ".join(str(s) for s in sample_ids[:3])
+        bgen_preview = ", ".join(str(s) for s in bgen_samples[:3])
+        raise ValueError(
+            f"Only {N_matched} of {N} phenotype samples ({100 * match_frac:.1f}%) "
+            f"matched the BGEN, below --min-sample-match "
+            f"({100 * args.min_sample_match:.0f}%).\n"
+            f"  phenotype IDs look like: {preview}\n"
+            f"  BGEN sample IDs look like: {bgen_preview}\n"
+            "A failure this near-total means the two files use different identifier "
+            "conventions rather than covering different samples. Sample matching uses "
+            "the phenotype file's first column (FID) against the BGEN sample "
+            "identifiers with NO alias resolution -- unlike the LOCO reader, which "
+            "resolves fid, iid, fid_iid, 'fid iid' and fid:iid, so a mismatched "
+            "cohort can match LOCO and then drop every sample here. Rewrite the "
+            "phenotype file's first column to match the BGEN, or pass "
+            "--min-sample-match 0 to proceed deliberately."
+        )
 
     # Build the covariate basis and the RIF on the MATCHED rows, not on the keep
     # sample. Both depend on which rows are in the analysis, and neither survives

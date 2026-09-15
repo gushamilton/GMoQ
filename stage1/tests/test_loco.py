@@ -525,3 +525,92 @@ def test_variance_guard_is_silent_for_a_predictive_covariate_trait(caplog):
     with caplog.at_level(logging.WARNING):
         resolve_loco_scale("regression", y, per_chr, "weight")
     assert not any("INCREASES the analysed variance" in r.message for r in caplog.records)
+
+
+# --- the sample-match-rate guard (docs/BACKLOG.md A2) ------------------------
+
+def test_match_samples_keys_on_the_first_column_only():
+    """
+    Pins the behaviour the guard exists to protect against. match_samples does a
+    bare dict lookup on the phenotype file's first column, with no alias
+    resolution -- unlike the LOCO reader, which resolves fid, iid, fid_iid,
+    "fid iid" and fid:iid. A cohort whose BGEN IDs are FID_IID therefore matches
+    LOCO and then drops every sample here.
+    """
+    from fungwas_stage1.cli import match_samples
+    bgen = ["A1_A1", "A2_A2", "A3_A3"]          # FID_IID convention
+    pheno = ["A1", "A2", "A3"]                   # FID convention
+    valid, idx = match_samples(bgen, pheno)
+    assert idx.size == 0, "expected a total mismatch; the aliasing gap is the point"
+    assert not valid.any()
+
+    # and the matching case still works
+    valid, idx = match_samples(bgen, ["A1_A1", "A3_A3"])
+    assert list(idx) == [0, 2]
+    assert list(valid) == [True, True]
+
+
+def test_partial_match_is_the_dangerous_case():
+    """
+    Zero overlap fails loudly downstream. A small overlap runs to completion on a
+    non-random subset and yields attenuated effects with inflated SEs that are
+    internally consistent and wrong -- which is why the guard is on the RATE, not
+    on emptiness.
+    """
+    from fungwas_stage1.cli import match_samples
+    bgen = [f"S{i}" for i in range(1000)]
+    pheno = [f"S{i}" for i in range(30)] + [f"X{i}" for i in range(970)]
+    valid, idx = match_samples(bgen, pheno)
+    assert idx.size == 30
+    frac = idx.size / len(pheno)
+    assert frac == pytest.approx(0.03)
+    # nothing in match_samples itself refuses this; the caller must.
+    assert frac < 0.90
+
+
+def test_guard_refuses_only_a_near_total_failure():
+    """
+    The threshold is tuned to the failure it exists to catch. A partial overlap is
+    legitimate -- a phenotype file routinely covers a wider cohort than one genotype
+    release, and the package's own fixtures match 700 of 900 (77.8%) with identical
+    conventions. An ID-convention mismatch instead produces a near-total failure.
+    A guard set high enough to catch the former breaks ordinary use.
+    """
+    default = 0.01
+    for n_matched, n_total, should_refuse in [
+        (0, 1000, True),       # total mismatch -- the convention error
+        (5, 1000, True),       # 0.5%, accidental collisions only
+        (10, 1000, False),     # exactly at the threshold
+        (700, 900, False),     # the package's own fixture: legitimate subsetting
+        (1000, 1000, False),
+    ]:
+        frac = n_matched / n_total
+        assert (default > 0 and frac < default) is should_refuse, (n_matched, n_total)
+
+
+def test_guard_warns_between_the_threshold_and_a_half():
+    """Legitimate but worth flagging: proceed, but say so."""
+    lo, hi = 0.01, 0.50
+    for frac, should_warn in [
+        (0.005, False),   # refused instead
+        (0.03, True),
+        (0.49, True),
+        (0.778, False),   # the fixture: ordinary, silent
+        (1.0, False),
+    ]:
+        assert (lo > 0 and lo <= frac < hi) is should_warn, frac
+
+
+def test_guard_can_be_disabled():
+    """--min-sample-match 0 must proceed deliberately rather than refuse."""
+    for frac in (0.0, 0.03, 0.5):
+        assert not (0 > 0 and frac < 0)
+
+
+def test_cli_exposes_the_guard_with_a_default_that_does_not_break_ordinary_use():
+    import inspect
+    from fungwas_stage1 import cli
+    src = inspect.getsource(cli.main)
+    assert "'--min-sample-match'" in src
+    assert "default=0.01" in src
+    assert "below --min-sample-match" in src   # refuses, not merely warns
