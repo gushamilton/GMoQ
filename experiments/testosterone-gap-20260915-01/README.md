@@ -14,7 +14,8 @@ The diagnostic source is committed before execution. The run uses 60 paired
 datasets, N=10,000, 45 taus (0.02--0.98), seed 20260915, one bounded Python
 worker on a BluePebble compute node. It compares the historical mismatched
 weights `-dF/f_model` with the proposed same-density weights `-dF/f_stage1` and
-the equivalent CDF-scale projection.
+the corresponding CDF/RIF identity check. The unweighted CDF least-squares arm
+is a separate metric and is not expected to equal production RIF OLS.
 
 Run command:
 
@@ -27,7 +28,7 @@ bprun --cpus 2 --mem 4G --time 00:30:00 \
 
 The output JSON is aggregate evidence only; no participant-level inputs are
 used. The expected decision rule is narrow: if the mismatched arm shows the
-archive's attenuation of the membership effect and the matched arm agrees with
-the CDF arm to floating-point precision, implement the same-density correction
-in the main-repo testosterone weight builder. This does not validate nuisance
-fit uncertainty, genome-wide calibration, or the full UK Biobank result.
+archive's attenuation of the membership effect and the RIF/CDF identity holds,
+implement the same-density correction in the main-repo testosterone weight
+builder. This does not validate nuisance-fit uncertainty, genome-wide
+calibration, or the full UK Biobank result.

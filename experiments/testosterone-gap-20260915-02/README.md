@@ -11,8 +11,8 @@ Stable ID: `testosterone-gap-20260915-02`
 The run uses 60 paired datasets, N=10,000, separation 8, upper-membership
 gamma .08, MAF .30, 45 taus (0.02--0.98), seed 20260915, one bounded Python
 worker on a BluePebble compute node. It compares historical `-dF/f_model`
-weights with proposed same-density `-dF/f_stage1` weights and the equivalent
-CDF-scale projection.
+weights with proposed same-density `-dF/f_stage1` weights and records the
+corresponding CDF/RIF identity check.
 
 Run command:
 
@@ -35,5 +35,10 @@ Results: the historical mismatched arm estimated mean gamma `0.035918` (truth
 Stage-1-KDE ratio was `1.13293` (mean minimum `0.43787`, mean maximum
 `1.22954`). The RIF/CDF identity error was at most `1.79e-13`. These results
 support the density correction as the production cause of the attenuation in
-this isolated model. They do not establish nuisance-fit uncertainty,
-genome-wide calibration, or the actual UK Biobank testosterone result.
+this isolated model. The separately reported unweighted CDF least-squares
+diagnostic is not expected to equal production RIF OLS: matched RIF OLS
+corresponds to CDF least squares with rows scaled by `1/f_stage1`, whereas the
+unweighted CDF arm uses a different metric (maximum observed difference
+`0.0235886`). That arm was not used for the repair decision. These results do
+not establish nuisance-fit uncertainty, genome-wide calibration, or the actual
+UK Biobank testosterone result.
