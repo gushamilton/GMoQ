@@ -214,6 +214,7 @@ class _FakeVariant:
         self.pos = pos
         self.alleles = ("A", "G")
         self.alt_dosage = alt_dosage
+        self.bit_depth = 8
 
 
 def _inputs(tmp_path, seed=11):

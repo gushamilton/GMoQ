@@ -199,6 +199,7 @@ class _FakeVariant:
         self.pos = pos
         self.alleles = ("A", "G")
         self.alt_dosage = alt_dosage
+        self.bit_depth = 8
 
 
 def test_cli_builds_the_projector_on_the_genotype_matched_rows(tmp_path, monkeypatch):
