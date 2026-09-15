@@ -137,20 +137,39 @@ conservative at commoner variants — with a warning and
 `ref_df_source = "flat_fallback_n_eff"`. That costs at most 2.4% of nominal
 Type-I for a location parameter and 6.5% for a scale one.
 
-**Still outstanding: `Q_pval`.** The Lugannani-Rice saddlepoint reference for
-`Q` conditions on `Sigma` as known and inherits the same defect. It is not a
-`pt()` substitution — `Q` is a quadratic form in a correlated normal vector,
-and the estimation of `Sigma` would have to be propagated through its
-eigenvalue spectrum — and it is untouched for now. Note also that
+**Still outstanding on the OLS path: `Q_pval`.** The Lugannani-Rice
+saddlepoint reference for the OLS `Q` conditions on `Sigma` as known and
+inherits the same defect. It is not a `pt()` substitution — the OLS `Q` is a
+quadratic form in a correlated normal vector weighted by `D^-1`, and the
+estimation of `Sigma` would have to be propagated through its per-SNP
+eigenvalue spectrum — and it is untouched. Note also that
 `.q_pvalue_calibrated` already computes a `df_eff` of its own; that is the df
 of the quadratic form, not of the variance estimator, and the interaction
 between the two has not been examined.
 
-**No joint multi-parameter Wald test exists in the package**, so nothing
-currently needs an `F_{k, nu-k+1}` (Hotelling) reference. `Q` is a lack-of-fit
-statistic on `T - k` residual degrees of freedom, not a joint test of `k`
-parameters. If one is added it must use `F`, not chi-square, and with a
-per-SNP `nu`.
+**Resolved on the GLS path (2026-09-15).** The GLS `Q` weights by `Sigma^-1`
+rather than `D^-1`, which collapses that eigenvalue spectrum to a flat one and
+makes the statistic pivotal, so the estimation of `Sigma` CAN be propagated
+exactly. With `Sigma` known `Q_gls ~ chi2_{T-K}` exactly; with `Sigma`
+estimated on `nu` degrees of freedom it is Hotelling's `T^2` on the residual
+subspace,
+
+    Q_gls ~ (nu m / (nu - m + 1)) F_{m, nu - m + 1},    m = T - K
+
+Verified uniform through `param_gwas()` over 5,000,000 correctly specified
+replicates down to `p = 1e-6`. The chi-square reference that a naive port of
+the OLS path would give is anti-conservative at every finite `nu`: 0.0825 at
+nominal 0.05 when `nu = 1000`, 0.250 when `nu = 260`, 0.991 when `nu = 60`.
+Derivation and measurements at the foot of `stage2/R/tail-reference.R`.
+
+**A joint multi-parameter Wald test still does not exist in the package**, but
+the Hotelling reference is no longer hypothetical: the GLS lack-of-fit
+statistic IS one, on `m = T - k` residual dimensions rather than `k` parameter
+dimensions. `nu` must exceed `m`, or the residual block of the estimated
+`Sigma` is singular and `Q` is degenerate rather than merely mis-referenced
+— with `T = 45` that rules out `B = 65` outright, and Stage 2 refuses there
+rather than returning a number. If a joint Wald test is added it must use `F`,
+not chi-square, and with a per-SNP `nu`.
 
 ### 2.2 Do not studentise the per-tau SEs against the block count
 

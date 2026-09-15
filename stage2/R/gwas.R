@@ -223,6 +223,18 @@ quantile_gwas <- function(
 #' \item{\code{param_ref_c}}{Satterthwaite coefficient used per parameter.}
 #' \item{\code{Q}}{Vector of Q statistics per SNP (if computed).}
 #' \item{\code{df}}{Degrees of freedom for Q statistic.}
+#' \item{\code{Q_pval}}{Calibrated lack-of-fit p-value. On the OLS path the
+#'   reference is the weighted chi-square mixture selected by \code{q_method};
+#'   on the GLS path it is Hotelling's \code{F_{T-K, nu-(T-K)+1}}, which is
+#'   exact. Absent when \code{q_method = "chisq_naive"}, and absent on the GLS
+#'   path when \code{nu} is unknown and \code{unknown_nu = "omit"}.}
+#' \item{\code{Q_df_eff}, \code{Q_scale}}{Chosen so that
+#'   \code{Q_df_eff * Q_scale} is the null mean of \code{Q}. The calibrated
+#'   analogue of the raw \code{Q / (T - K)} ratio is therefore
+#'   \code{Q / (Q_df_eff * Q_scale)}, which has null mean 1 on both paths.}
+#' \item{\code{Q_ref_dist}, \code{Q_ref_df}, \code{Q_ref_source}}{GLS path
+#'   only. Which reference produced \code{Q_pval}, the per-SNP \code{nu} it
+#'   used, and how that \code{nu} was obtained.}
 #' 
 #' @export
 param_gwas <- function(
@@ -236,7 +248,8 @@ param_gwas <- function(
   gls_ridge = 1e-8,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr"),
-  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite",
+               "hotelling"),
   nu = NULL,
   nu_source = NULL,
   unknown_nu = c("omit", "normal", "error"),
@@ -251,6 +264,31 @@ param_gwas <- function(
   return_cov <- match.arg(return_cov)
   q_method <- match.arg(q_method)
   unknown_nu <- match.arg(unknown_nu)
+
+  # The two estimators compute different statistics, so their references are
+  # not interchangeable and the package refuses rather than silently
+  # substituting one. See the derivation at the foot of R/tail-reference.R.
+  gls_path <- (se_mode == "tau_cov" && tau_cov_estimator == "gls")
+  if (q_method == "hotelling" && !gls_path) {
+    stop("q_method = \"hotelling\" applies only to ",
+         "se_mode = \"tau_cov\" with tau_cov_estimator = \"gls\". The OLS Q is ",
+         "r' D^-1 r with D diagonal, whose null law is a weighted sum of ",
+         "chi-squares with a per-SNP spectrum, not a Hotelling T^2. Use ",
+         "q_method = \"saddlepoint\" there.", call. = FALSE)
+  }
+  if (gls_path && q_method %in% c("liu", "satterthwaite")) {
+    stop("q_method = \"", q_method, "\" does not apply to ",
+         "tau_cov_estimator = \"gls\". Those methods match the first two or ",
+         "four moments of the eigenvalue spectrum of ",
+         "D^-1/2 M Sigma M' D^-1/2, which is what the OLS Q needs. The GLS Q ",
+         "weights by Sigma^-1, so that spectrum is degenerate -- every ",
+         "eigenvalue is 1 -- and moment matching to it returns chi2(T - K), ",
+         "which ignores that Sigma is ESTIMATED and is anti-conservative at ",
+         "every finite nu (12% rejection at nominal 5% when nu = 500, 99% when ",
+         "nu = 60). The exact reference is available in closed form: use ",
+         "q_method = \"hotelling\" (or the default \"saddlepoint\", which ",
+         "resolves to it on this path).", call. = FALSE)
+  }
 
   taus    <- stage1$taus
   q_tau   <- stage1$q_tau
@@ -379,6 +417,37 @@ if (se_mode == "diagonal") {
       ))
       gls_diag <- d
     }
+
+    # Reference for the GLS lack-of-fit statistic.
+    #
+    # Q_gls = (b - W theta)' S^-1 (b - W theta) is Hotelling's T^2 on the
+    # m = T - K residual dimensions and nu degrees of freedom, EXACTLY:
+    #
+    #     Q_gls ~ (nu m / (nu - m + 1)) F_{m, nu - m + 1}
+    #
+    # not chi2(T - K), and not the OLS eigenvalue spectrum. The full
+    # derivation and the simulation that confirms it are in
+    # R/tail-reference.R. "saddlepoint" is the argument default, and on this
+    # path the quantity it approximates is available exactly, so it resolves
+    # to the exact reference rather than erroring.
+    if (q_method != "chisq_naive") {
+      if (q_method == "saddlepoint") {
+        message("GLS path: q_method = \"saddlepoint\" resolves to the exact ",
+                "Hotelling F reference for Q. The GLS quadratic form has a ",
+                "degenerate eigenvalue spectrum, so there is nothing for a ",
+                "saddlepoint to approximate. Recorded as ",
+                "Q_ref_dist = \"hotelling_f\".")
+      }
+      q_ref <- .q_reference_gls(
+        P = P,
+        nu = nu, nu_source = nu_source,
+        n_blocks = n_blocks, n_eff = n_eff,
+        df_model = df_model, df_coef = df_coef,
+        unknown_nu = unknown_nu,
+        where = "this call to param_gwas(tau_cov_estimator = \"gls\")"
+      )
+      q_cal <- .q_pvalue_gls(Q = Q_stat, m = Tt - K, ref = q_ref)
+    }
   } else {
     # Use C++ helper for fast computation
     se_mat <- compute_calibrated_se(
@@ -486,10 +555,16 @@ if (se_mode == "diagonal") {
     df        = Tt - K,
     q_method  = q_method
   )
-  if (exists("q_cal", inherits = FALSE)) {
+  if (exists("q_cal", inherits = FALSE) && !is.null(q_cal)) {
     out$Q_pval   <- q_cal$pval
     out$Q_df_eff <- q_cal$df_eff
     out$Q_scale  <- q_cal$scale
+    # Provenance, GLS path only: the OLS output is left byte-for-byte as it was.
+    if (!is.null(q_cal$ref_dist)) {
+      out$Q_ref_dist   <- q_cal$ref_dist
+      out$Q_ref_df     <- q_cal$nu
+      out$Q_ref_source <- q_cal$ref_source
+    }
   }
   if (return_cov == "upper") out$param_cov_upper <- param_cov_upper
   if (return_cov == "full") out$param_cov <- param_cov_full
@@ -740,7 +815,8 @@ param_gwas_from_file <- function(
   tau_cov_estimator = c("ols", "gls"),
   gls_ridge = 1e-8,
   n_threads = 1L,
-  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite",
+               "hotelling"),
   cov_meta_file = NULL,
   nu = NULL,
   unknown_nu = c("omit", "normal", "error"),
@@ -982,6 +1058,11 @@ param_gwas_from_file <- function(
     out_dt$Q_pval   <- result$Q_pval
     out_dt$Q_df_eff <- result$Q_df_eff
     out_dt$Q_scale  <- result$Q_scale
+    if (!is.null(result$Q_ref_dist)) {
+      out_dt$Q_ref_dist   <- result$Q_ref_dist
+      out_dt$Q_ref_df     <- result$Q_ref_df
+      out_dt$Q_ref_source <- result$Q_ref_source
+    }
   } else {
     out_dt$Q_pval <- stats::pchisq(result$Q, df = result$df, lower.tail = FALSE)
   }

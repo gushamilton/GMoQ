@@ -289,19 +289,43 @@ the same quantity that does the damage (arm A, scale, OLS, p < 0.05):
 | `LSK` | 0.0640 | 0.0965 | 0.2701 |
 | `TRU` | 0.0619 | 0.0755 | 0.1413 |
 
-Two gaps, both worth acting on:
+Two gaps were recorded here. **Both have since been resolved, and the first
+was an artefact of this table.** (2026-09-15)
 
-1. **Power is only ~53% where the damage is worst.** At arm A, `LS`,
-   N = 461,320, GLS coverage of `beta_sigma2` is 0.8437 while Q flags just
-   53% of replicates at p < 0.05 (50% at 5e-8). Roughly half of badly affected
-   variants pass the guard.
-2. **The GLS path emits no Q p-value at all.** Confirmed on a minimal
-   reproducer: `param_gwas(..., tau_cov_estimator = "gls")` returns `Q` and `df`
-   but no `Q_pval`, `Q_df_eff` or `Q_scale`, where the OLS call returns all of
-   them. The guard `OLS_VS_GLS.md` asked for is unavailable on the estimator
-   that needs it most. (The GLS `Q` values are also on a visibly different scale
-   — 30–49 against OLS's 8–18 on identical near-null inputs at df 43 — so this
-   needs its own calibration, not merely plumbing a p-value through.)
+1. ~~**Power is only ~53% where the damage is worst.**~~ **Withdrawn: 53% is
+   the average of two cells that behave oppositely, and averaging them was a
+   mistake in the table above.** Every row in this document averages over
+   `shape`, and the two halves of the arm A / `LS` / N = 461,320 row are:
+
+   | cell | errors | GLS cov95 `beta_sigma2` | Q rej @ p<0.05 |
+   |---|---|---|---|
+   | 25 | normal | 0.9387 | 0.0635 |
+   | 28 | gamma(2) | **0.7487** | **1.0000** |
+   | reported average | | 0.8437 | 0.5317 |
+
+   Under normal errors `W_LS`'s `qnorm(tau)` spans the same column space as
+   `W_TRU`'s, so `LS` is essentially correctly specified: nothing is wrong
+   (coverage 0.9387) and Q correctly sits near its null rate. Under gamma(2)
+   the symmetric basis `{1, qnorm(tau)}` cannot represent a scale effect on a
+   skewed error, GLS's `beta_sigma2` bias/sd reaches 1.219, coverage collapses
+   to 0.7487 — **and the calibrated GLS Q flags 100.00% of replicates at
+   p < 0.05** [0.9998, 1.0000], 99.82% at 1e-3 and 84.39% at 5e-8. There is no
+   population of badly affected variants that passes the guard; there is a
+   population of well-specified variants that correctly does.
+
+2. **The GLS path emits no Q p-value at all.** ~~Confirmed on a minimal
+   reproducer.~~ **Fixed.** `param_gwas(..., tau_cov_estimator = "gls")` now
+   returns `Q_pval`, `Q_df_eff` and `Q_scale`, calibrated for GLS rather than
+   borrowed from OLS. The GLS `Q` is on a different scale — 30-49 against
+   OLS's 8-18 on identical inputs — because its null mean is `T - K = 43`
+   while the OLS statistic's is `tr(D^-1/2 M Sigma M' D^-1/2)`, far below
+   `T - K` once the taus are correlated. The GLS statistic is pivotal and the
+   OLS one is not, so it gets an exact reference rather than a saddlepoint:
+   `chi2_{T-K}` with `Sigma` known, and Hotelling's
+   `(nu m/(nu-m+1)) F_{m, nu-m+1}` with `Sigma` estimated on `nu` df. Applied
+   to the stored replicates of cells 25 and 28, the GLS numbers are the ones in
+   the table above. See `WHY_GLS_DEGRADES.md` for the restated threshold rule
+   and `stage2/R/tail-reference.R` for the derivation.
 
 ---
 

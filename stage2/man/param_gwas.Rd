@@ -15,7 +15,7 @@ param_gwas(
   gls_ridge = 1e-08,
   n_threads = 1L,
   return_cov = c("none", "upper", "full", "mashr"),
-  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite"),
+  q_method = c("saddlepoint", "chisq_naive", "liu", "satterthwaite", "hotelling"),
   nu = NULL,
   nu_source = NULL,
   unknown_nu = c("omit", "normal", "error"),
@@ -135,6 +135,18 @@ parameter per SNP.}
 \item{\code{param_ref_c}}{Satterthwaite coefficient used per parameter.}
 \item{\code{Q}}{Vector of Q statistics per SNP (if computed).}
 \item{\code{df}}{Degrees of freedom for Q statistic.}
+\item{\code{Q_pval}}{Calibrated lack-of-fit p-value. On the OLS path the
+reference is the weighted chi-square mixture selected by \code{q_method};
+on the GLS path it is Hotelling's \code{F_{T-K, nu-(T-K)+1}}, which is
+exact. Absent when \code{q_method = "chisq_naive"}, and absent on the GLS
+path when \code{nu} is unknown and \code{unknown_nu = "omit"}.}
+\item{\code{Q_df_eff}, \code{Q_scale}}{Chosen so that
+\code{Q_df_eff * Q_scale} is the null mean of \code{Q}. The calibrated
+analogue of the raw \code{Q / (T - K)} ratio is therefore
+\code{Q / (Q_df_eff * Q_scale)}, which has null mean 1 on both paths.}
+\item{\code{Q_ref_dist}, \code{Q_ref_df}, \code{Q_ref_source}}{GLS path
+only. Which reference produced \code{Q_pval}, the per-SNP \code{nu} it
+used, and how that \code{nu} was obtained.}
 }
 \description{
 Maps quantile-level GWAS results into effects on user-specified

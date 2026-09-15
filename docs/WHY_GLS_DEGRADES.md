@@ -86,20 +86,56 @@ exactly where the residual lives.
 
     Q = (b - W theta_hat)' Sigma^-1 (b - W theta_hat)
 
-| `Q / (T - K)` | guidance |
+**The raw ratio `Q/(T-K)` is the wrong quantity on the GLS path, and the
+thresholds below do not transfer to it unrestated.** They were measured on the
+pooled covariance path, where `nu = n_samples` is so large that `Sigma` is
+effectively known. On the jackknife path `Sigma` is estimated on a finite `nu`,
+and `Q_gls` is then Hotelling's `T^2`, whose null mean is `nu(T-K)/(nu-(T-K)-1)`
+and not `T - K`. Measured null mean of `Q/(T-K)` under a CORRECTLY SPECIFIED
+model, T = 45, K = 2 (400,000 replicates per cell):
+
+| `nu` | `E[Q]/(T-K)` | null fraction with `Q/(T-K) > 1.1` | `> 1.5` |
+|---|---|---|---|
+| infinite | 1.001 | 0.304 | 0.019 |
+| 1000 | 1.045 | 0.378 | 0.034 |
+| 260 | 1.203 | 0.611 | 0.148 |
+| 100 | 1.787 | 0.937 | 0.680 |
+| 60 | 3.753 | 0.999 | 0.984 |
+
+At `nu = 260` -- the production scale-contrast value at MAC 922 -- the raw rule
+would send 61% of perfectly well specified variants to the `> 1.1` bucket.
+
+**Use the calibrated ratio instead.** Stage 2 now returns `Q_df_eff` and
+`Q_scale` on the GLS path, chosen so that `Q_df_eff * Q_scale` is the null mean
+of `Q`. The quantity that carries the same meaning at every `nu` is
+
+    R = Q / (Q_df_eff * Q_scale)        null mean 1 on BOTH estimator paths
+
+whose null exceedance is 0.30 (`R > 1.1`) and 0.02-0.03 (`R > 1.5`) across the
+whole range above. On `R` the original thresholds keep their intent:
+
+| `R` | guidance |
 |---|---|
 | < 1.1 | OLS and GLS both safe |
 | 1.1 - 1.5 | OLS safer; GLS acceptable only at large effect size |
 | > 1.5 | OLS only, particularly for dispersion and shape parameters |
 
-At production N the margin is thin: even `Q/(T-K) = 1.05` is marginal for GLS,
+At production N the margin is thin: even `R = 1.05` is marginal for GLS,
 because the bias-to-SE threshold for coverage failure falls as N rises.
 
-**This rule is not currently enforceable on the GLS path.**
-`param_gwas(tau_cov_estimator = "gls")` returns `Q` but no `Q_pval`, `Q_df_eff` or
-`Q_scale`, and GLS's `Q` is on a different scale from OLS's (30-49 against 8-18 on
-identical inputs), so it needs calibrating rather than plumbing. Until that is done,
-the guard is absent on the estimator that most needs it. See `N_SCALING.md`.
+Note what those exceedance rates mean: `R > 1.1` fires on 30% of correctly
+specified variants even with `Sigma` known. These are screening cuts, not
+tests. **`Q_pval` is the calibrated quantity**; prefer it when a rate matters.
+
+**The rule is now enforceable on the GLS path.**
+`param_gwas(tau_cov_estimator = "gls")` returns `Q_pval`, `Q_df_eff` and
+`Q_scale`, referenced against `F_{T-K, nu-(T-K)+1}` rather than against the OLS
+eigenvalue spectrum. GLS's `Q` reads 30-49 against OLS's 8-18 on identical
+inputs because its null mean is `T - K = 43` while OLS's is
+`tr(D^-1/2 M Sigma M' D^-1/2)`, far below `T - K` once the taus are correlated;
+they are different statistics, and only the GLS one is pivotal. The derivation
+is at the foot of `stage2/R/tail-reference.R`; `N_SCALING.md` section 7 has the
+measured power.
 
 ## Consequence
 

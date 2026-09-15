@@ -474,3 +474,264 @@ N_EFF_COLUMN <- "d_resid"
   dimnames(p) <- dimnames(params)
   p
 }
+
+# ---------------------------------------------------------------------------
+# Reference distribution for the GLS lack-of-fit statistic Q
+#
+# The OLS and GLS paths compute DIFFERENT statistics and need different
+# references. Borrowing one for the other is wrong, and wrong by a factor that
+# is not a constant.
+#
+#   OLS:  Q = r' D^-1 r,   r = M b,  M = I - W (W'W)^-1 W',  D = diag(se_tau^2)
+#   GLS:  Q = r' S^-1 r,   r = b - W theta_gls,
+#         theta_gls = (W' S^-1 W)^-1 W' S^-1 b
+#
+# The OLS statistic weights the residual by the per-tau variances alone and
+# ignores the (very strong) cross-tau correlation, so its null law is
+# sum_i lambda_i chi2_1 with lambda the spectrum of D^-1/2 M Sigma M' D^-1/2 --
+# a different spectrum for every SNP, which is exactly what the saddlepoint
+# machinery in compute_q_calibration() exists to handle. The GLS statistic
+# weights by S^-1, which is the inverse of the residual's own covariance, and
+# that collapses the spectrum to a flat one.
+#
+# WITH Sigma KNOWN. Put H = W (W'Sigma^-1 W)^-1 W' Sigma^-1, so r = (I - H) b.
+# H is idempotent and Sigma^-1 H is symmetric, whence
+#
+#   (I - H)' Sigma^-1 (I - H) = Sigma^-1 - Sigma^-1 W (W'Sigma^-1 W)^-1 W'Sigma^-1
+#
+# and that matrix annihilates W, so Q does not depend on theta. With
+# e = b - W theta ~ N(0, Sigma) and e = Sigma^1/2 z,
+#
+#   Q = z' (I - P) z,    P = Wt (Wt'Wt)^-1 Wt',   Wt = Sigma^-1/2 W
+#
+# P is an ORTHOGONAL projector of rank K, so
+#
+#   Q_gls ~ chi2_{T-K}     exactly, every SNP, no spectrum, no saddlepoint.
+#
+# Measured over 20,000 draws at T = 45, K = 2 on a Brownian-bridge Sigma:
+# mean(Q) 43.03 against 43, var(Q) 86.90 against 86, KS p against U(0,1) 0.76,
+# rejection at 0.05 = 0.0515 (MC se 0.0015).
+#
+# This accounts in full for the "different scale" observation in
+# docs/WHY_GLS_DEGRADES.md. GLS's Q runs 30-49 because its null mean is
+# T - K = 43; OLS's runs 8-18 because tr(D^-1/2 M Sigma M' D^-1/2) falls far
+# below T - K once the taus are correlated. Neither is wrong. They are
+# different statistics, and only one of them is pivotal.
+#
+# WITH Sigma ESTIMATED -- the actual situation, since Stage 1 supplies a
+# block-jackknife S. Rotate so Sigma^-1/2 W spans the first K coordinates and
+# put V = Sigma^-1/2 S Sigma^-1/2. The matrix
+# V^-1 - V^-1 E (E'V^-1 E)^-1 E'V^-1, with E selecting those K coordinates, is
+# the Schur complement of the leading block of V^-1, which equals the INVERSE
+# of the trailing m x m block of V, m = T - K. So
+#
+#   Q_gls = u' V_22^-1 u,    u ~ N(0, I_m)  independent of V_22,
+#
+# and if nu S is Wishart_T(nu, Sigma) then nu V_22 is Wishart_m(nu, I_m). That
+# is Hotelling's T^2 in m dimensions on nu degrees of freedom:
+#
+#   Q_gls  ~  (nu m / (nu - m + 1)) F_{m, nu - m + 1}          exact
+#   E[Q_gls] = nu m / (nu - m - 1)                             (nu > m + 1)
+#
+# NOT chi2_{T-K}. Measured at T = 45, K = 2 (m = 43), 8,000 draws per nu, with
+# an exact Wishart S drawn independently of b:
+#
+#   nu    mean(Q)   nu m/(nu-m-1)   rejection at 0.05
+#                                   chi2_m     Hotelling
+#   60     160.74      161.25       0.9899      0.0516
+#   100     76.98       76.79       0.7732      0.0550
+#   200     55.12       55.13       0.3451      0.0457
+#   500     46.95       47.15       0.1237      0.0474
+#   2000    44.06       43.97       0.0633      0.0496
+#
+# (MC se 0.0024.) The chi-square reference is anti-conservative at EVERY finite
+# nu and catastrophically so when nu is not large against m: at nu = 60 it
+# rejects 99% of correctly specified variants. Same class of defect as reading
+# theta/SE against a normal, and larger, because Q consumes the whole
+# m-dimensional residual block of S rather than one contrast of it.
+#
+# WHICH nu. The law 1/nu = 1/(B - 1) + c/N_eff was fitted for a SCALAR contrast
+# a'S a. Q uses the whole residual block, so the law is being asked for
+# something it was not fitted for. Handled, not assumed away:
+#   * c -- the residual subspace mixes location-like and scale-like directions
+#     and is not a single contrast, so the SCALE coefficient is used. That is
+#     the conservative end: larger c -> smaller nu -> heavier tail -> larger p.
+#   * nu must exceed m or V_22 is singular and Q is degenerate rather than
+#     merely badly referenced. This code refuses there instead of returning a
+#     number. With T = 45 and K = 2 that needs nu >= 44, which the B = 1000
+#     production default clears everywhere but which B = 65 does NOT.
+# ---------------------------------------------------------------------------
+
+#' Effective degrees of freedom of Sigma for the GLS lack-of-fit statistic
+#'
+#' The same ladder as \code{.param_reference()}, collapsed to one \code{nu} per
+#' SNP rather than one per parameter per SNP, because \code{Q} is a single
+#' statistic per SNP. The Satterthwaite coefficient is the scale-type one: the
+#' residual subspace is not a single contrast, and the scale value is the
+#' conservative choice.
+#'
+#' @param P Number of SNPs.
+#' @param nu Explicit degrees of freedom, or \code{NULL}.
+#' @param nu_source Provenance for \code{nu}.
+#' @param n_blocks Number of populated jackknife blocks, or \code{NULL}.
+#' @param n_eff Per-SNP effective sample size (length \code{P}), or \code{NULL}.
+#' @param df_model List from \code{.resolve_df_model()}.
+#' @param df_coef Optional override for \code{c}: a single number, or a vector
+#'   with a \code{"Q"} entry.
+#' @param unknown_nu One of "omit", "normal", "error". \code{"normal"} means
+#'   the \code{Sigma}-known limit, which for \code{Q} is \code{chi2_m}, not a
+#'   normal; it is anti-conservative and is recorded as such.
+#' @param where Human-readable description used in messages.
+#' @return List with \code{dist} ("hotelling_f", "chisq" or "none"),
+#'   \code{nu} (numeric vector of length \code{P}), \code{source} and \code{c}.
+#' @keywords internal
+.q_reference_gls <- function(P,
+                             nu = NULL, nu_source = NULL,
+                             n_blocks = NULL, n_eff = NULL,
+                             df_model = NULL, df_coef = NULL,
+                             unknown_nu = c("omit", "normal", "error"),
+                             where = "this covariance") {
+  unknown_nu <- match.arg(unknown_nu)
+  if (is.null(df_model)) df_model <- .resolve_df_model(NULL)
+
+  none <- list(dist = "none", nu = NULL, source = NA_character_, c = NULL)
+
+  # --- 1. explicit nu from the caller ------------------------------------
+  nu1 <- if (is.null(nu)) NA_real_ else .first_positive(nu)
+  if (is.finite(nu1)) {
+    src <- as.character(nu_source)[1L]
+    if (is.null(src) || is.na(src) || !nzchar(src)) src <- "user_supplied"
+    return(list(dist = "hotelling_f", nu = rep(nu1, P), source = src, c = NULL))
+  }
+
+  # --- c for the residual subspace ---------------------------------------
+  c_q <- df_model$c_scale
+  if (!is.null(df_coef)) {
+    if (length(df_coef) == 1L && is.null(names(df_coef))) {
+      c_q <- as.numeric(df_coef)
+    } else if ("Q" %in% names(df_coef)) {
+      c_q <- as.numeric(df_coef[["Q"]])
+    }
+  }
+
+  B <- if (is.null(n_blocks)) NA_real_ else .first_positive(n_blocks)
+  if (is.finite(B) && B >= 2) {
+    n_eff_v <- if (is.null(n_eff)) rep(NA_real_, P) else as.numeric(n_eff)
+    if (length(n_eff_v) != P) n_eff_v <- rep(n_eff_v, length.out = P)
+    good <- is.finite(n_eff_v) & n_eff_v > 0
+
+    # --- 2. the measured law, per SNP -----------------------------------
+    if (any(good)) {
+      n_eff_v[!good] <- df_model$fallback_n_eff
+      return(list(dist = "hotelling_f",
+                  nu = .effective_nu(B, n_eff_v, c_q),
+                  source = "per_snp_satterthwaite", c = c_q))
+    }
+
+    # --- 3. the same law at a fallback N_eff ----------------------------
+    warning("No per-SNP ", df_model$n_eff_column, " available for ", where,
+            ". The GLS Q reference falls back to a flat effective df computed ",
+            "at N_eff = ", df_model$fallback_n_eff, ".", call. = FALSE)
+    return(list(dist = "hotelling_f",
+                nu = rep(.effective_nu(B, df_model$fallback_n_eff, c_q), P),
+                source = "flat_fallback_n_eff", c = c_q))
+  }
+
+  # --- 4. nothing usable -------------------------------------------------
+  msg <- paste0(
+    "Degrees of freedom of the Stage 1 covariance are unknown for ", where,
+    ", so the GLS lack-of-fit statistic Q cannot be referenced. Q on the GLS ",
+    "path is Hotelling's T^2 on the residual dimensions, NOT chi2(T - K): with ",
+    "an estimated Sigma the chi-square reference rejects 12% of correctly ",
+    "specified variants at nominal 5% when nu = 500, and 99% when nu = 60. ",
+    "Stage 1 records the block count in <prefix>.cov.meta.json and the per-SNP ",
+    "N_eff in the d_resid column; re-run Stage 1, or pass nu explicitly."
+  )
+  if (unknown_nu == "error") stop(msg, call. = FALSE)
+  if (unknown_nu == "normal") {
+    warning(msg,
+            " Emitting the Sigma-KNOWN limit chi2(T - K) because ",
+            "unknown_nu = \"normal\"; it is anti-conservative at every finite ",
+            "nu. The output records Q_ref_dist = \"chisq\".", call. = FALSE)
+    return(list(dist = "chisq", nu = rep(Inf, P), source = NA_character_, c = NULL))
+  }
+  warning(msg,
+          " No Q p-value will be emitted (unknown_nu = \"omit\").",
+          " Do not recompute one with pchisq(Q, T - K): that is the defect",
+          " this refusal exists to prevent.", call. = FALSE)
+  none
+}
+
+#' Calibrated p-value for the GLS lack-of-fit statistic
+#'
+#' \code{Q ~ (nu m / (nu - m + 1)) F_{m, nu - m + 1}} with \code{m = T - K}.
+#' Reported on the same contract as the OLS path: \code{Q_df_eff} and
+#' \code{Q_scale} are chosen so that \code{Q_df_eff * Q_scale} is the null mean
+#' of \code{Q}, so \code{Q / (Q_df_eff * Q_scale)} is the calibrated analogue of
+#' the raw \code{Q / (T - K)} ratio and has null mean 1 on both paths.
+#'
+#' \code{Q_df_eff} is exactly \code{m} and not less: under GLS every eigenvalue
+#' of the quadratic form is 1, so there is no spectral shrinkage of the kind the
+#' OLS path sees. All of the correction lives in \code{Q_scale}.
+#'
+#' @param Q Numeric vector of observed Q statistics.
+#' @param m Residual dimension \code{T - K}.
+#' @param ref List from \code{.q_reference_gls()}.
+#' @return List with \code{pval}, \code{df_eff}, \code{scale}, \code{nu},
+#'   \code{ref_dist} and \code{ref_source}, or \code{NULL} when no reference
+#'   applies.
+#' @keywords internal
+.q_pvalue_gls <- function(Q, m, ref) {
+  if (is.null(ref) || identical(ref$dist, "none")) return(NULL)
+  Q <- as.numeric(Q)
+  n <- length(Q)
+  m <- as.numeric(m)[1L]
+  if (!is.finite(m) || m < 1) {
+    stop("The GLS lack-of-fit statistic needs at least one residual dimension; ",
+         "T - K = ", m, ". With ncol(W) >= length(taus) there is no lack of fit ",
+         "to test and Q is identically zero.", call. = FALSE)
+  }
+
+  pval   <- rep(NA_real_, n)
+  df_eff <- rep(m, n)
+  scale  <- rep(NA_real_, n)
+  nu_v   <- as.numeric(ref$nu)
+  if (length(nu_v) != n) nu_v <- rep(nu_v, length.out = n)
+
+  if (identical(ref$dist, "chisq")) {
+    ok <- is.finite(Q)
+    pval[ok]  <- stats::pchisq(Q[ok], df = m, lower.tail = FALSE)
+    scale[]   <- 1
+    return(list(pval = pval, df_eff = df_eff, scale = scale, nu = nu_v,
+                ref_dist = "chisq", ref_source = ref$source))
+  }
+
+  # Hotelling. nu must clear m for V_22 to be invertible; df2 = nu - m + 1 must
+  # be at least 2 for the reference to have a mean of its own.
+  usable <- is.finite(nu_v) & nu_v >= m + 1
+  if (!all(usable)) {
+    bad <- sum(!usable)
+    rng <- suppressWarnings(range(nu_v[!usable], na.rm = TRUE))
+    warning(bad, " of ", n, " SNPs have effective df nu below m + 1 = ", m + 1,
+            " (observed ", if (all(is.finite(rng))) paste0(signif(rng[1], 4), " to ",
+            signif(rng[2], 4)) else "non-finite",
+            "), so the residual block of the estimated Sigma is singular or ",
+            "nearly so and Q is degenerate rather than merely mis-referenced. ",
+            "No Q p-value is emitted for them. Raise the Stage 1 block count, ",
+            "or use tau_cov_estimator = \"ols\", whose Q needs no inverse.",
+            call. = FALSE)
+  }
+  ok <- usable & is.finite(Q)
+  if (any(ok)) {
+    nu_ok <- nu_v[ok]
+    pval[ok] <- stats::pf(Q[ok] * (nu_ok - m + 1) / (nu_ok * m),
+                          df1 = m, df2 = nu_ok - m + 1, lower.tail = FALSE)
+  }
+  # Null mean exists only for nu > m + 1.
+  has_mean <- usable & nu_v > m + 1
+  scale[has_mean] <- nu_v[has_mean] / (nu_v[has_mean] - m - 1)
+  df_eff[!usable] <- NA_real_
+
+  list(pval = pval, df_eff = df_eff, scale = scale, nu = nu_v,
+       ref_dist = "hotelling_f", ref_source = ref$source)
+}
