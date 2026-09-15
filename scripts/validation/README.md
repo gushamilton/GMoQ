@@ -21,7 +21,8 @@ log_bmi run. For a matched exploratory mean-plus-variance fit,
 `build_logbmi_matched_baseline.py` derives quantiles and SD from the
 LOCO-adjusted, BGEN-matched log_bmi rows and the R wrapper passes those values
 to `make_weights_vqtl`. The empirical outputs are descriptive and carry no
-known-effect truth claim.
+known-effect truth claim. Aggregate provenance for the final matched fit is in
+`real_chr22_empirical_provenance.md`.
 
 `time_bgen_decode.py` compares the native 8-bit dosage path with the checked
 per-record preamble path. `compare_repeat.py` compares decompressed output
