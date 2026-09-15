@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 from pathlib import Path
 
@@ -19,6 +20,8 @@ def main() -> None:
     ap.add_argument("--covar", type=Path, required=True)
     ap.add_argument("--keep", type=Path, required=True)
     ap.add_argument("--loco", type=Path, required=True)
+    ap.add_argument("--stage1", type=Path, required=True,
+                    help="Stage 1 output whose beta_tau columns define the grid")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
@@ -42,10 +45,17 @@ def main() -> None:
     valid_mask, _ = cli.match_samples(bgen_samples, sample_ids)
     handle.close()
     y_match = y_loco[valid_mask]
-    taus = np.linspace(0.02, 0.98, 45)
+    with gzip.open(args.stage1, "rt") as fh:
+        header = next(fh).rstrip("\n").split("\t")
+    beta_cols = [name for name in header if name.startswith("beta_tau_")]
+    if not beta_cols:
+        raise ValueError(f"no beta_tau_ columns found in {args.stage1}")
+    taus = np.asarray([float(name.removeprefix("beta_tau_")) for name in beta_cols])
     result = {
         "phenotype": "log_bmi",
         "definition": "log(bmi), LOCO chr22 subtraction, then BGEN sample match",
+        "stage1_file": str(args.stage1),
+        "n_taus": int(taus.size),
         "loco_file": loco_files["log_bmi"],
         "loco_scale": float(scale),
         "n_loco_rows": int(y.size),

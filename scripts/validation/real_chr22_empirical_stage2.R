@@ -14,24 +14,36 @@ get_arg <- function(flag) {
   if (is.na(i) || i == length(args)) stop("missing argument: ", flag)
   args[[i + 1L]]
 }
+has_arg <- function(flag) flag %in% args
 
 stage1_file <- get_arg("--stage1")
 sigma0_file <- get_arg("--sigma0")
 cov_meta_file <- get_arg("--cov-meta")
-weights_file <- get_arg("--weights")
+weights_file <- if (has_arg("--weights")) get_arg("--weights") else NULL
 baseline_file <- if ("--baseline-json" %in% args) get_arg("--baseline-json") else NULL
 out_file <- get_arg("--out")
+if (is.null(weights_file) && is.null(baseline_file)) {
+  stop("provide --weights or --baseline-json")
+}
 
 header <- fread(stage1_file, nrows = 0L)
 beta_cols <- grep("^beta_tau_", names(header), value = TRUE)
 taus <- as.numeric(sub("^beta_tau_", "", beta_cols))
 if (!is.null(baseline_file)) {
   baseline <- fromJSON(baseline_file)
+  baseline_taus <- as.numeric(baseline$taus)
+  if (length(baseline_taus) != length(taus) ||
+      any(abs(baseline_taus - taus) > 1e-8)) {
+    stop("matched baseline taus do not exactly match the Stage 1 tau grid")
+  }
+  if (length(baseline$q_tau) != length(taus)) {
+    stop("matched baseline q_tau length does not match the Stage 1 tau grid")
+  }
   W <- make_weights_vqtl(
-    as.numeric(baseline$taus), as.numeric(baseline$q_tau),
+    baseline_taus, as.numeric(baseline$q_tau),
     mu = as.numeric(baseline$mean), sd = as.numeric(baseline$sd)
   )
-  w_taus <- NULL
+  w_taus <- baseline_taus
 } else {
   wobj <- readRDS(weights_file)
   if (is.list(wobj) && !is.null(wobj$W)) {
