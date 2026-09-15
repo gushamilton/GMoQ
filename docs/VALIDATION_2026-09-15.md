@@ -31,6 +31,15 @@ by these bounded experiments.
   naive-Q fallback.
 - Correct the saved REGENIE allele-alignment claim and withdraw unsupported
   universal claims about covariate adjustment and relatedness.
+- Fix explicit jackknife multi-model file scans to validate IDs against raw
+  rows before duplicate/multiallelic filtering, then select the matching
+  covariance offsets. The final regression checks a retained nonzero offset.
+
+The [final archive verification](../experiments/final-package-check-20260915-01/)
+passed on source `ccc2d97`, including installation into a fresh library and
+the alignment, pooled covariance and ID-refusal checks. R CMD check reported
+zero errors/notes and the existing GNU Makevars portability warning. The
+compute allocation was released after verification.
 
 ## Reproduced checks
 
