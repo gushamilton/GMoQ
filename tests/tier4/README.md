@@ -1,6 +1,14 @@
 # Tier 4: Real Chromosome 22 Validation
 
-This tier validates G-MoQ on **real chromosome 22 BGEN data** with **simulated phenotypes of known ground truth.**
+Historical validation scaffold, retained for reference. These scripts are not a
+completed scientific validation: LD-linked noncausal variants need not have null
+marginal effects, and generated scale effects must be converted to the fitted
+parameter's units before judging recovery. The criteria and timings below are
+historical proposals, not verified release evidence.
+
+On BluePebble, run every analysis, interpreter invocation and environment check
+inside a compute-node allocation. Login nodes are for inspection, file work and
+job control only. Reuse one held allocation and cap threads to its resources.
 
 ## Overview
 
@@ -34,7 +42,7 @@ Tiers 0-3 use synthetic genotypes generated in-process, so they never touch the 
 ### Prerequisites
 
 ```bash
-# On the HPC cluster login node:
+# Inside a BluePebble compute-node allocation:
 source /user/home/fh6520/miniforge3/etc/profile.d/conda.sh
 conda activate fungwas-stage1
 module load languages/R/4.5.1
@@ -186,11 +194,11 @@ $GMOQ_WORK/
 
 ## Performance
 
-- **Phenotype simulation:** ~2 min (all 4 cases, login node)
+- **Phenotype simulation:** ~2 min (all 4 cases, compute node)
 - **Stage 1 per case:** ~15 min (8 CPUs, linear in variant count)
 - **Stage 1 all cases:** ~1 hour (if serial) or ~15 min (if parallel on 4 nodes)
-- **Stage 2 per case:** ~3 min (login node)
-- **Analysis:** ~1 min (login node)
+- **Stage 2 per case:** ~3 min (compute node)
+- **Analysis:** ~1 min (compute node)
 
 **Total wall time:** ~1.5–2 hours; **CPU hours:** ~6
 
@@ -240,4 +248,3 @@ $GMOQ_WORK/
 - **`docs/LOCO_SCALE.md`** — LOCO fix validated on chr22; comparison to REGENIE
 - **`docs/DISPERSION_SKEW_CORRECTION.md`** — positive bias in dispersion estimates
 - **`docs/KNOWN_ISSUES.md`** — known defects in shipped code
-

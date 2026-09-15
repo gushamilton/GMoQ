@@ -17,6 +17,8 @@ The primary workflow is **OLS with pooled covariance**. Stage 1 writes the poole
 variation. Per-SNP jackknife covariance remains available as an explicit comparison.
 Pooled covariance is a working approximation: validation must include true variance
 effects and covariate structure, not just null phenotypes.
+See [what the primary analysis estimates](docs/ESTIMAND.md) for effect units,
+the local model interpretation and the scope of validation.
 
 **FungWas** allows you to test SNP associations with:
 - **Variance** (vQTLs)

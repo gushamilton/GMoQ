@@ -1,9 +1,15 @@
-# Relatedness and structure: G-MoQ inherits REGENIE's control, and does better on dispersion
+# Relatedness and structure: model-specific evidence and limitations
 
-Status: derived and confirmed numerically 2026-09-14. **Not a concern at UK Biobank scale.**
-The mean parameter carries exactly REGENIE's exposure; the dispersion parameter carries its
-square. What does need attention is the mean-variance scale artefact, three to four orders
-of magnitude larger - see the last section.
+Status: the calculations below describe particular shared-effect models and historical
+stress tests. They do **not** establish general control of relatedness or population
+structure. The earlier claims that this is universally "not a concern" and that the
+shipped covariate order is necessarily superior are withdrawn.
+
+The 2026-09-15 paired OLS/pooled pilot includes a covariate affecting both mean and
+variance and a conditionally null correlated SNP. It shows residual false positives;
+outcome residualisation first is not a universal repair either. The independent
+dataset is the replication unit. See `tests/validity_pilot/` for the design and
+reproducible checks. A suitable nuisance model must be validated for the intended use.
 
 ## The result
 
@@ -12,8 +18,9 @@ Let `rho` be the residual post-LOCO phenotypic correlation between relatives. Th
     lambda_mu - 1      is proportional to rho
     lambda_sigma2 - 1  is proportional to rho^2
 
-Residual relatedness hits the mean at first order and dispersion only at second. Since
-LOCO's whole job is to make `rho` small, squaring it settles the question.
+Under the shared-additive dependence model considered here, residual relatedness hits
+the mean at first order and dispersion at second. This argument does not cover all
+forms of population structure, shared variance, or misspecified covariate adjustment.
 
 ## Why
 
@@ -59,18 +66,18 @@ Per-tau statistics are inflated by `(lambda_mean - 1) * phi(z_t)^2 / [t(1-t)]`, 
 the median at exactly `2/pi = 0.637` and falling to 0.12 at tau = 0.02. Every per-tau
 statistic is therefore inflated *less* than REGENIE's mean statistic.
 
-## The covariate step is stronger than REGENIE's, and the order of operations is why
+## What the covariate step does, and what the earlier stress test omitted
 
 Stage 1 residualises the RIF matrix on covariates **column by column** (`cli.py:667-677`:
 `Q.T @ rif` is K x T, a separate coefficient vector per tau). The PC adjustment therefore has
-**40 free coefficients at each of 45 quantiles - 1,800 parameters, against REGENIE's 40.**
-Those extra degrees of freedom are exactly what describes how the *shape* of the conditional
-distribution varies with ancestry: a location shift across strata has a flat tau-profile, a
-scale shift an odd `q_tau` profile, and each tau having its own coefficient absorbs both.
+separate coefficients at each of 45 quantiles. This allows different linear covariate
+effects across the quantile grid. It does not guarantee that a linear covariate basis
+represents the relevant conditional expectations.
 
-This depends on the order. Residualising `Y` on PCs and *then* building the RIF would give
-one coefficient set, not 45, and would not absorb second-moment structure. **The pipeline's
-order is the correct one.**
+Residualising `Y` before building its RIF and residualising the RIF afterwards are
+different procedures with potentially different targets. Neither order can be declared
+universally correct from the following variance-only stress test. In particular, that
+test did not vary a covariate's mean and variance effects together.
 
 Stress test (`pc.R`; sd varying as `exp(0.15 * PC)`, SNP with `cor(g, PC) = 0.05`, no true effect):
 

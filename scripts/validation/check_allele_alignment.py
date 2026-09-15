@@ -3,7 +3,6 @@
 Run on a compute node when inputs are on BluePebble. Produces aggregates only.
 """
 import argparse
-import csv
 import gzip
 import json
 from pathlib import Path
@@ -63,6 +62,8 @@ def main():
             raw.append(beta)
             aligned.append(sign * beta)
             reference.append(ref)
+    if len(reference) < 2 or np.std(reference) == 0 or np.std(raw) == 0:
+        raise ValueError('Need at least two compatible, finite, varying effects for correlation.')
     result = {'stage1': str(Path(args.stage1).resolve()),
               'regenie': str(Path(args.regenie).resolve()), **counts,
               'finite_pairs': len(reference),

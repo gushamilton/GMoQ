@@ -8,9 +8,12 @@ incorrectly claimed the conventions necessarily oppose one another.
 ## Stage 1 convention
 
 `stage1/fungwas_stage1/cli.py::extract_dosage()` computes the expected count of
-the first BGEN allele, `alleles[0]`, as `2 - variant.alt_dosage` for diploid
-biallelic variants. That allele is written to `effect_allele`; the other is
-written to `other_allele`.
+the first BGEN allele, `alleles[0]`. For diploid biallelic records at up to
+8-bit probability precision it uses `2 - variant.alt_dosage`. Higher-bit
+records use `2*P(AA) + P(Aa)` from decoded probabilities to avoid an observed
+dosage error in the installed `bgen` library. Bit depth is checked per record,
+including files with mixed depths. That allele is written to `effect_allele`;
+the other is written to `other_allele`.
 
 ## Harmonisation rule
 
