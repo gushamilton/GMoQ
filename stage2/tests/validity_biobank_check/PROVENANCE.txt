@@ -1,0 +1,41 @@
+Audit date: 2026-09-15
+Compute host: bp1-compute001
+R: /software/local/languages/miniforge3/envs/r-4.5.1/bin/R (4.5.1)
+Threads: OMP/OPENBLAS/MKL=2; MAKEFLAGS=-j2
+
+Raw Stage 1 payload:
+  /user/work/fh6520/covsource_run/raw
+  cells.json: /user/work/fh6520/covsource_run/cells.json
+  selected filesets: cell000_chunk0000..cell000_chunk0019,
+    cell001_chunk0000..cell001_chunk0019,
+    cell002_chunk0000..cell002_chunk0019,
+    cell004_chunk0000..cell004_chunk0019,
+    cell005_chunk0000..cell005_chunk0019,
+    cell006_chunk0000..cell006_chunk0019
+  each fileset: 750 replicates; 15,000 replicates per cell; 45 taus; 1,000 blocks
+
+Source compatibility:
+  Stage 1 implementation files match validity-repository commit 24eef02.
+  The remote scratch copy has only packaging/README differences and an
+  __pycache__; it has no git metadata, so this is recorded as an implementation
+  file comparison rather than a remote git checkout claim.
+  ACTUAL100 validity pilot source_commit: f1b4a2c (separate data product).
+  Current Stage 2 source: work-inference commit b1be4d7.
+  Current package library: /user/work/fh6520/gmoq_finish_20260915/inference/lib
+
+Driver:
+  stage2_biobank_audit.R reads the existing .beta/.setau/.sigma0u/.jkcovu,
+  .dresid and .mac binaries and calls the package's own .pooled_cov_data()
+  and param_gwas(). It runs OLS with pooled and jackknife covariance only.
+  No estimator is reimplemented and no raw payload is checked in.
+
+Exact commands used (each through bprun on the existing allocation):
+  R --vanilla --slave --file=stage2_biobank_audit.R --args 0 RAW OUT 2500
+  R --vanilla --slave --file=stage2_biobank_audit.R --args 1 RAW OUT 2500
+  R --vanilla --slave --file=stage2_biobank_audit.R --args 2 RAW OUT 2500
+  R --vanilla --slave --file=stage2_biobank_audit.R --args 4 RAW OUT 2500
+  R --vanilla --slave --file=stage2_biobank_audit.R --args 5 RAW OUT 2500
+  R --vanilla --slave --file=stage2_biobank_audit.R --args 6 RAW OUT 2500
+  R --vanilla --slave --file=summarise_biobank_audit.R --args OUT
+  A separate OUT_COMPARE replayed cell 6 with pooled and jackknife OLS paired
+  on the same 15,000 Stage 1 replicates.
