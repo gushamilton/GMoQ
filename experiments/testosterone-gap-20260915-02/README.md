@@ -27,8 +27,9 @@ Source commit: `b45a93d` (runner fix plus BP syntax-check support). The
 diagnostic ran as Slurm job `18970538` on `bp1-compute015` through `bprun`,
 which invokes `srun --mpi=pmi2`; the output is also retained at the BP path
 `/user/work/fh6520/gmoq_finish_20260915/validity/testosterone-gap-20260915-02/diagnostic.json`.
-The corrected runner's R syntax check passed as job `18970555` on the same
-compute node.
+The corrected runner's R syntax and exact KDE-formula check passed again as
+job `18970574` on the same compute node (the earlier syntax-only check was job
+`18970555`).
 
 Results: the historical mismatched arm estimated mean gamma `0.035918` (truth
 `0.08`), while the same-density arm estimated `0.079556`; the mean model-PDF /
