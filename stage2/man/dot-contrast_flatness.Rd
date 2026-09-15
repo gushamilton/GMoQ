@@ -10,7 +10,7 @@
 \item{a}{Numeric contrast vector over taus.}
 }
 \value{
-Numeric in \link{0, 1}, or \code{NA_real_}.
+Numeric in \code{[0, 1]}, or \code{NA_real_}.
 }
 \description{
 1 for a contrast that weights every tau equally (a location-type contrast,
