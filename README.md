@@ -24,6 +24,15 @@ without rerunning Stage 1.
 See [what the primary analysis estimates](docs/ESTIMAND.md) for effect units,
 the local model interpretation and the scope of validation.
 
+Current validation is intentionally narrow: testosterone on chromosome 22 first.
+The primary result is Stage 2 OLS with pooled covariance; jackknife covariance is
+retained as a sensitivity analysis. Commit `afb59ab` adds an optional
+`fourth_order_gaussian` RIF density kernel and records its method in the
+Stage 1/Stage 2 provenance, while preserving `silverman_gaussian` as the default.
+That kernel is implemented but has not yet passed its focused compute-node tests
+or an end-to-end testosterone chromosome 22 gate. Do not treat genome-wide,
+other-phenotype or whole-paper runs as part of this validation phase.
+
 **FungWas** allows you to test SNP associations with:
 - **Variance** (vQTLs)
 - **Mixture components** (e.g., latent subtypes in a disease)
