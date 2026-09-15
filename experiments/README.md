@@ -36,6 +36,12 @@ them. `validity/pilot_smoke` was a one-replicate execution check, not validity
 evidence. `validity/pilot_final` was an earlier Stage-1-only product; use the
 completed `pilot_linear` result instead.
 
+The unexecuted nuisance-bootstrap prototype is preserved at source `8a2cdfd`
+and tag `experiments/2026-09-15/nuisance-bootstrap-deferred-source`; it is not
+merged into the package branch. Review its output guard against the exclusive
+directory rule below before any future execution. Preparation is not evidence
+that the prototype has been tested.
+
 The independent `covsource_run`/`cs1`/`cs2` campaign has existing jobs and outputs.
 Inspect its live job handles and completed chunks before scheduling anything
 similar; this development work does not own or restart those jobs.
