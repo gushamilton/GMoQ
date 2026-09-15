@@ -1,0 +1,4 @@
+NULL
+Reading Stage 1 file: /tmp/RtmpmZBBo8/cov_ids_test_637b11acbb3b1/test.stage1.tsv
+Loading covariance file: /tmp/RtmpmZBBo8/cov_ids_test_637b11acbb3b1/test.cov.gz
+OK: missing covariance IDs sidecar triggers error
