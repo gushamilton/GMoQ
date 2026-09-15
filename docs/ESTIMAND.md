@@ -32,6 +32,13 @@ effect bias but still shows inflated pooled false positives at low frequency.
 Use the jackknife comparison and the setting-specific validation report before
 interpreting pooled p-values in that regime.
 
+The current jackknife also holds the fitted quantiles and density fixed. It
+therefore does not propagate all nuisance-estimation uncertainty for nonzero
+effects. A lower-bias density estimate alone does not close that gap; see the
+[RIF uncertainty derivation](../stage2/docs/DENSITY_RIF_NUISANCE.md). The
+jackknife comparison above is useful evidence, not a universal calibration
+guarantee.
+
 For the Normal mean/variance model, `beta_mu` is on the outcome scale and
 `beta_sigma2` is on the squared outcome scale per counted allele. Interpretation
 as a conditional mean or variance coefficient is a local model interpretation,
