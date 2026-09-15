@@ -254,12 +254,59 @@ socket and core counts, threads used, total memory, Slurm node), because a
 timing with no machine attached to it is not reproducible and should not be
 quoted.
 
+### Measured, 2026-09-14
+
+N = 461,320, 5,000 variants, the production 45-tau grid, 1,000 jackknife blocks,
+int8 covariance, 8 threads on an **Intel Xeon Gold 6126 @ 2.60 GHz** (2 sockets
+x 12 cores, 187 GB), BluePebble node `bp1-compute010`. The BGEN is 513 MB of
+`plink2 --dummy` output.
+
+| | wall | CPU | peak RSS |
+|---|---|---|---|
+| **Stage 1** | 68.3 s | 248.3 s | 3.09 GB |
+| **Stage 2** | 21.7 s | 105.7 s | 2.23 GB |
+
+Stage 1 by phase: **BGEN read 13.1 s**, kernel 27.5 s, write 15.4 s, RIF build
+0.49 s, `Sigma_0` 0.07 s. Throughput 118.8 variants/s. The write phase is over
+half the cost of the kernel, which is worth knowing before optimising the
+kernel.
+
+Stage 2 by phase (of 21.7 s wall, most of which is R start-up and package load):
+TSV read 0.21 s, covariance read 0.48 s, OLS kernel + Q calibration 0.43 s,
+write 0.05 s.
+
+Stage 2 scaling, covariance payload tiled (synthetic):
+
+| variants | kernel seconds | `cov_vec` in memory |
+|---|---|---|
+| 5,000 | 0.38 | 0.04 GB |
+| 50,000 | 3.72 | 0.39 GB |
+| 200,000 | 14.46 | 1.54 GB |
+
+Linear in the variant count. Extrapolated to 1.2M variants: **Stage 1 about 16.6
+CPU hours**, Stage 2 about 1.4 wall hours and roughly 9 GB of covariance in
+memory -- consistent with the ~10 GB that `docs/KNOWN_ISSUES.md` section 10
+quotes.
+
+### One finding tier 3 produced
+
+**GLS solved 0 of 5,000 variants.** The shipped default covariance is a block
+jackknife stored as int8, and quantisation destroys positive semi-definiteness,
+so there is nothing for the GLS solve to invert. This reproduces
+`docs/KNOWN_ISSUES.md` section 10 exactly ("GLS solved, 1,986 chr22 variants:
+jackknife **0**, pooled 1,986). `tau_cov_estimator = "gls"` is therefore
+unusable as shipped unless `cov_source = "pooled"` or `--cov-dtype float32` is
+also chosen. Raised as **advisory**, since OLS is the default and is unaffected:
+`T3.S2.gls_unusable_on_int8_jackknife`.
+
 **What tier 3 does NOT establish.** Anything about correctness -- the phenotype
 is a null standard normal. It also does not measure a genome-wide scan: the
 per-variant costs are multiplied out to 1.2M variants and that number is
 labelled an extrapolation, defensible for time (Stage 1 is linear in the variant
 count by construction) and *not* used for memory, which the scaling rows measure
-directly instead.
+directly instead. And it measures one machine: a different node, a different
+filesystem or a different thread count will give different numbers, which is why
+the hardware is recorded with them.
 
 ---
 

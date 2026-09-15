@@ -42,13 +42,13 @@ mkdir -p "$out"
 } >"$dir/hardware.txt"
 cat "$dir/hardware.txt"
 
-gmoq_activate_stage1
+gmoq_activate_stage1 || exit 1
 
 # --- Stage 1 ----------------------------------------------------------------
 echo
 echo "== Stage 1: $M variants x 45 taus x $N samples, $TH threads"
 /usr/bin/time -v -o "$dir/stage1.time" \
-  python -m fungwas_stage1.cli \
+  "$GMOQ_PYTHON" -m fungwas_stage1.cli \
     --bgen "$dir/geno.bgen" \
     --pheno "$dir/pheno.txt" --pheno-col simpheno \
     --covar "$dir/covar.txt" \
@@ -72,6 +72,6 @@ tail -n 20 "$dir/stage2.log"
 [ $s2_rc -eq 0 ] || { echo "Stage 2 failed, see $dir/stage2.log"; exit 1; }
 
 # --- assemble ---------------------------------------------------------------
-python "$here/tier3/t3_parse.py" --dir "$dir" --out "$dir/tier3.json"
+"$GMOQ_PYTHON" "$here/tier3/t3_parse.py" --dir "$dir" --out "$dir/tier3.json"
 echo
 echo "tier 3 measurements in $dir/tier3.json"

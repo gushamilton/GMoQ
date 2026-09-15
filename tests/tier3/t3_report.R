@@ -63,6 +63,20 @@ rep_row("T3.S2.phase_kernel_gls_sec", "Stage 2 phase: the GLS solve.", s2$stage2
 rep_row("T3.S2.phase_write_sec", "Stage 2 phase: writing the results table.", s2$stage2_write_sec, hwtxt)
 rep_row("T3.S2.gls_solved_fraction", "Fraction of variants the GLS solve completed.", s2$gls_solved_fraction, hwtxt)
 
+# GLS on the DEFAULT production covariance -- a block jackknife stored as int8 --
+# has nothing to invert: quantisation destroys positive semi-definiteness, so
+# the solve fails on every variant. docs/KNOWN_ISSUES.md section 10 records
+# exactly this ("GLS solved, 1,986 chr22 variants: jackknife 0, pooled 1,986").
+# It is advisory rather than blocking because OLS is the default and is
+# unaffected, but it means tau_cov_estimator = "gls" is unusable as shipped
+# unless cov_source = "pooled" or --cov-dtype float32 is also chosen.
+gmoq_check("T3.S2.gls_unusable_on_int8_jackknife",
+           "Advisory: GLS cannot be used with the default int8 jackknife covariance -- quantisation makes Sigma indefinite and the solve fails on every variant.",
+           is.na(num(s2$gls_solved_fraction)) || num(s2$gls_solved_fraction) > 0.5,
+           severity = "advisory", stat = num(s2$gls_solved_fraction),
+           criterion = "fraction of variants GLS solved > 0.5 on the shipped defaults",
+           detail = "use cov_source='pooled' or --cov-dtype float32 for GLS")
+
 rep_row("T3.EXTRAP.stage1_cpu_hours_1.2M",
         "Stage 1 CPU hours extrapolated to 1.2M variants. An extrapolation, not a measurement: Stage 1 is linear in the variant count by construction.",
         ex$stage1_cpu_hours_at_1200000, hwtxt)

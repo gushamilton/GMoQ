@@ -32,12 +32,12 @@ fi
 
 echo
 echo "########## tier 1: building fixtures ##########"
-gmoq_activate_stage1
+gmoq_activate_stage1 || exit 1
 t_fix0=$(date +%s)
 if [ "${GMOQ_SKIP_FIXTURES:-0}" != "1" ]; then
-  python "$here/tier1/t1_make_fixtures.py" --out "$GMOQ_TIER1_DIR" \
+  "$GMOQ_PYTHON" "$here/tier1/t1_make_fixtures.py" --out "$GMOQ_TIER1_DIR" \
       --threads "${GMOQ_THREADS:-1}" || { echo "fixture build failed"; exit 1; }
-  python "$here/tier1/t1_families.py" --out "$GMOQ_TIER1_DIR" \
+  "$GMOQ_PYTHON" "$here/tier1/t1_families.py" --out "$GMOQ_TIER1_DIR" \
       --threads "${GMOQ_THREADS:-1}" || { echo "family fixture build failed"; exit 1; }
 fi
 t_fix=$(( $(date +%s) - t_fix0 ))

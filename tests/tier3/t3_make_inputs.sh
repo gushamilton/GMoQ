@@ -37,16 +37,19 @@ plink2 --dummy "$N" "$M" 0 dosage-freq=0.0 \
 echo "   plink2 took $(( $(date +%s) - t0 ))s"
 ls -lh "$dir/geno.bgen" "$dir/geno.sample"
 
-# Stage 1 keys the phenotype and covariate tables on FID, and takes sample IDs
-# from the BGEN's own .sample file.
-python - "$dir" <<'PY'
+# Stage 1 keys the phenotype and covariate tables on FID and matches them
+# against the BGEN's OWN embedded sample identifiers, which plink2 writes as the
+# second column of the .sample file (ID_2; ID_1 is a constant 0). Taking the
+# first column instead gives every sample the same id and Stage 1 matches
+# 0/461320 -- which it says so plainly, but only after loading the phenotype.
+"${GMOQ_PYTHON:-python}" - "$dir" <<'PYEOF'
 import os, sys
 import numpy as np
 d = sys.argv[1]
 with open(os.path.join(d, "geno.sample")) as fh:
     lines = [l.split() for l in fh.read().splitlines() if l.strip()]
-# .sample has two header rows (names, then types)
-ids = [r[0] for r in lines[2:]]
+# .sample has two header rows (names, then types); ID_2 is the BGEN's own id
+ids = [r[1] for r in lines[2:]]
 rng = np.random.default_rng(31415)
 n = len(ids)
 y = rng.normal(size=n)
@@ -59,6 +62,6 @@ with open(os.path.join(d, "covar.txt"), "w") as fh:
     fh.write("FID\tIID\t" + "\t".join(f"PC{j+1}" for j in range(C.shape[1])) + "\n")
     for i, s in enumerate(ids):
         fh.write(f"{s}\t{s}\t" + "\t".join(f"{v:.6f}" for v in C[i]) + "\n")
-print(f"wrote pheno.txt and covar.txt for {n} samples")
-PY
+print(f"wrote pheno.txt and covar.txt for {n} samples: {ids[0]} .. {ids[-1]}")
+PYEOF
 echo "tier 3 inputs ready in $dir"

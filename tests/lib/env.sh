@@ -42,14 +42,39 @@ gmoq_rscript() {
   "$GMOQ_RSCRIPT" --vanilla "$@"
 }
 
+# Resolve the Stage 1 interpreter EXPLICITLY rather than trusting PATH.
+#
+# `module load languages/R/4.5.1` puts an R conda environment first on PATH, and
+# its python has numpy but not scipy. If `conda activate` then fails quietly --
+# which it does whenever conda.sh has not defined the shell function in this
+# particular subshell -- every Stage 1 call runs under the wrong interpreter and
+# dies at `import scipy`, several minutes into a Slurm array. Naming the binary
+# removes the whole class of problem, and the import check below turns a silent
+# wrong-interpreter into an immediate, explicit failure.
 gmoq_activate_stage1() {
+  if [ -z "${GMOQ_PYTHON:-}" ] && [ -f "$GMOQ_CONDA_SH" ]; then
+    local croot
+    croot="$(cd "$(dirname "$GMOQ_CONDA_SH")/../.." 2>/dev/null && pwd)"
+    if [ -n "$croot" ] && [ -x "$croot/envs/$GMOQ_CONDA_ENV/bin/python" ]; then
+      GMOQ_PYTHON="$croot/envs/$GMOQ_CONDA_ENV/bin/python"
+    fi
+  fi
   if [ -f "$GMOQ_CONDA_SH" ]; then
     # shellcheck disable=SC1090
-    source "$GMOQ_CONDA_SH"
-    conda activate "$GMOQ_CONDA_ENV"
+    source "$GMOQ_CONDA_SH" 2>/dev/null || true
+    conda activate "$GMOQ_CONDA_ENV" 2>/dev/null || true
   fi
+  export GMOQ_PYTHON="${GMOQ_PYTHON:-python}"
   export PYTHONPATH="$GMOQ_REPO/stage1:${PYTHONPATH:-}"
+  if ! "$GMOQ_PYTHON" -c "import numpy, scipy" 2>/dev/null; then
+    echo "ERROR: $GMOQ_PYTHON cannot import numpy and scipy." >&2
+    echo "  Point GMOQ_PYTHON at the Stage 1 environment's interpreter, or set" >&2
+    echo "  GMOQ_CONDA_SH / GMOQ_CONDA_ENV so it can be found." >&2
+    return 1
+  fi
 }
+
+gmoq_python() { "$GMOQ_PYTHON" "$@"; }
 
 # Install the package under test into the private library, and prove the
 # compiled kernel loads from there afterwards.

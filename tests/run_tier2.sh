@@ -6,12 +6,12 @@
 #   bash tests/run_tier2.sh submit     # build the grid and submit the array
 #   bash tests/run_tier2.sh status     # how far along
 #   bash tests/run_tier2.sh collate    # counts -> rates -> verdicts
-#   bash tests/run_tier2.sh quick      # 2 cells x 2 chunks, locally, ~3 min
+#   bash tests/run_tier2.sh quick      # 3 cells, locally, a few minutes
 #
 # The grid lives in tests/tier2/cells.py and the pass criteria in
 # tests/criteria.json. Both are committed; neither is derived from a run.
 #
-# Cost at the shipped grid: 33 cells, 306 array tasks. Measured on the Bristol
+# Cost at the shipped grid: 33 cells, 338 array tasks. Measured on the Bristol
 # BluePebble `short` partition, see docs/TEST_SUITE.md.
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -33,18 +33,18 @@ THROTTLE="${GMOQ_SLURM_THROTTLE:-40}"
 
 build_cells() {
   gmoq_activate_stage1
-  python "$here/tier2/cells.py" "$CELLS"
+  "$GMOQ_PYTHON" "$here/tier2/cells.py" "$CELLS"
 }
 
 one_task() {
   # Run one array task end to end: Stage 1 for a chunk, Stage 2 over it, then
   # drop the bulky intermediate. Keeping the chunk binaries would be ~5 GB.
   local idx="$1"
-  gmoq_activate_stage1
-  python "$here/tier2/t2_stage1.py" --cells "$CELLS" --task "$idx" \
+  gmoq_activate_stage1 || return 1
+  "$GMOQ_PYTHON" "$here/tier2/t2_stage1.py" --cells "$CELLS" --task "$idx" \
       --out "$GMOQ_TIER2_DIR" --threads "${GMOQ_THREADS:-$CPUS}" || return 1
   local tag
-  tag=$(python - "$CELLS" "$idx" <<'PY'
+  tag=$("$GMOQ_PYTHON" - "$CELLS" "$idx" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1])); t = s["tasks"][int(sys.argv[2])]
 print(f"{s['cells'][t['cell']]['name']}__chunk{t['chunk']:03d}")
@@ -58,7 +58,7 @@ case "${1:-submit}" in
 
   submit)
     build_cells
-    n=$(python -c "import json,sys;print(json.load(open('$CELLS'))['n_tasks'])")
+    n=$("$GMOQ_PYTHON" -c "import json,sys;print(json.load(open('$CELLS'))['n_tasks'])")
     echo "submitting $n tasks (throttle $THROTTLE)"
     cat >"$GMOQ_TIER2_DIR/array.sh" <<EOF
 #!/bin/bash
@@ -89,7 +89,7 @@ EOF
     ;;
 
   status)
-    n=$(python -c "import json;print(json.load(open('$CELLS'))['n_tasks'])" 2>/dev/null || echo "?")
+    n=$("$GMOQ_PYTHON" -c "import json;print(json.load(open('$CELLS'))['n_tasks'])" 2>/dev/null || echo "?")
     done_n=$(ls "$GMOQ_TIER2_DIR"/*.s2.rds 2>/dev/null | wc -l)
     echo "tier 2: $done_n / $n chunks complete"
     ;;
@@ -105,7 +105,7 @@ EOF
     export GMOQ_TEST_OUT="$GMOQ_WORK/results/tier2_quick"
     mkdir -p "$GMOQ_TIER2_DIR" "$GMOQ_TEST_OUT"
     rm -f "$GMOQ_TEST_OUT/results.jsonl"
-    python - "$CELLS" "$GMOQ_TIER2_DIR/cells.json" <<'PY'
+    "$GMOQ_PYTHON" - "$CELLS" "$GMOQ_TIER2_DIR/cells.json" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))
 keep = [i for i, c in enumerate(s["cells"])
@@ -122,7 +122,7 @@ json.dump(dict(cells=cells, tasks=tasks, n_cells=len(cells), n_tasks=len(tasks))
 print(f"quick grid: {len(cells)} cells, {len(tasks)} tasks")
 PY
     CELLS="$GMOQ_TIER2_DIR/cells.json"
-    n=$(python -c "import json;print(json.load(open('$CELLS'))['n_tasks'])")
+    n=$("$GMOQ_PYTHON" -c "import json;print(json.load(open('$CELLS'))['n_tasks'])")
     rc=0
     for ((i = 0; i < n; i++)); do one_task "$i" || rc=1; done
     gmoq_rscript "$here/tier2/t2_collate.R" "$GMOQ_TIER2_DIR" || rc=1

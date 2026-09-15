@@ -84,8 +84,13 @@ info <- tab[tab$status == "INFO", , drop = FALSE]
 passed <- tab[tab$status == "PASS", , drop = FALSE]
 
 missing_tiers <- setdiff(c("tier0", "tier1", "tier2"), present)
-verdict <- if (nrow(blocking_fail) > 0) "NOT SOUND"
-           else if (length(missing_tiers)) "SOUND (PARTIAL)" else "SOUND"
+verdict <- if (nrow(blocking_fail) > 0) {
+  "NOT SOUND"
+} else if (length(missing_tiers)) {
+  "SOUND (PARTIAL)"
+} else {
+  "SOUND"
+}
 
 pkg_version <- tryCatch({
   d <- read.dcf(file.path(repo, "stage2", "DESCRIPTION")); d[1, "Version"]
@@ -101,7 +106,8 @@ payload <- list(
   package_version = pkg_version,
   commit = commit[1],
   tiers_run = present,
-  tiers_not_run = missing_tiers,
+  tiers_not_run = setdiff(TIERS, present),
+  tiers_not_run_affecting_verdict = missing_tiers,
   counts = list(pass = nrow(passed), blocking_fail = nrow(blocking_fail),
                 advisory_fail = nrow(advisory_fail), skipped = nrow(skipped),
                 reported = nrow(info), total = nrow(tab)),
@@ -138,9 +144,13 @@ md <- c(
   "A tier that did not run is never counted as a pass; it is listed below as not established.",
   "")
 
-if (length(missing_tiers)) {
+absent <- setdiff(TIERS, present)
+if (length(absent)) {
   md <- c(md, "## Not established (tier did not run)", "",
-          paste0("- **", missing_tiers, "** -- ", TIER_MEANS[missing_tiers]), "")
+          paste0("- **", absent, "**",
+                 ifelse(absent %in% missing_tiers, " (changes the verdict)",
+                        " (does not change the verdict: it establishes cost, not correctness)"),
+                 " -- ", TIER_MEANS[absent]), "")
 }
 if (nrow(blocking_fail)) {
   md <- c(md, "## Blocking failures", "",
