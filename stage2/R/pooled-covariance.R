@@ -385,6 +385,65 @@ read_sigma0 <- function(sigma0_file) {
        n_bad = sum(bad))
 }
 
+#' Build compact tau-covariance data for a pooled Stage 2 scan
+#'
+#' Sigma_0 is shared by every SNP on a chromosome. Keep one upper triangle per
+#' chromosome and carry the per-SNP 1/d_resid factor separately. The dense
+#' `.pooled_cov_data()` above remains the compatibility representation.
+#'
+#' @param matrices Named list of T x T Sigma_0 matrices.
+#' @param chr Chromosome label per SNP.
+#' @param d_resid Numeric vector of Stage 1 residual genotype sums of squares.
+#' @param n_taus Number of tau levels.
+#' @return List with `cov_vec`, byte `offsets`, per-SNP `cov_scales`, and
+#'   `n_bad`.
+#' @keywords internal
+.pooled_compact_cov_data <- function(matrices, chr, d_resid, n_taus) {
+  n_taus <- as.integer(n_taus)
+  n_snps <- length(d_resid)
+  n_cov_elements <- as.integer(n_taus * (n_taus + 1L) / 2L)
+  tri <- matrix(0, n_taus, n_taus)
+  iu <- which(upper.tri(tri, diag = TRUE))
+  # R's matrix indexing is column-major; reorder to the row-major triangle
+  # consumed by the C++ readers: (1,1), (1,2), ..., (2,2), ... .
+  ord <- order(row(tri)[iu], col(tri)[iu])
+  iu <- iu[ord]
+
+  keys <- .normalize_chr(chr)
+  if (length(matrices) == 1L && names(matrices)[1L] == SIGMA0_ALL_CHROM) {
+    keys[] <- SIGMA0_ALL_CHROM
+  }
+  missing_keys <- setdiff(unique(keys), names(matrices))
+  if (length(missing_keys)) {
+    stop("Refusing to use the pooled covariance: no Sigma_0 for chromosome(s) ",
+         paste(missing_keys, collapse = ", "), "; the sidecar carries ",
+         paste(names(matrices), collapse = ", "), ". Sigma_0 is per chromosome ",
+         "because the LOCO predictor changes the phenotype, so another ",
+         "chromosome's matrix is the wrong object.", call. = FALSE)
+  }
+
+  # Keep one stable offset per chromosome, including interleaved SNPs.
+  used_keys <- unique(keys)
+  upper <- vapply(used_keys, function(k) as.numeric(matrices[[k]][iu]),
+                  numeric(n_cov_elements))
+  if (is.null(dim(upper))) upper <- matrix(upper, nrow = n_cov_elements)
+  colnames(upper) <- used_keys
+
+  d <- as.numeric(d_resid)
+  bad <- !is.finite(d) | d <= 0
+  scales <- 1 / d
+  scales[bad] <- NA_real_
+  chr_index <- match(keys, used_keys)
+  offsets <- (chr_index - 1L) * n_cov_elements * 4
+
+  list(cov_vec = as.numeric(upper),
+       offsets = as.numeric(offsets),
+       cov_scales = scales,
+       n_bad = sum(bad),
+       n_chromosomes = length(used_keys),
+       n_cov_elements = n_cov_elements)
+}
+
 #' Assemble the pooled covariance for a Stage 1 scan
 #'
 #' Reads the sidecar, refuses on any mismatch with the scan, and returns the
@@ -416,13 +475,18 @@ read_sigma0 <- function(sigma0_file) {
          "column has been emitted since v0.3.0; re-run Stage 1, or use ",
          "cov_source = \"jackknife\".", call. = FALSE)
   }
-  cd <- .pooled_cov_data(s0$matrices, chr, d_resid, length(taus))
+  cd <- .pooled_compact_cov_data(s0$matrices, chr, d_resid, length(taus))
   if (cd$n_bad > 0) {
     warning(cd$n_bad, " of ", length(d_resid), " SNPs have a non-positive or ",
             "non-finite ", N_EFF_COLUMN, "; their pooled covariance is NA and ",
             "they are skipped downstream.", call. = FALSE)
   }
-  list(cov_data = list(cov_vec = cd$cov_vec, offsets = cd$offsets),
+  list(cov_data = list(cov_vec = cd$cov_vec,
+                       offsets = cd$offsets,
+                       cov_scales = cd$cov_scales,
+                       representation = "chromosome_shared",
+                       n_chromosomes = cd$n_chromosomes,
+                       n_cov_elements = cd$n_cov_elements),
        meta = s0$meta,
        nu = as.numeric(s0$meta$n_samples))
 }

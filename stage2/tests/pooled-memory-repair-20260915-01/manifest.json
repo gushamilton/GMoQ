@@ -1,0 +1,21 @@
+{
+  "run_id": "pooled-memory-repair-20260915-01",
+  "status": "PREPARED",
+  "purpose": "bounded compact pooled Sigma_0 representation regression",
+  "test_script": "stage2/tests/test-pooled-memory-repair.R",
+  "source_commit": "pending",
+  "remote_output_dir": "/user/work/fh6520/gmoq_finish_20260915/inputs/pooled-memory-repair-20260915-01",
+  "remote_host": "pending compute grant",
+  "threads": 2,
+  "memory_bound_gb": 8,
+  "fixture": "independent SPD Sigma_0 matrices for chr21 and chr22; eight interleaved SNPs; one invalid d_resid regression",
+  "comparisons": [
+    "dense versus compact OLS parameter SE/Q/p-value/parameter covariance",
+    "dense versus compact GLS parameter SE/Q/parameter covariance",
+    "dense versus compact model tournament",
+    "mixed chromosome offsets and per-SNP scales",
+    "invalid d_resid is skipped",
+    "compact payload is O(chromosome*T^2) plus O(SNP) scales/offsets"
+  ],
+  "compute_policy": "no participant-level data; aggregate regression output only"
+}

@@ -95,13 +95,18 @@ NumericMatrix fit_multi_models_tau_cov(const arma::mat& beta_stage1,
                                        const NumericVector& offsets,
                                        const List& W_list,
                                        double N,
-                                       int n_threads = 1) {
+                                       int n_threads = 1,
+                                       Nullable<NumericVector> cov_scales = R_NilValue) {
   const uword P = beta_stage1.n_rows;
   const uword T = beta_stage1.n_cols;
   const int n_models = W_list.size();
 
   if (offsets.size() < P) {
     stop("offsets must have at least one entry per SNP.");
+  }
+  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  if (scales.size() != 0 && scales.size() < P) {
+    stop("cov_scales must have at least one entry per SNP when supplied.");
   }
   if (n_models == 0) {
     return NumericMatrix(P, 0);
@@ -150,12 +155,24 @@ NumericMatrix fit_multi_models_tau_cov(const arma::mat& beta_stage1,
       continue;
     }
 
+    double scale = 1.0;
+    if (scales.size() != 0) {
+      scale = scales[i];
+      if (!std::isfinite(scale) || scale <= 0.0) {
+        for (int m = 0; m < n_models; m++) {
+          out(i, 2 * m) = NA_REAL;
+          out(i, 2 * m + 1) = NA_REAL;
+        }
+        continue;
+      }
+    }
+
     arma::mat Sigma(T, T, arma::fill::zeros);
     bool cov_ok = true;
     size_t idx = 0;
     for (uword r = 0; r < T; r++) {
       for (uword c = r; c < T; c++) {
-        double v = cov_vec[start + idx];
+        double v = cov_vec[start + idx] * scale;
         if (!std::isfinite(v)) {
           cov_ok = false;
           break;

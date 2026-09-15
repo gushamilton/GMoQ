@@ -34,7 +34,8 @@ param_gwas_multi <- function(stage1, W_list, N, n_threads = 1L,
       stop("se_mode = 'tau_cov' requires cov_data with cov_vec and offsets.")
     }
     result <- fit_multi_models_tau_cov(
-      beta_stage1, cov_data$cov_vec, cov_data$offsets, W_list, N, n_threads
+      beta_stage1, cov_data$cov_vec, cov_data$offsets, W_list, N, n_threads,
+      cov_scales = cov_data$cov_scales
     )
   } else {
     result <- fit_multi_models(beta_stage1, se_stage1, W_list, N, n_threads)

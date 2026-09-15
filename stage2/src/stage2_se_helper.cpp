@@ -1,4 +1,5 @@
 #include <RcppArmadillo.h>
+#include <cmath>
 // [[Rcpp::depends(RcppArmadillo)]]
 // [[Rcpp::plugins(openmp)]]
 
@@ -12,11 +13,14 @@ using namespace Rcpp;
 //' 
 //' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.
 //' @param offsets Integer vector of byte offsets (0-based) into the original file (needs conversion to index).
+//' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 //' @param A The transformation matrix (n_params x K).
 //' @param K Dimension of the covariance matrix (e.g. 17).
 //' @return NumericMatrix of standard errors (n_snps x n_params).
 // [[Rcpp::export]]
-NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets, NumericMatrix A, int K) {
+NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets,
+                                    NumericMatrix A, int K,
+                                    Nullable<NumericVector> cov_scales = R_NilValue) {
   int n_snps = offsets.size();
   int n_params = A.nrow();
   int n_cov_elements = K * (K + 1) / 2;
@@ -29,6 +33,10 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
   // However, cov_vec is in memory, so it fits in R vector (max 2^31-1 elements).
   // The offsets passed here are from the .idx file, which are BYTE offsets.
   // cov_vec is a vector of floats (4 bytes).
+  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  if (scales.size() != 0 && scales.size() < n_snps) {
+    stop("cov_scales must have at least one entry per SNP when supplied.");
+  }
   
   for (int i = 0; i < n_snps; i++) {
     double byte_offset = offsets[i];
@@ -38,6 +46,15 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
     // R is 1-based, but C++ is 0-based.
     // offsets[i] is start of record in bytes.
     long long start_idx = (long long)(byte_offset / 4);
+
+    double scale = 1.0;
+    if (scales.size() != 0) {
+      scale = scales[i];
+      if (!std::isfinite(scale) || scale <= 0.0) {
+        for (int p=0; p<n_params; p++) out_se(i, p) = NA_REAL;
+        continue;
+      }
+    }
     
     if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) {
        // Index out of bounds, skip or produce NA
@@ -52,7 +69,7 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
     int idx = 0;
     for (int r = 0; r < K; r++) {
       for (int c = r; c < K; c++) {
-        Sigma(r, c) = cov_vec[start_idx + idx];
+        Sigma(r, c) = cov_vec[start_idx + idx] * scale;
         idx++;
       }
     }
@@ -85,11 +102,14 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
 //'
 //' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.
 //' @param offsets Integer vector of byte offsets (0-based) into the original file (needs conversion to index).
+//' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 //' @param A The transformation matrix (n_params x K).
 //' @param K Dimension of the covariance matrix (e.g. 17).
 //' @return NumericMatrix of upper-triangle covariance (n_snps x n_cov_params).
 // [[Rcpp::export]]
-NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets, NumericMatrix A, int K) {
+NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets,
+                                NumericMatrix A, int K,
+                                Nullable<NumericVector> cov_scales = R_NilValue) {
   int n_snps = offsets.size();
   int n_params = A.nrow();
   int n_cov_elements = K * (K + 1) / 2;
@@ -99,9 +119,23 @@ NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets, Nu
   arma::mat Sigma(K, K, arma::fill::zeros);
   NumericMatrix out_cov(n_snps, n_cov_params);
 
+  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  if (scales.size() != 0 && scales.size() < n_snps) {
+    stop("cov_scales must have at least one entry per SNP when supplied.");
+  }
+
   for (int i = 0; i < n_snps; i++) {
     double byte_offset = offsets[i];
     long long start_idx = (long long)(byte_offset / 4);
+
+    double scale = 1.0;
+    if (scales.size() != 0) {
+      scale = scales[i];
+      if (!std::isfinite(scale) || scale <= 0.0) {
+        for (int p = 0; p < n_cov_params; p++) out_cov(i, p) = NA_REAL;
+        continue;
+      }
+    }
 
     if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) {
       for (int p = 0; p < n_cov_params; p++) out_cov(i, p) = NA_REAL;
@@ -111,7 +145,7 @@ NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets, Nu
     int idx = 0;
     for (int r = 0; r < K; r++) {
       for (int c = r; c < K; c++) {
-        Sigma(r, c) = cov_vec[start_idx + idx];
+        Sigma(r, c) = cov_vec[start_idx + idx] * scale;
         idx++;
       }
     }
@@ -143,6 +177,7 @@ NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets, Nu
 //' @param beta_stage1 Tau-level SNP effects as a K x n_snps matrix.
 //' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.
 //' @param offsets Integer vector of byte offsets (0-based) into the original file.
+//' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 //' @param W Weight/design matrix with K rows and n_params columns.
 //' @param return_cov Whether to return parameter covariance upper triangles.
 //' @param gls_ridge Relative diagonal ridge added only if the covariance solve fails.
@@ -155,7 +190,8 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
                             NumericMatrix W,
                             bool return_cov = false,
                             double gls_ridge = 1e-8,
-                            int n_threads = 1) {
+                            int n_threads = 1,
+                            Nullable<NumericVector> cov_scales = R_NilValue) {
   const int K = beta_stage1.n_rows;
   const int n_snps = beta_stage1.n_cols;
   const int n_params = W.ncol();
@@ -167,6 +203,10 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
   }
   if (offsets.size() < n_snps) {
     stop("offsets must have at least one entry per SNP.");
+  }
+  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  if (scales.size() != 0 && scales.size() < n_snps) {
+    stop("cov_scales must have at least one entry per SNP when supplied.");
   }
 
   arma::mat W_mat(W.begin(), K, n_params, false);
@@ -209,12 +249,18 @@ List compute_gls_param_gwas(const arma::mat& beta_stage1,
     const long long start_idx = (long long)(offsets[i] / 4);
     if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) { d_offset_bad++; continue; }
 
+    double scale = 1.0;
+    if (scales.size() != 0) {
+      scale = scales[i];
+      if (!std::isfinite(scale) || scale <= 0.0) { d_cov_nonfinite++; continue; }
+    }
+
     arma::mat Sigma(K, K, arma::fill::zeros);
     bool cov_ok = true;
     int idx = 0;
     for (int r = 0; r < K; r++) {
       for (int c = r; c < K; c++) {
-        double v = cov_vec[start_idx + idx];
+        double v = cov_vec[start_idx + idx] * scale;
         if (!std::isfinite(v)) {
           cov_ok = false;
           break;
@@ -431,6 +477,7 @@ double saddlepoint_sf(double q, const arma::vec& lam) {
 //'
 //' @param cov_vec Concatenated upper triangles of the per-SNP covariances.
 //' @param offsets Byte offsets (0-based) of each SNP's record.
+//' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 //' @param Qstat Numeric vector of observed Q statistics (n_snps).
 //' @param Dvar Numeric matrix (K x n_snps) of per-tau variances, se_tau^2.
 //' @param M Residual projector I - W (W'W)^-1 W' (K x K).
@@ -441,9 +488,15 @@ double saddlepoint_sf(double q, const arma::vec& lam) {
 // [[Rcpp::export]]
 NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets,
                                     NumericVector Qstat, NumericMatrix Dvar,
-                                    NumericMatrix M, int K, int n_threads) {
+                                    NumericMatrix M, int K, int n_threads,
+                                    Nullable<NumericVector> cov_scales = R_NilValue) {
   const int n_snps = offsets.size();
   const int n_cov_elements = K * (K + 1) / 2;
+
+  NumericVector scales = cov_scales.isNotNull() ? as<NumericVector>(cov_scales) : NumericVector();
+  if (scales.size() != 0 && scales.size() < n_snps) {
+    stop("cov_scales must have at least one entry per SNP when supplied.");
+  }
 
   arma::mat M_mat(M.begin(), K, K, false);
   arma::mat D_mat(Dvar.begin(), K, n_snps, false);
@@ -459,10 +512,16 @@ NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets
     long long start_idx = (long long)(offsets[i] / 4);
     if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) continue;
 
+    double scale = 1.0;
+    if (scales.size() != 0) {
+      scale = scales[i];
+      if (!std::isfinite(scale) || scale <= 0.0) continue;
+    }
+
     arma::mat Sigma(K, K, arma::fill::zeros);
     int idx = 0;
     for (int r = 0; r < K; r++)
-      for (int c = r; c < K; c++) Sigma(r, c) = cov_vec[start_idx + idx++];
+      for (int c = r; c < K; c++) Sigma(r, c) = cov_vec[start_idx + idx++] * scale;
     for (int r = 0; r < K; r++)
       for (int c = r + 1; c < K; c++) Sigma(c, r) = Sigma(r, c);
 

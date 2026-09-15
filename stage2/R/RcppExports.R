@@ -5,8 +5,9 @@ fit_multi_models <- function(beta_stage1, se_stage1, W_list, N, n_threads = 1L) 
     .Call(`_fungwasStage2_fit_multi_models`, beta_stage1, se_stage1, W_list, N, n_threads)
 }
 
-fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n_threads = 1L) {
-    .Call(`_fungwasStage2_fit_multi_models_tau_cov`, beta_stage1, cov_vec, offsets, W_list, N, n_threads)
+fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n_threads = 1L, cov_scales = NULL) {
+    if (is.null(cov_scales)) cov_scales <- numeric()
+    .Call(`_fungwasStage2_fit_multi_models_tau_cov`, beta_stage1, cov_vec, offsets, W_list, N, n_threads, cov_scales)
 }
 
 #' Compute Calibrated Standard Errors
@@ -16,8 +17,9 @@ fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n
 #' @param A The transformation matrix (n_params x K).
 #' @param K Dimension of the covariance matrix (e.g. 17).
 #' @return NumericMatrix of standard errors (n_snps x n_params).
-compute_calibrated_se <- function(cov_vec, offsets, A, K) {
-    .Call(`_fungwasStage2_compute_calibrated_se`, cov_vec, offsets, A, K)
+compute_calibrated_se <- function(cov_vec, offsets, A, K, cov_scales = NULL) {
+    if (is.null(cov_scales)) cov_scales <- numeric()
+    .Call(`_fungwasStage2_compute_calibrated_se`, cov_vec, offsets, A, K, cov_scales)
 }
 
 #' Compute parameter covariance upper triangles
@@ -27,8 +29,9 @@ compute_calibrated_se <- function(cov_vec, offsets, A, K) {
 #' @param A The transformation matrix (n_params x K).
 #' @param K Dimension of the covariance matrix (e.g. 17).
 #' @return NumericMatrix of upper-triangle covariance (n_snps x n_cov_params).
-compute_param_cov <- function(cov_vec, offsets, A, K) {
-    .Call(`_fungwasStage2_compute_param_cov`, cov_vec, offsets, A, K)
+compute_param_cov <- function(cov_vec, offsets, A, K, cov_scales = NULL) {
+    if (is.null(cov_scales)) cov_scales <- numeric()
+    .Call(`_fungwasStage2_compute_param_cov`, cov_vec, offsets, A, K, cov_scales)
 }
 
 #' Compute GLS Stage 2 Parameter GWAS
@@ -44,8 +47,9 @@ compute_param_cov <- function(cov_vec, offsets, A, K) {
 #' @param gls_ridge Relative diagonal ridge added only if the covariance solve fails.
 #' @param n_threads Number of OpenMP threads.
 #' @return List with params, se, Q, and optionally param_cov_upper.
-compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov = FALSE, gls_ridge = 1e-8, n_threads = 1L) {
-    .Call(`_fungwasStage2_compute_gls_param_gwas`, beta_stage1, cov_vec, offsets, W, return_cov, gls_ridge, n_threads)
+compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov = FALSE, gls_ridge = 1e-8, n_threads = 1L, cov_scales = NULL) {
+    if (is.null(cov_scales)) cov_scales <- numeric()
+    .Call(`_fungwasStage2_compute_gls_param_gwas`, beta_stage1, cov_vec, offsets, W, return_cov, gls_ridge, n_threads, cov_scales)
 }
 
 #' Null-distribution quantities for the Stage 2 lack-of-fit statistic
@@ -64,7 +68,7 @@ compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov 
 #' @param n_threads OpenMP threads.
 #' @return Numeric matrix (n_snps x 6): c1, c2, c3, c4, p_saddle, n_eig.
 #'   \code{p_saddle} is negative where the saddlepoint does not apply.
-compute_q_calibration <- function(cov_vec, offsets, Qstat, Dvar, M, K, n_threads) {
-    .Call(`_fungwasStage2_compute_q_calibration`, cov_vec, offsets, Qstat, Dvar, M, K, n_threads)
+compute_q_calibration <- function(cov_vec, offsets, Qstat, Dvar, M, K, n_threads, cov_scales = NULL) {
+    if (is.null(cov_scales)) cov_scales <- numeric()
+    .Call(`_fungwasStage2_compute_q_calibration`, cov_vec, offsets, Qstat, Dvar, M, K, n_threads, cov_scales)
 }
-

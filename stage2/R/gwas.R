@@ -146,8 +146,10 @@ quantile_gwas <- function(
 #'     \item \code{"dwls"} – diagonal weighted least squares (Q test calibrated).
 #'   }
 #' @param plugin_R Optional T x T correlation matrix for \code{"plugin_cor"}.
-#' @param cov_data For \code{se_mode = "tau_cov"}: either a list with \code{cov_vec} 
+#' @param cov_data For \code{se_mode = "tau_cov"}: either a list with \code{cov_vec}
 #'   (numeric vector of covariance data) and \code{offsets} (byte offsets per SNP),
+#'   optionally with \code{cov_scales} (one positive multiplier per SNP for a
+#'   shared pooled payload),
 #'   \code{se_mode = "tau_cov"} requires covariance data; use
 #'   \code{se_mode = "diagonal"} explicitly only for fallback/debug runs.
 #' @param tau_cov_estimator Estimator used when \code{se_mode = "tau_cov"} and
@@ -395,7 +397,8 @@ if (se_mode == "diagonal") {
       W = W,
       return_cov = return_cov != "none",
       gls_ridge = gls_ridge,
-      n_threads = n_threads
+      n_threads = n_threads,
+      cov_scales = cov_data$cov_scales
     )
     params <- gls_fit$params
     rownames(params) <- colnames(W)
@@ -458,7 +461,8 @@ if (se_mode == "diagonal") {
       cov_vec = cov_data$cov_vec,
       offsets = cov_data$offsets,
       A = A,
-      K = Tt
+      K = Tt,
+      cov_scales = cov_data$cov_scales
     )
     SE_params <- t(se_mat)
     rownames(SE_params) <- colnames(W)
@@ -510,7 +514,8 @@ if (se_mode == "diagonal") {
         cov_vec = cov_data$cov_vec,
         offsets = cov_data$offsets,
         A = A,
-        K = Tt
+        K = Tt,
+        cov_scales = cov_data$cov_scales
       )
       if (!is.null(colnames(W))) {
         colnames(param_cov_upper) <- .param_cov_upper_names(colnames(W))
@@ -1272,7 +1277,8 @@ param_gwas_multi_from_file <- function(
     Dvar = Dvar,
     M = M,
     K = as.integer(Tt),
-    n_threads = as.integer(n_threads)
+    n_threads = as.integer(n_threads),
+    cov_scales = cov_data$cov_scales
   )
 
   c1 <- cal[, 1]; c2 <- cal[, 2]; c3 <- cal[, 3]; c4 <- cal[, 4]
