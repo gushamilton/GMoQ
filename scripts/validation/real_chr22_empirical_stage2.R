@@ -4,6 +4,7 @@
 
 suppressPackageStartupMessages({
   library(data.table)
+  library(jsonlite)
   library(fungwasStage2)
 })
 
@@ -18,18 +19,28 @@ stage1_file <- get_arg("--stage1")
 sigma0_file <- get_arg("--sigma0")
 cov_meta_file <- get_arg("--cov-meta")
 weights_file <- get_arg("--weights")
+baseline_file <- if ("--baseline-json" %in% args) get_arg("--baseline-json") else NULL
 out_file <- get_arg("--out")
 
 header <- fread(stage1_file, nrows = 0L)
 beta_cols <- grep("^beta_tau_", names(header), value = TRUE)
 taus <- as.numeric(sub("^beta_tau_", "", beta_cols))
-wobj <- readRDS(weights_file)
-if (is.list(wobj) && !is.null(wobj$W)) {
-  W <- wobj$W
-  w_taus <- wobj$taus
-} else {
-  W <- wobj
+if (!is.null(baseline_file)) {
+  baseline <- fromJSON(baseline_file)
+  W <- make_weights_vqtl(
+    as.numeric(baseline$taus), as.numeric(baseline$q_tau),
+    mu = as.numeric(baseline$mean), sd = as.numeric(baseline$sd)
+  )
   w_taus <- NULL
+} else {
+  wobj <- readRDS(weights_file)
+  if (is.list(wobj) && !is.null(wobj$W)) {
+    W <- wobj$W
+    w_taus <- wobj$taus
+  } else {
+    W <- wobj
+    w_taus <- NULL
+  }
 }
 if (!is.null(w_taus)) {
   if (nrow(W) != length(w_taus) && ncol(W) == length(w_taus)) W <- t(W)

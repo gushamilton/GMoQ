@@ -15,9 +15,13 @@ are descriptive because LD prevents a null assertion.
 `run_real_chr22_empirical.sh` uses the paper's exact empirical definition:
 `log_bmi = log(bmi)`, covariates `age, sex, PC1..PC10`, complete-case
 `keep_log_bmi`, and the phenotype-specific REGENIE `pred.list` with
-`--loco-scale regression`. `real_chr22_empirical_stage2.R` fits the paper's
-additive or mean-plus-variance weights with pooled covariance. The empirical
-outputs are descriptive and carry no known-effect truth claim.
+`--loco-scale regression`. The saved paper mean-plus-variance weights were
+generated from a raw-BMI baseline, so they are not treated as matched to this
+log_bmi run. For a matched exploratory mean-plus-variance fit,
+`build_logbmi_matched_baseline.py` derives quantiles and SD from the
+LOCO-adjusted, BGEN-matched log_bmi rows and the R wrapper passes those values
+to `make_weights_vqtl`. The empirical outputs are descriptive and carry no
+known-effect truth claim.
 
 `time_bgen_decode.py` compares the native 8-bit dosage path with the checked
 per-record preamble path. `compare_repeat.py` compares decompressed output
