@@ -1,5 +1,12 @@
 # Is the pooled covariance safe as G-MoQ's default?
 
+> **SUPERSEDED IN PART, 2026-09-15.** Section 8 item 1 ("keep pooled as the scan
+> default") is **withdrawn**, and the claim that 5e-8 is "exactly nominal for the
+> jackknife" is true only for jackknife+**OLS**, not jackknife+GLS. See
+> [FINDINGS_covsource_default.md](FINDINGS_covsource_default.md), which measures
+> all four arms on 780,000 paired scans. The diagnosis of the false-vQTL artefact
+> as an estimand gap, and the `G` guard, are unaffected.
+
 > **Update.** §5 below proposes flagging dispersion findings at `G >= 0.2`. That
 > artefact has since been *corrected* rather than only flagged —
 > `correct_dispersion_skew()`, see `docs/DISPERSION_SKEW_CORRECTION.md`. After
