@@ -19,7 +19,9 @@ only changes standard errors and reference calibration.
 ## Immutable runs
 
 Both runs used `bp1-compute053`, 45 taus, 1,000 blocks, and two OpenMP
-threads. The independent dataset is the Monte Carlo unit.
+threads. Each diagnostic dataset contains one common-MAF SNP so the RIF-arm
+contrast is not diluted by additional variants. The independent dataset is
+the Monte Carlo unit.
 
 `density-bias-20260915-01` used source harness commit
 `47ec83d777934c4e675fedaaf8ac29ba5817e534`, N=10,000, 100 datasets, and
@@ -83,6 +85,11 @@ strong-cell discrepancy is therefore primarily production KDE smoothing in
 the RIF density denominator. Finite-effect projection still explains the
 remaining difference between the scientific target v and the exact
 projection target, but it does not explain the production A-arm bias.
+
+The absolute A-arm bias is not expected to equal the earlier six-SNP pilot
+bit-for-bit because this diagnosis deliberately uses one SNP and new frozen
+draws. The paired A−B and B−C contrasts are the within-run causal
+comparisons.
 
 The compact CSVs next to this report contain the complete arm, paired, and
 density-ratio summaries for both immutable runs.
