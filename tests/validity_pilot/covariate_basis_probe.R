@@ -40,6 +40,6 @@ for (tf in tr_files) {
 d <- do.call(rbind, rows); write.csv(d, out, row.names=FALSE, na="")
 keys <- unique(d[c("cell","basis","path","source","W","parameter")]); sm <- vector("list", nrow(keys))
 for (i in seq_len(nrow(keys))) { z <- d[d$cell==keys$cell[i] & d$basis==keys$basis[i] & d$path==keys$path[i] & d$source==keys$source[i] & d$W==keys$W[i] & d$parameter==keys$parameter[i],]
- sm[[i]] <- data.frame(keys[i,], datasets=nrow(z), mean_z=mean(z$z), mcse_z=sd(z$z)/sqrt(nrow(z)), rejection=mean(z$p<.05), mcse_rejection=sd(z$p<.05)/sqrt(nrow(z)), bias=mean(z$estimate), mcse_bias=sd(z$estimate)/sqrt(nrow(z)), mean_Q=mean(z$Q), mcse_Q=sd(z$Q)/sqrt(nrow(z)), Q_rejection=mean(z$Q_p<.05,na.rm=TRUE)) }
+ sm[[i]] <- data.frame(keys[i,], datasets=nrow(z), mean_z=mean(z$z), mcse_z=sd(z$z)/sqrt(nrow(z)), rejection=mean(z$p<.05), mcse_rejection=sd(z$p<.05)/sqrt(nrow(z)), bias=mean(z$estimate), mcse_bias=sd(z$estimate)/sqrt(nrow(z)), mean_se=mean(z$se), empirical_sd=sd(z$estimate), se_over_empirical_sd=mean(z$se)/sd(z$estimate), mean_Q=mean(z$Q), mcse_Q=sd(z$Q)/sqrt(nrow(z)), Q_rejection=mean(z$Q_p<.05,na.rm=TRUE)) }
 write.csv(do.call(rbind, sm), sub("\\.csv$", "_summary.csv", out), row.names=FALSE, na="")
 cat("wrote", nrow(d), "rows\n")
