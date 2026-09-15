@@ -49,7 +49,7 @@ labels them accordingly. The public BGEN fixtures are independent of the reader
 used to analyse them; a phenotype simulated from the production reader alone
 cannot expose a consistently reversed dosage convention.
 
-## Real-genotype and empirical runs
+## Pooled covariance storage
 
 The later compact pooled representation preserves one covariance matrix per
 chromosome and a scale per SNP. Its independent fixture matched the dense
@@ -61,6 +61,8 @@ storage fell from 82,880,096 to 168,424 bytes (about 492-fold); the single
 construction timing was 0.605 versus 0.010 seconds. These figures measure
 covariance-object construction, not total process memory or full GWAS speed.
 See the [source and profile](../stage2/tests/pooled-memory-repair-20260915-01/).
+
+## Real-genotype and empirical runs
 
 A current-CLI check used 24 real chromosome-22 variants and 463,005 people,
 45 quantiles and 65 blocks. A simulated mean effect of +0.25 at rs9617528
