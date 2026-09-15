@@ -39,6 +39,24 @@ The independent `covsource_run`/`cs1`/`cs2` campaign has existing jobs and outpu
 Inspect its live job handles and completed chunks before scheduling anything
 similar; this development work does not own or restart those jobs.
 
+## Earlier investigations to consult before proposing new runs
+
+These are inherited reports, not newly reproduced results. Preserve that
+distinction when using their conclusions or deciding whether a confirmation
+is needed.
+
+- [Empirical model weights](../docs/EMPIRICAL_W.md): exact-quadrature comparison
+  of shipped versus empirical dispersion columns; working files at
+  `/user/work/fh6520/empw2/`. It reports poor general calibration from simply
+  substituting empirical quantiles into W. It explicitly lacks a Monte Carlo
+  reconciliation through the shipped Stage 2 pipeline.
+- [Density bandwidth investigation](../docs/KNOWN_ISSUES.md#8-kernel-density-bandwidth-as-of-2026-09-14)
+  and [lumpy phenotypes](../docs/BP2_lumpy_phenotypes.md): prior bandwidth and
+  discrete/mixture phenotype investigations. Their Q/model-selection findings
+  do not establish unbiased non-null parameter estimation or interval coverage.
+  Consult these before repeating a bandwidth sweep or assuming a smaller
+  bandwidth fixes tied outcomes.
+
 ## Rules for new runs
 
 1. Assign a new stable ID and register the scientific question before submission.
