@@ -333,6 +333,15 @@ the margin is expected to be smaller.
 
 ## 8. Kernel density bandwidth (as of 2026-09-14)
 
+**Scope update, 2026-09-15:** the Q and model-selection comparisons below do
+not establish unbiased non-null parameter estimates or calibrated confidence
+intervals. The later [paired density diagnosis](../tests/validity_pilot/evidence/DENSITY_DIAGNOSIS.md)
+isolated smoothing bias in the Normal variance projection at both N=10,000
+and N=100,000. Cancellation in a single-quantile zero-effect Wald statistic
+does not remove that non-null estimation problem. No density repair has yet
+been validated for production; consult the [experiment register](../experiments/README.md)
+before repeating or extending these investigations.
+
 `stage1/fungwas_stage1/core.py` selects the bandwidth as
 `h = 1.06 * np.std(Y) * N**(-0.2)` -- Silverman's rule without a robustness
 guard. For bimodal phenotypes the standard deviation is inflated by the
