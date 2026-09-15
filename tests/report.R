@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ---------------------------------------------------------------------------
-# The single artefact a human reads to decide "is this release sound".
+# The single artefact a human reads for the historical regression checks.
 #
 #   Rscript --vanilla tests/report.R [results_root] [out_dir]
 #
@@ -12,11 +12,15 @@
 #
 # THE VERDICT RULE, stated before any numbers are seen:
 #
-#   SOUND               every blocking check passed, and tiers 0, 1 and 2 all
-#                       ran. Advisory failures are listed but do not change it.
-#   SOUND (PARTIAL)     every blocking check that ran passed, but a tier did
-#                       not run. Says which.
-#   NOT SOUND           at least one blocking check failed.
+#   REGRESSION CHECKS PASSED   every blocking check passed, and tiers 0, 1 and
+#                              2 all ran.
+#   REGRESSION CHECKS PARTIAL  every blocking check that ran passed, but a tier
+#                              did not run.
+#   REGRESSION CHECKS FAILED   at least one blocking check failed.
+#
+# These are historical regression labels. They do not certify scientific
+# validity, statistical calibration, or release readiness; use the paired
+# known-truth validity pilot for that question.
 #
 # A tier that was not run is never counted as a pass. The report says what was
 # not established as prominently as what was.
@@ -85,11 +89,11 @@ passed <- tab[tab$status == "PASS", , drop = FALSE]
 
 missing_tiers <- setdiff(c("tier0", "tier1", "tier2"), present)
 verdict <- if (nrow(blocking_fail) > 0) {
-  "NOT SOUND"
+  "REGRESSION CHECKS FAILED"
 } else if (length(missing_tiers)) {
-  "SOUND (PARTIAL)"
+  "REGRESSION CHECKS PARTIAL"
 } else {
-  "SOUND"
+  "REGRESSION CHECKS PASSED"
 }
 
 pkg_version <- tryCatch({
@@ -112,11 +116,12 @@ payload <- list(
                 advisory_fail = nrow(advisory_fail), skipped = nrow(skipped),
                 reported = nrow(info), total = nrow(tab)),
   verdict_rule = paste(
-    "SOUND: every blocking check passed and tiers 0, 1 and 2 all ran.",
-    "SOUND (PARTIAL): every blocking check that ran passed, but a tier did not run.",
-    "NOT SOUND: at least one blocking check failed.",
+    "REGRESSION CHECKS PASSED: every blocking check passed and tiers 0, 1 and 2 all ran.",
+    "REGRESSION CHECKS PARTIAL: every blocking check that ran passed, but a tier did not run.",
+    "REGRESSION CHECKS FAILED: at least one blocking check failed.",
     "Advisory failures are real defects that do not by themselves invalidate results.",
-    "A tier that did not run is never counted as a pass."),
+    "A tier that did not run is never counted as a pass.",
+    "These historical regression labels do not certify scientific validity; see tests/validity_pilot/README.md."),
   checks = tab)
 writeLines(jsonlite::toJSON(payload, auto_unbox = TRUE, na = "null", digits = 8,
                             pretty = TRUE),
@@ -132,14 +137,15 @@ mdrow <- function(r) sprintf("| %s | %s | %s | %s | %s | %s |",
                              gsub("|", "/", r$criterion, fixed = TRUE))
 
 md <- c(
-  sprintf("# G-MoQ release check: **%s**", verdict), "",
+  sprintf("# G-MoQ historical regression checks: **%s**", verdict), "",
   sprintf("Generated %s. Package version `%s`. Commit `%s`.",
           payload$generated, ifelse(is.na(pkg_version), "?", pkg_version),
           ifelse(is.na(commit[1]), "?", substr(commit[1], 1, 12))), "",
   sprintf("%d checks: **%d passed**, **%d blocking failures**, %d advisory, %d skipped, %d reported-only.",
           nrow(tab), nrow(passed), nrow(blocking_fail), nrow(advisory_fail),
           nrow(skipped), nrow(info)), "",
-  "**Verdict rule.** SOUND means every blocking check passed and tiers 0-2 all ran.",
+  "**Verdict rule.** REGRESSION CHECKS PASSED means every blocking check passed and tiers 0-2 all ran.",
+  "These labels are historical regression results and do not establish scientific validity.",
   "Advisory failures are real defects that do not by themselves invalidate a result.",
   "A tier that did not run is never counted as a pass; it is listed below as not established.",
   "")
@@ -188,14 +194,14 @@ if (nrow(info)) {
 } else md <- c(md, "_none_", "")
 
 md <- c(md, "## What this report does NOT establish", "",
-        "See `docs/TEST_SUITE.md` for the full list. In summary: no real genotypes,",
+        "See `tests/validity_pilot/README.md` for the paired known-truth pilot. In summary: no real genotypes,",
         "no LD, no relatedness, no LOCO residualisation in the simulated cells, no",
         "direct measurement at p = 5e-8, and no comparison against any other method.",
         "")
 writeLines(md, file.path(outdir, "RELEASE_REPORT.md"))
 
 cat("\n=============================================================\n")
-cat("  G-MoQ release check:", verdict, "\n")
+cat("  G-MoQ historical regression checks:", verdict, "\n")
 cat(sprintf("  %d passed, %d blocking failures, %d advisory, %d skipped, %d reported\n",
             nrow(passed), nrow(blocking_fail), nrow(advisory_fail),
             nrow(skipped), nrow(info)))

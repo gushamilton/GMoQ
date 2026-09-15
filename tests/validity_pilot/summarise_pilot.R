@@ -93,6 +93,37 @@ if (nrow(covds)) {
   }
   pairs <- pairs[!vapply(pairs, is.null, logical(1L))]
   if (length(pairs)) write.csv(do.call(rbind, pairs), file.path(dir, "pilot_covariate_pairs.csv"), row.names = FALSE)
+
+  # The broad null_type1 average is useful as a compact screen, but it mixes
+  # five independent-null SNP rows and two parameters.  Keep the correlated
+  # SNP1 and each fitted parameter explicit, with the independent phenotype
+  # dataset as the MC unit.  Q is the package's reported per-variant
+  # heterogeneity statistic, and Q_p_rejection is its reported p-value.
+  cov1 <- detail[grepl("^cov_both_", detail$cell) & detail$variant == 1, , drop = FALSE]
+  if (nrow(cov1)) {
+    ckeys <- unique(cov1[c("cell", "path", "source", "W", "parameter")])
+    crows <- vector("list", nrow(ckeys))
+    for (i in seq_len(nrow(ckeys))) {
+      z <- cov1[cov1$cell == ckeys$cell[i] & cov1$path == ckeys$path[i] &
+                cov1$source == ckeys$source[i] & cov1$W == ckeys$W[i] &
+                cov1$parameter == ckeys$parameter[i], , drop = FALSE]
+      crows[[i]] <- data.frame(
+        cell = ckeys$cell[i], path = ckeys$path[i], source = ckeys$source[i],
+        W = ckeys$W[i], parameter = ckeys$parameter[i], datasets = nrow(z),
+        mean_z_scientific = mean_or_na(z$z_scientific),
+        mean_z_scientific_mcse = mcse(z$z_scientific),
+        rejection_rate = mean_or_na(z$p < 0.05),
+        rejection_rate_mcse = mcse(z$p < 0.05),
+        effect_bias = mean_or_na(z$bias_scientific),
+        effect_bias_mcse = mcse(z$bias_scientific),
+        mean_Q = mean_or_na(z$Q), mean_Q_mcse = mcse(z$Q),
+        Q_p_rejection = mean_or_na(z$Q_p < 0.05),
+        Q_p_rejection_mcse = mcse(z$Q_p < 0.05),
+        stringsAsFactors = FALSE)
+    }
+    write.csv(do.call(rbind, crows), file.path(dir, "pilot_covariate_snp1.csv"),
+              row.names = FALSE, na = "")
+  }
 }
 
 cat("wrote", nrow(summary), "dataset-arm summaries and", nrow(bias), "causal bias rows\n")

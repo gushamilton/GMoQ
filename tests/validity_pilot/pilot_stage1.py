@@ -22,7 +22,8 @@ import sys
 import time
 
 import numpy as np
-from scipy.special import expit, logit
+from scipy.optimize import brentq
+from scipy.special import expit, logit, ndtr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = os.path.abspath(os.path.join(HERE, "..", "lib"))
@@ -60,10 +61,30 @@ def cells() -> list[dict]:
     # there is distinguishable from nonlinearity at the stress setting.
     out.append(dict(name="combined_small_common", family="locscale", maf=0.30,
                     a=0.03, b=0.03))
+    # A second, explicitly variance-linear DGM checks the parameterisation
+    # advertised by make_weights_vqtl.  The conditional variance is
+    # 1 + v * (g - 2p), which stays positive in every genotype here.  Keep
+    # the exponential-log-SD cells above as a separate nonlinear stress.
+    out.extend([
+        dict(name="normal_mean_common", family="normal_mean", maf=0.30,
+             a=0.03, v=0.0),
+        dict(name="normal_variance_common", family="normal_variance", maf=0.30,
+             a=0.0, v=0.06),
+        dict(name="normal_combined_common", family="normal_locscale", maf=0.30,
+             a=0.03, v=0.06),
+        dict(name="normal_variance_strong_common", family="normal_variance",
+             maf=0.30, a=0.0, v=0.24),
+    ])
     return out
 
 
+def is_normal_linear(cell: dict) -> bool:
+    return str(cell["family"]).startswith("normal_")
+
+
 def make_design(cell: dict) -> gs.Design:
+    if is_normal_linear(cell):
+        return None
     maf = float(cell["maf"])
     causal = np.array([0], dtype=int) if cell["family"] != "cov_both" else np.array([], dtype=int)
     d = gs.Design(
@@ -75,6 +96,51 @@ def make_design(cell: dict) -> gs.Design:
         d.a[0] = float(cell["a"])
         d.b[0] = float(cell["b"])
     return d
+
+
+def simulate_normal_linear(cell: dict, G: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Normal conditional law with location and variance effects centered at 2p."""
+    p = float(cell["maf"])
+    x = G[:, 0] - 2.0 * p
+    a = float(cell["a"])
+    v = float(cell["v"])
+    variance = 1.0 + v * x
+    if np.min(variance) <= 0:
+        raise ValueError(f"non-positive conditional variance in {cell['name']}")
+    return a * x + np.sqrt(variance) * rng.normal(size=len(x))
+
+
+def normal_linear_projection(cell: dict, taus: np.ndarray) -> np.ndarray:
+    """Population Stage 1 RIF slope for the one-SNP normal-linear DGM.
+
+    This is a numerical evaluation of the finite three-component Normal
+    mixture, not a reimplementation of Stage 1.  Stage 1 itself still runs
+    through the shipped RIF and block-score kernels.  The resulting slope is
+    the projection target against which those outputs are assessed.
+    """
+    p = float(cell["maf"])
+    a = float(cell["a"])
+    v = float(cell["v"])
+    g = np.arange(3.0)
+    x = g - 2.0 * p
+    pg = np.array([(1.0 - p) ** 2, 2.0 * p * (1.0 - p), p ** 2])
+    sd = np.sqrt(1.0 + v * x)
+
+    def cdf(y):
+        return float(np.sum(pg * ndtr((y - a * x) / sd)))
+
+    def pdf(y):
+        z = (y - a * x) / sd
+        return float(np.sum(pg * np.exp(-0.5 * z * z) /
+                           (np.sqrt(2.0 * np.pi) * sd)))
+
+    q = np.array([brentq(lambda yy: cdf(yy) - float(t), -12.0, 12.0)
+                  for t in np.asarray(taus, dtype=float)])
+    f = np.maximum(np.array([pdf(yy) for yy in q]), 1e-300)
+    vg = 2.0 * p * (1.0 - p)
+    cond_cdf = np.array([ndtr((yy - a * x) / sd) for yy in q])
+    cov = np.sum(pg[None, :] * x[None, :] * cond_cdf, axis=1)
+    return (-cov / (f * vg))[None, :]
 
 
 def draw_covariate_data(cell: dict, N: int, rng: np.random.Generator):
@@ -222,7 +288,7 @@ def main() -> None:
         taus=[float(x) for x in TAUS], M=M, Nref=args.Nref, nbg=args.nbg,
         mc_unit="dataset (one shared phenotype/genotype draw; SNP rows are not independent MC replicates)",
         targets=dict(
-            scientific="generative conditional mean coefficient a and log-SD coefficient b in s(g)=s0*exp(b*g/s0), with s0=1; the shipped beta_sigma2 basis is the local variance coefficient 2*b and the one-dosage variance ratio is exp(2*b); cov_both SNP target is exactly zero conditional on C",
+            scientific="expstress cells use generative conditional mean coefficient a and log-SD coefficient b in s(g)=s0*exp(b*g/s0), with s0=1; their shipped beta_sigma2 target is the local variance coefficient 2*b. normal_linear cells use E[Y|g]=a*(g-2p), Var[Y|g]=1+v*(g-2p), with scientific targets a and v; cov_both SNP targets are exactly zero conditional on C",
             projection="population slope of the shipped Stage-1 RIF after the named preprocessing, then projection onto the fitted W; exact for regular cells up to Truth background MC and reference-MC for cov_both",
         ),
     )
@@ -239,6 +305,12 @@ def main() -> None:
                 "y_first": projection_reference(cell, "y_first", args.Nref, args.seed + 20000 + cell_i, args.threads),
             }
             truth_kind = "reference_mc"
+        elif is_normal_linear(cell):
+            bc = normal_linear_projection(cell, TAUS)
+            proj0 = np.zeros((M, len(TAUS)))
+            proj0[0] = bc[0]
+            proj = {"current": proj0, "y_first": proj0}
+            truth_kind = "normal_linear_exact"
         else:
             tr = gs.Truth(d, nbg=args.nbg, seed=args.seed + 30000 + cell_i)
             _, _, bc = tr.b_true(TAUS)
@@ -248,18 +320,27 @@ def main() -> None:
             proj = {"current": proj0, "y_first": proj0}
             truth_kind = "conditional_cdf_background_mc"
         sci_a = np.zeros(M); sci_logsd_b = np.zeros(M); sci_var_b = np.zeros(M)
-        if cell["family"] != "cov_both":
+        if is_normal_linear(cell):
+            sci_a[0] = float(cell["a"])
+            sci_var_b[0] = float(cell["v"])
+        elif cell["family"] != "cov_both":
             sci_a[0] = cell["a"]
             sci_logsd_b[0] = cell["b"]
             # The shipped Normal vQTL basis is parameterised by a variance
             # effect: W_sigma2 = z/(2*sd).  Convert the DGM's log-SD b into
             # the scientific local variance coefficient 2*b at s0=1.
             sci_var_b[0] = 2.0 * cell["b"]
+        if is_normal_linear(cell):
+            variance_ratio = 1.0 + float(cell["v"]) * (1.0 - 2.0 * float(cell["maf"]))
+        else:
+            variance_ratio = float(np.exp(sci_var_b[0]))
         json.dump(dict(cell=cell, maf=[cell["maf"]] * M,
+                       scientific_parameterisation=("normal_variance_linear" if is_normal_linear(cell)
+                                                    else "log_sd_exponential"),
                        scientific_a=sci_a.tolist(),
                        scientific_logsd_b=sci_logsd_b.tolist(),
                        scientific_variance_coefficient=sci_var_b.tolist(),
-                       scientific_variance_ratio=[float(np.exp(x)) for x in sci_var_b],
+                       scientific_variance_ratio=[variance_ratio] + [1.0] * (M - 1),
                        projection={k: np.asarray(v).tolist() for k, v in proj.items()},
                        projection_truth_kind=truth_kind,
                        projection_reference_N=(args.Nref if truth_kind == "reference_mc" else args.nbg),
@@ -277,11 +358,16 @@ def main() -> None:
         for r in range(args.reps):
             seed = args.seed + 100000 * cell_i + r
             rng = np.random.default_rng(seed)
-            G = rng.binomial(2, np.broadcast_to(d.maf, (args.N, M))).astype(float)
+            G = rng.binomial(2, np.full((args.N, M), float(cell["maf"]))).astype(float)
             if cell["family"] == "cov_both":
                 G, y, C = draw_covariate_data(cell, args.N, rng)
                 current, yfirst = run_current_and_yfirst(G, y, C, TAUS, seed, args.blocks, args.threads)
                 chosen = {"current": current, "y_first": yfirst}
+            elif is_normal_linear(cell):
+                y = simulate_normal_linear(cell, G, rng)
+                current, _ = run_current_and_yfirst(G, y, None, TAUS, seed, args.blocks, args.threads,
+                                                     include_yfirst=False)
+                chosen = {"current": current}
             else:
                 y = gs.simulate_phenotype(d, G, rng)
                 current, _ = run_current_and_yfirst(G, y, None, TAUS, seed, args.blocks, args.threads,

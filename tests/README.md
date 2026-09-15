@@ -1,8 +1,10 @@
 # tests/ -- the G-MoQ validation suite
 
-Full documentation: [`../docs/TEST_SUITE.md`](../docs/TEST_SUITE.md). That file
-says what each tier establishes, **what it does not establish**, what it costs,
-and the pass criteria.
+The historical tier scripts are regression checks. The compact paired
+known-truth pilot is documented in [`validity_pilot/README.md`](validity_pilot/README.md)
+and is the relevant diagnostic for scientific validity. The former
+`docs/TEST_SUITE.md` link is not present in this checkout; do not treat the
+legacy tier bands below as a scientific validity certificate.
 
 Four tiers, each runnable on its own:
 
@@ -22,9 +24,11 @@ Rscript --vanilla tests/report.R $GMOQ_WORK/results
 ```
 
 `tests/report.R` writes the single artefact a human reads:
-`RELEASE_REPORT.md` and `RELEASE_REPORT.json`, with a verdict of **SOUND**,
-**SOUND (PARTIAL)** or **NOT SOUND**, every check's statistic and Monte Carlo
-error, and an explicit list of what was not established.
+`RELEASE_REPORT.md` and `RELEASE_REPORT.json`, with a verdict of
+**REGRESSION CHECKS PASSED**, **REGRESSION CHECKS PARTIAL** or
+**REGRESSION CHECKS FAILED**, every check's statistic and Monte Carlo error,
+and an explicit list of what was not established. These labels describe the
+historical checks that ran; they do not certify scientific validity.
 
 Two things worth knowing before editing anything here:
 
