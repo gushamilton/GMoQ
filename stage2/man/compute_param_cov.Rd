@@ -4,7 +4,7 @@
 \alias{compute_param_cov}
 \title{Compute parameter covariance upper triangles}
 \usage{
-compute_param_cov(cov_vec, offsets, A, K)
+compute_param_cov(cov_vec, offsets, A, K, cov_scales = NULL)
 }
 \arguments{
 \item{cov_vec}{Numeric vector containing concatenated upper triangles of covariance matrices.}
@@ -14,6 +14,8 @@ compute_param_cov(cov_vec, offsets, A, K)
 \item{A}{The transformation matrix (n_params x K).}
 
 \item{K}{Dimension of the covariance matrix (e.g. 17).}
+
+\item{cov_scales}{Optional per-SNP positive multiplier for a shared covariance payload.}
 }
 \value{
 NumericMatrix of upper-triangle covariance (n_snps x n_cov_params).

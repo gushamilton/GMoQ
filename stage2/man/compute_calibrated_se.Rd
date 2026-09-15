@@ -4,7 +4,7 @@
 \alias{compute_calibrated_se}
 \title{Compute Calibrated Standard Errors}
 \usage{
-compute_calibrated_se(cov_vec, offsets, A, K)
+compute_calibrated_se(cov_vec, offsets, A, K, cov_scales = NULL)
 }
 \arguments{
 \item{cov_vec}{Numeric vector containing concatenated upper triangles of covariance matrices.}
@@ -14,6 +14,8 @@ compute_calibrated_se(cov_vec, offsets, A, K)
 \item{A}{The transformation matrix (n_params x K).}
 
 \item{K}{Dimension of the covariance matrix (e.g. 17).}
+
+\item{cov_scales}{Optional per-SNP positive multiplier for a shared covariance payload.}
 }
 \value{
 NumericMatrix of standard errors (n_snps x n_params).

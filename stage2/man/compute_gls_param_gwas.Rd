@@ -11,7 +11,8 @@ compute_gls_param_gwas(
   W,
   return_cov = FALSE,
   gls_ridge = 1e-08,
-  n_threads = 1L
+  n_threads = 1L,
+  cov_scales = NULL
 )
 }
 \arguments{
@@ -28,6 +29,8 @@ compute_gls_param_gwas(
 \item{gls_ridge}{Relative diagonal ridge added only if the covariance solve fails.}
 
 \item{n_threads}{Number of OpenMP threads.}
+
+\item{cov_scales}{Optional per-SNP positive multiplier for a shared covariance payload.}
 }
 \value{
 List with params, se, Q, and optionally param_cov_upper.

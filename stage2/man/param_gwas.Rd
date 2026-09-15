@@ -48,6 +48,8 @@ param_gwas(
 
 \item{cov_data}{For \code{se_mode = "tau_cov"}: either a list with \code{cov_vec}
 (numeric vector of covariance data) and \code{offsets} (byte offsets per SNP),
+optionally with \code{cov_scales} (one positive multiplier per SNP for a
+shared pooled payload),
 \code{se_mode = "tau_cov"} requires covariance data; use
 \code{se_mode = "diagonal"} explicitly only for fallback/debug runs.}
 

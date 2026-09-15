@@ -4,7 +4,16 @@
 \alias{compute_q_calibration}
 \title{Null-distribution quantities for the Stage 2 lack-of-fit statistic}
 \usage{
-compute_q_calibration(cov_vec, offsets, Qstat, Dvar, M, K, n_threads)
+compute_q_calibration(
+  cov_vec,
+  offsets,
+  Qstat,
+  Dvar,
+  M,
+  K,
+  n_threads,
+  cov_scales = NULL
+)
 }
 \arguments{
 \item{cov_vec}{Concatenated upper triangles of the per-SNP covariances.}
@@ -20,6 +29,8 @@ compute_q_calibration(cov_vec, offsets, Qstat, Dvar, M, K, n_threads)
 \item{K}{Number of taus.}
 
 \item{n_threads}{OpenMP threads.}
+
+\item{cov_scales}{Optional per-SNP positive multiplier for a shared covariance payload.}
 }
 \value{
 Numeric matrix (n_snps x 6): c1, c2, c3, c4, p_saddle, n_eig.
