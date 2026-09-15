@@ -1,8 +1,11 @@
 # G-MoQ backlog
 
-One ordered list. Everything known, everything open, everything unverified.
-Updated 2026-09-15 at `ce9fb92`. **Method and approach only** - manuscript tasks are
-out of scope and listed last purely so they are not mistaken for gaps.
+One ordered list of everything open in **the method and the package**.
+Updated 2026-09-15 at `ce9fb92`.
+
+Nothing here is manuscript work. Regenerating any published result is out of scope by
+definition: the method defect that would require it is already fixed and committed, and
+re-running an analysis is not a method task.
 
 Status key: **DONE** (committed, with evidence) / **OPEN** (known, not done) /
 **UNVERIFIED** (claimed, evidence not confirmed) / **UNKNOWN** (never looked).
@@ -13,9 +16,8 @@ Status key: **DONE** (committed, with evidence) / **OPEN** (known, not done) /
 
 | # | Item | Status |
 |---|---|---|
-| A1 | **Re-run `log_bmi`.** Published Stage 1/2, LDSC and lead SNPs were produced under the unscaled LOCO path. 66 leads against REGENIE's 411. Effect estimates distorted, not merely under-powered. | **OPEN** |
-| A2 | **The input pipeline has never been checked against ground truth.** `extract_dosage`, `match_samples`, `load_analysis_inputs`, `read_keep_ids`, `write_stats_batch` have zero test references; both tests touching `get_variants_bgen` monkeypatch it away; all six simulation campaigns call `core.run_stage1()` directly. Everything passes today and nothing would notice if it were wrong. Tier 4 of `test/suite` is built and unrun. | **OPEN** |
-| A3 | **No sample-match-rate guard.** `cli.py:1262` logs `Matched N/M` and proceeds. `match_samples` keys on FID alone while LOCO matching uses five aliases, so an ID-convention mismatch silently analyses a small non-random subset. Three lines to fix; protects every future user rather than every future test. | **OPEN** |
+| A1 | **The input pipeline has never been checked against ground truth.** `extract_dosage`, `match_samples`, `load_analysis_inputs`, `read_keep_ids`, `write_stats_batch` have zero test references; both tests touching `get_variants_bgen` monkeypatch it away; all six simulation campaigns call `core.run_stage1()` directly. Everything passes today and nothing would notice if it were wrong. Tier 4 of `test/suite` is built and unrun. | **OPEN** |
+| A2 | **No sample-match-rate guard.** `cli.py:1262` logs `Matched N/M` and proceeds. `match_samples` keys on FID alone while LOCO matching uses five aliases, so an ID-convention mismatch silently analyses a small non-random subset. Three lines to fix; protects every future user rather than every future test. | **OPEN** |
 
 ## B. Decisions the evidence does not yet settle
 
@@ -96,12 +98,3 @@ scripts not on master. Decide: merge the evidence, or archive the branch.
 | Package installs and builds outside this cluster | `e96f3ef` |
 | Allele convention documented | `bace033` |
 | Relatedness, density, tau grid - closed | `6807d6e`, `56f1059` |
-
-## Out of scope
-
-Manuscript work - latent genetic correlation, testosterone benchmark, antibody loci,
-discovery gains - is deliberately not on this list.
-
-The direct-fit benchmark (Kate Tilling's question) sits between the two: it is a claim
-about the method, not the paper, but it is a comparison rather than a correctness issue.
-Design and costing exist (1,400 SNPs, 3 DGMs, 100 replicates, ~285 core-hours); unrun.
