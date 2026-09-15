@@ -164,6 +164,7 @@ def main() -> None:
     ap.add_argument("--source-commit", default="")
     ap.add_argument("--source-status", default="")
     ap.add_argument("--run-id", default="")
+    ap.add_argument("--cell", choices=("v0", "v06", "v24"), default="")
     args = ap.parse_args()
 
     repo = os.path.abspath(args.repo)
@@ -201,6 +202,7 @@ def main() -> None:
         arms=list(ARMS),
         seed=args.seed,
         run_id=run_id,
+        selected_cell=args.cell or "all",
         mc_unit="dataset (one shared phenotype/genotype draw; arms are paired)",
         target_definition=("projection is exact population RIF slope projected onto W; "
                            "scientific target is (a,v) for Var(Y|g)=1+v(g-2p)"),
@@ -208,10 +210,13 @@ def main() -> None:
     with open(os.path.join(out, "density_probe_meta.json"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
 
+    run_cells = cells()
+    if args.cell:
+        run_cells = [cell for cell in run_cells if cell["name"] == f"density_{args.cell}"]
     W = np.column_stack([np.ones(len(TAUS)), Z_TAU / 2.0])
     A = np.linalg.solve(W.T @ W, W.T)
     aggregate = []
-    for ci, cell in enumerate(cells()):
+    for ci, cell in enumerate(run_cells):
         q_pop, f_pop, b_tau = exact_projection(cell, TAUS)
         target_proj = A @ b_tau
         target_sci = np.array([float(cell["a"]), float(cell["v"])])
