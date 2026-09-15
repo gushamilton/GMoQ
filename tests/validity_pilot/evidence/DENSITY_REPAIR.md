@@ -25,9 +25,10 @@ Remote output:
 /user/work/fh6520/gmoq_finish_20260915/validity/density-repair-20260915-01
 ```
 
-Stage 1 ran on `bp1-compute019`, with N=10,000, 100 datasets per cell/arm,
-three cells (`v=0`, `.06`, `.24`), 45 taus, 1,000 blocks, two threads, seed
-`20260915`, and an 8 GB compute-node step. The executed harness source was
+Stage 1 ran on `bp1-compute019` under Slurm allocation `18966618`, with
+N=10,000, 100 datasets per cell/arm, three cells (`v=0`, `.06`, `.24`), 45
+taus, 1,000 blocks, two threads, seed `20260915`, and the requested 8 GB
+wrapper budget within the held 32 GB allocation. The executed harness source was
 commit `28c5316d55679ab07da943e2700e246869953760`; the metadata records script
 SHA-256
 `ec2153785c2993945d4fe885a279ef68fe71a72b3283c1ee8495fb5c724b3f7f`.
@@ -43,19 +44,36 @@ The exact Stage 1 command was:
   --out /user/work/fh6520/gmoq_finish_20260915/validity/density-repair-20260915-01 \
   --run-id density-repair-20260915-01 --reps 100 --N 10000 --blocks 1000 \
   --threads 2 --seed 20260915 \
-  --source-commit 28c5316d55679ab07da943e2700e246869953760
+  --source-commit 28c5316d55679ab07da943e2700e246869953760 \
+  --source-status density-repair-20260915-01-local-clean-28c5316
 ```
 
 The installed Stage 2 command used R 4.5.1 from
 `/software/local/languages/miniforge3/envs/r-4.5.1/bin/Rscript`, the existing
 `pilot_stage2.R` wrapper, and the configured `fungwasStage2` test/dependency
-libraries. It wrote 4,800 variant rows and 2,400 dataset-arm rows. The
-failure-aware postprocessor is committed in `bc09b45` and `34439b9`.
+libraries (`GMOQ_TEST_LIB=/user/work/fh6520/gmoq_finish_20260915/validity/lib`,
+`GMOQ_DEP_LIB=/user/work/fh6520/r_packages`). It wrote 2,400 Stage 2
+dataset-arm fits and 4,800 parameter rows from the 600 Stage 1 dataset/arm
+combinations. The failure-aware postprocessor is committed in `bc09b45` and
+`34439b9`.
+
+The exact Stage 2 command was:
+
+```text
+/Users/fergushamilton/bin/bprun --cpus 2 --mem 8G --time 00:30:00 \
+  env GMOQ_TEST_LIB=/user/work/fh6520/gmoq_finish_20260915/validity/lib \
+  GMOQ_DEP_LIB=/user/work/fh6520/r_packages \
+  /software/local/languages/miniforge3/envs/r-4.5.1/bin/Rscript --vanilla \
+  /user/work/fh6520/gmoq_finish_20260915/validity/repo/tests/validity_pilot/pilot_stage2.R \
+  /user/work/fh6520/gmoq_finish_20260915/validity/density-repair-20260915-01 \
+  /user/work/fh6520/gmoq_finish_20260915/validity/density-repair-20260915-01/pilot_rows.csv
+```
 
 ## Results
 
-All 600 attempted Stage 2 dataset arms fit successfully: 100/100 per
-cell/arm/source/W, with zero nonfinite estimates, standard errors, or
+All 600 attempted Stage 1 dataset/arm combinations produced artifacts, and
+all 2,400 Stage 2 fits succeeded: 100/100 per cell/arm/source/W, with zero
+nonfinite estimates, standard errors, or
 reference z values. The fourth-order raw density had no nonpositive or floored
 tau values in any of the 300 repaired datasets. Its minimum density averaged
 0.0458 for `v=.24`; the production minimum averaged 0.0480. The complete
@@ -79,8 +97,10 @@ was effectively zero (`−0.000030 ± 0.000044`).
 
 The weaker cells had 0.97–0.98 pooled/jackknife coverage for the variance
 parameter and approximately 0.96 coverage at v=0, with binomial MCSEs from
-0.014 to 0.020. The v=0 arm retained a roughly −0.004 variance point bias in
-both kernels, so the fourth-order change does not establish broad validity.
+0.014 to 0.020. The v=0 arm's finite-pilot point estimate was about
+−0.0040 ± 0.0022 in both kernels; this is not evidence of a nonzero null bias
+at this precision. The fourth-order change therefore does not establish broad
+validity.
 
 The prototype removes the observed strong-cell point bias against the exact
 projection target, but its 100-dataset coverage remains too imprecise and the
