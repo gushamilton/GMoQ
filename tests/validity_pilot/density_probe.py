@@ -16,6 +16,7 @@ This file is a diagnostic harness; it does not change production code.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -180,10 +181,12 @@ def main() -> None:
     os.makedirs(truth_dir, exist_ok=True)
     source_commit = args.source_commit or git_value(repo, "rev-parse", "HEAD")
     source_status = args.source_status or git_value(repo, "status", "--short", "--branch")
+    script_sha256 = hashlib.sha256(open(os.path.abspath(__file__), "rb").read()).hexdigest()
     meta = dict(
         design="paired_density_rif_diagnosis",
         source_commit=source_commit,
         source_status=source_status,
+        script_sha256=script_sha256,
         repo_head=git_value(repo, "rev-parse", "HEAD"),
         python=sys.version,
         numpy=np.__version__,
