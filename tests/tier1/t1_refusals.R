@@ -253,12 +253,18 @@ gmoq_refuses("T1.REF.tau_cov_needs_cov_data",
                         transform = "custom_W", transform_args = list(W = W),
                         se_mode = "tau_cov", cov_data = NULL),
              "requires cov_data")
+missing_dir <- file.path(FIX, "missing_sigma0")
+if (dir.exists(missing_dir)) unlink(missing_dir, recursive = TRUE)
+dir.create(missing_dir, recursive = TRUE)
+file.copy(list.files(file.path(FIX, "clean"), full.names = TRUE),
+          missing_dir, overwrite = TRUE)
+unlink(list.files(missing_dir, pattern = "\\.sigma0", full.names = TRUE))
 gmoq_refuses("T1.REF.pooled_needs_sigma0",
-             "cov_source='pooled' without a sigma0 file is refused.",
+             "cov_source='pooled' without a sigma0 sidecar is refused.",
              suppressMessages(param_gwas_from_file(
-               stage1_file = paste0(pfx("clean"), ".stage1.tsv.gz"), W = W,
+               stage1_file = file.path(missing_dir, "sim.stage1.tsv.gz"), W = W,
                se_mode = "tau_cov", cov_source = "pooled", sigma0_file = NULL)),
-             "requires sigma0_file")
+             "requires.*sigma0")
 gmoq_refuses("T1.REF.jackknife_needs_cov_file",
              "cov_source='jackknife' without a covariance file is refused.",
              suppressMessages(param_gwas_from_file(

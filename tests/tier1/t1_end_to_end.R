@@ -165,10 +165,11 @@ gmoq_check("T1.E2E.default_estimator_is_ols",
            identical(eval(formals(param_gwas_from_file)$tau_cov_estimator)[1], "ols") &&
              identical(eval(formals(param_gwas)$tau_cov_estimator)[1], "ols"),
            criterion = "first choice of tau_cov_estimator is 'ols' in both entry points")
-gmoq_check("T1.E2E.default_cov_source_is_jackknife",
-           "cov_source defaults to 'jackknife': every published result used it and this is not a one-way door.",
-           identical(eval(formals(param_gwas_from_file)$cov_source)[1], "jackknife"),
-           criterion = "first choice of cov_source is 'jackknife'")
+gmoq_check("T1.E2E.default_cov_source_is_pooled",
+           "cov_source defaults to 'pooled', the primary production covariance; jackknife remains explicit.",
+           identical(eval(formals(param_gwas_from_file)$cov_source)[1], "pooled") &&
+             identical(eval(formals(param_gwas_multi_from_file)$cov_source)[1], "pooled"),
+           criterion = "first choice of cov_source is 'pooled' in both entry points")
 
 # =====================================================================
 # 4. The pooled covariance path
