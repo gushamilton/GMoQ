@@ -15,12 +15,14 @@ logger = logging.getLogger(__name__)
 
 #: Default number of delete-one-block jackknife blocks.
 #:
-#: The covariance is unbiased at any block count, but ``SE_hat`` is noisy:
-#: ``sd(SE_hat)/SE = 1/sqrt(2*(B-1))``, which is 8.8% at B = 65 and 2.2% at
-#: B = 1000. Stage 2 now reads ``theta/SE`` against ``t_{B-1}``, so the test is
-#: correctly sized at any B; what a larger B buys is a tighter denominator and
-#: hence power, not validity. Measured cost of this default relative to the
-#: old B = 65: about +30% Stage 1 wall time and peak memory around 1 GB.
+#: Under a fixed-RIF, regular-block approximation, increasing B reduces
+#: jackknife SE noise; ``sd(SE_hat)/SE = 1/sqrt(2*(B-1))`` is a
+#: design-variance approximation, not a guarantee for the full plug-in RIF
+#: estimator. Stage 2's ``t_{B-1}`` reference is also an approximation whose
+#: size depends on the covariance source, effective-df model, and estimand; it
+#: is not guaranteed correctly sized for every B. Measured cost of this default
+#: relative to the old B = 65: about +30% Stage 1 wall time and peak memory
+#: around 1 GB.
 DEFAULT_N_BLOCKS = 1000
 
 ALLOW_NUMPY_FALLBACK = False
@@ -56,9 +58,11 @@ def resolve_n_blocks(n_blocks: Optional[int], n_taus: int, flag: str = "--blocks
 
     ``None`` means "use the default". The hard constraint is ``B > T``: the
     jackknife covariance has rank ``B - 1``, so fewer blocks than taus makes it
-    singular. Below the default the covariance is still unbiased and, with the
-    Stage 2 ``t_{B-1}`` reference, the Wald test is still correctly sized -- it
-    just has a noisier denominator and therefore less power.
+    singular. For a fixed RIF and regular independent blocks, the covariance
+    interpretation is approximate; fewer blocks make the denominator noisier.
+    The Stage 2 ``t_{B-1}`` reference is conditional on its effective-df
+    assumptions and does not provide universal size guarantees, especially
+    when q/f/RIF nuisance estimates are held outside the block sums.
     """
     if n_blocks is None:
         n_blocks = DEFAULT_N_BLOCKS
@@ -73,8 +77,8 @@ def resolve_n_blocks(n_blocks: Optional[int], n_taus: int, flag: str = "--blocks
         )
     if n_blocks < DEFAULT_N_BLOCKS:
         logger.warning(
-            "%s=%d is below the default of %d. The covariance stays unbiased and "
-            "Stage 2's t_%d reference keeps the test correctly sized, but SE_hat "
+            "%s=%d is below the default of %d. The fixed-RIF covariance and "
+            "Stage 2's t_%d reference remain approximations; SE_hat "
             "carries %.1f%% relative noise (1/sqrt(2*(B-1))) against %.1f%% at the "
             "default, which costs power.",
             flag, n_blocks, DEFAULT_N_BLOCKS, n_blocks - 1,

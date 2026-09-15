@@ -1291,8 +1291,8 @@ def main():
                         help='Comma-separated tau values (default: 45 taus from 0.02 to 0.98)')
     parser.add_argument('--blocks', type=int, default=None,
                         help=f'Number of jackknife blocks (default: {DEFAULT_N_BLOCKS}). '
-                             'Must exceed the number of taus. Fewer blocks stay correctly '
-                             'sized under the Stage 2 t reference but give a noisier SE.')
+                             'Must exceed the number of taus. Fewer blocks make the fixed-RIF '
+                             'covariance and Stage 2 t calibration noisier and remain approximate.')
     parser.add_argument('--batch-size', dest='batch_size', type=int, default=500,
                         help='SNPs per batch for memory efficiency')
     parser.add_argument('--threads', type=int, default=1,

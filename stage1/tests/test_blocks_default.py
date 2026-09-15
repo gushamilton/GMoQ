@@ -1,9 +1,10 @@
 """Tests for the jackknife block-count default and its guard rails.
 
 The default moved from ``max(n_taus + 20, 64)`` (65 on the production 45-tau
-grid) to 1000.  The covariance is unbiased at either count; what changes is the
-noise in ``SE_hat``, which is ``1/sqrt(2*(B-1))`` -- 8.8% at B = 65 against 2.2%
-at B = 1000.
+grid) to 1000.  Under the fixed-RIF, regular-block approximation, what changes
+is the noise in ``SE_hat``, whose design-variance approximation is
+``1/sqrt(2*(B-1))`` -- 8.8% at B = 65 against 2.2% at B = 1000.  This is not a
+universal calibration guarantee for the full plug-in RIF estimator.
 """
 
 import logging
