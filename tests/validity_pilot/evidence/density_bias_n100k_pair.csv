@@ -1,0 +1,9 @@
+"base_cell","source","parameter","comparison","datasets","mean_difference","difference_mcse","empirical_sd_difference"
+"density_v24","jackknife","beta_mu","A_empirical_kde - B_empirical_exact_f",50,-4.47900278314903e-05,4.60200734030074e-05,0.000325411059739692
+"density_v24","jackknife","beta_mu","B_empirical_exact_f - C_population_exact",50,6.07454584005975e-05,5.3566121554819e-05,0.000378769677932754
+"density_v24","jackknife","beta_sigma2","A_empirical_kde - B_empirical_exact_f",50,-0.00183418045995886,0.000146412334099377,0.0010352915429102
+"density_v24","jackknife","beta_sigma2","B_empirical_exact_f - C_population_exact",50,3.68503360932082e-06,0.000100457130267711,0.00071033918030839
+"density_v24","pooled","beta_mu","A_empirical_kde - B_empirical_exact_f",50,-4.47900278314903e-05,4.60200734030074e-05,0.000325411059739692
+"density_v24","pooled","beta_mu","B_empirical_exact_f - C_population_exact",50,6.07454584005975e-05,5.3566121554819e-05,0.000378769677932754
+"density_v24","pooled","beta_sigma2","A_empirical_kde - B_empirical_exact_f",50,-0.00183418045995886,0.000146412334099377,0.0010352915429102
+"density_v24","pooled","beta_sigma2","B_empirical_exact_f - C_population_exact",50,3.68503360932082e-06,0.000100457130267711,0.00071033918030839

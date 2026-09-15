@@ -1,0 +1,4 @@
+"base_cell","arm","datasets","fhat_over_exact_mean","fhat_over_exact_mcse","q_delta_rms_mean","q_delta_rms_mcse"
+"density_v24","A_empirical_kde",50,0.999636321486385,6.65046138358203e-05,0.0044653261371628,0.000173010232273413
+"density_v24","B_empirical_exact_f",50,0.999636321486385,6.65046138358203e-05,0.0044653261371628,0.000173010232273413
+"density_v24","C_population_exact",50,0.999705705637638,0.000272882812398637,0,0
