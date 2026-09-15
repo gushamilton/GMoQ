@@ -177,6 +177,10 @@ quantile_gwas <- function(
 #' @param return_cov Optional output of parameter covariance derived from Stage 1
 #'   tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle
 #'   matrix), \code{"full"} (K x K x P array), or \code{"mashr"} (Bhat/Shat/V list).
+#' @param q_method Reference for the lack-of-fit statistic: calibrated
+#'   \code{"saddlepoint"}, \code{"liu"}, or \code{"satterthwaite"} on the OLS
+#'   path; \code{"hotelling"} on the GLS path; or explicit
+#'   \code{"chisq_naive"}, which returns \code{Q} without \code{Q_pval}.
 #' @param nu Explicit degrees of freedom, overriding everything else.
 #'   \code{theta/SE} is \code{t_nu} distributed, not normal, because
 #'   \code{Sigma} is estimated: for a fixed contrast \code{a},
@@ -1127,6 +1131,8 @@ param_gwas_from_file <- function(
 #'   next to \code{stage1_file} is used when present.
 #' @param unsafe_skip_cov_ids If TRUE, allow tau_cov to proceed without a
 #'   covariate IDs sidecar (not recommended).
+#' @param drop_multiallelic If TRUE, drop duplicated rsIDs or positions before
+#'   fitting.
 #' @param n_threads Number of OpenMP threads.
 #'
 #' @return Matrix with AIC/BIC columns per model.

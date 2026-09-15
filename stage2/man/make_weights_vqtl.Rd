@@ -28,7 +28,8 @@ effects on the mean and variance of a Normal baseline phenotype.
 }
 \details{
 Baseline: Y ~ N(mu, sigma^2).
-For tau-quantiles q_tau = mu + sigma * z_tau, z_tau = Phi^{-1}(tau):
+For tau-quantiles \eqn{q_\tau = \mu + \sigma z_\tau}, with
+\eqn{z_\tau = \Phi^{-1}(\tau)}:
 \deqn{ W_mu(tau) = 1, \quad W_sigma2(tau) = z_tau / (2 * sigma). }
 }
 \examples{

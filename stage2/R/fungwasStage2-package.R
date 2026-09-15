@@ -17,5 +17,6 @@
 #'
 #' @useDynLib fungwasStage2, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
+#' @importFrom stats dnorm lm.fit pnorm qnorm quantile
 #' @keywords internal
 "_PACKAGE"

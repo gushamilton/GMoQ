@@ -261,7 +261,7 @@ N_EFF_COLUMN <- "d_resid"
 #' for a mean-centred \code{q_tau} column).
 #'
 #' @param a Numeric contrast vector over taus.
-#' @return Numeric in [0, 1], or \code{NA_real_}.
+#' @return Numeric in \code{[0, 1]}, or \code{NA_real_}.
 #' @keywords internal
 .contrast_flatness <- function(a) {
   a <- as.numeric(a)

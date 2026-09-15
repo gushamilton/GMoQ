@@ -82,6 +82,11 @@ matrix cannot be inverted for GLS.}
 tau covariance. One of \code{"none"} (default), \code{"upper"} (upper-triangle
 matrix), \code{"full"} (K x K x P array), or \code{"mashr"} (Bhat/Shat/V list).}
 
+\item{q_method}{Reference for the lack-of-fit statistic: calibrated
+\code{"saddlepoint"}, \code{"liu"}, or \code{"satterthwaite"} on the OLS
+path; \code{"hotelling"} on the GLS path; or explicit
+\code{"chisq_naive"}, which returns \code{Q} without \code{Q_pval}.}
+
 \item{nu}{Explicit degrees of freedom, overriding everything else.
 \code{theta/SE} is \code{t_nu} distributed, not normal, because
 \code{Sigma} is estimated: for a fixed contrast \code{a},

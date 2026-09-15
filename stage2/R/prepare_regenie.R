@@ -97,7 +97,8 @@ prepare_regenie <- function(
       }
 
       rtau_path <- file.path(out_rtau, sprintf("R_tau_%s.tsv", pheno_name))
-      data.table::fwrite(as.data.table(r_tau), rtau_path, sep = "\t", quote = FALSE)
+      data.table::fwrite(data.table::as.data.table(r_tau), rtau_path,
+                         sep = "\t", quote = FALSE)
     }
 
     outputs[[pheno_name]] <- list(

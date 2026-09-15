@@ -41,6 +41,9 @@ next to \code{stage1_file} is used when present.}
 \item{unsafe_skip_cov_ids}{If TRUE, allow tau_cov to proceed without a
 covariate IDs sidecar (not recommended).}
 
+\item{drop_multiallelic}{If TRUE, drop duplicated rsIDs or positions before
+fitting.}
+
 \item{n_threads}{Number of OpenMP threads.}
 }
 \value{

@@ -145,7 +145,7 @@ out <- param_gwas_from_file(
   stage1_file = "path/to/stage1.tsv.gz",
   W = my_weight_matrix,
   se_mode = "tau_cov",
-  cov_file = "path/to/stage1.cov.gz",
+  sigma0_file = "path/to/stage1.sigma0.tsv.gz",
   return_cov = "upper",
   param_cov_file = "stage2.paramcov.gz"
 )
@@ -216,6 +216,7 @@ If your covariance file predates `.cov.ids.tsv.gz`, you must opt in to unsafe mo
 model_scores <- param_gwas_multi_from_file(
   stage1_file = "path/to/stage1.tsv.gz",
   cov_file = "path/to/stage1.cov.gz",
+  cov_source = "jackknife",
   W_list = W_list,
   N = 20000,
   unsafe_skip_cov_ids = TRUE
