@@ -354,6 +354,24 @@ if (is.finite(expected_scale) && !isTRUE(all.equal(scale_factor, expected_scale,
 q_tau <- as.numeric(stats::quantile(y_base, probs = taus, type = 8, names = FALSE))
 if (any(!is.finite(q_tau))) stop("Non-finite baseline quantiles.", call. = FALSE)
 
+## Stage 1's RIF divides by this exact Gaussian KDE evaluated at the empirical
+## type-8 quantiles.  The historical mixture builder used the fitted-model PDF
+## here instead, which changes the scale of every Stage 2 weight.  Keep this
+## calculation in R byte-for-byte at the level of the Python Stage 1 formula:
+## population (N, not N-1) SD, Silverman's 1.06 rule, and the same 1e-8 floor.
+stage1_kde_at <- function(y, x, density_floor = 1e-8) {
+  n <- length(y)
+  if (n < 2L) stop("Too few baseline values for Stage 1 KDE.", call. = FALSE)
+  sd_population <- sqrt(sum((y - mean(y))^2) / n)
+  h <- 1.06 * sd_population * n^(-0.2)
+  if (!is.finite(h) || h <= 0) stop("Invalid Stage 1 KDE bandwidth.", call. = FALSE)
+  f <- vapply(as.numeric(x), function(q) {
+    mean(exp(-0.5 * ((y - q) / h)^2)) / (h * sqrt(2 * pi))
+  }, numeric(1))
+  pmax(f, density_floor)
+}
+f_stage1 <- stage1_kde_at(y_base, q_tau)
+
 ## Build shifted-lognormal W using the package's generic derivative API.  The
 ## parameter names are retained from the paper outputs: additive is the shift
 ## parameter and multiplicative is the log-scale location parameter.
@@ -423,7 +441,7 @@ build_lognormal <- function(y, q_tau, taus) {
 ## Fit the same two-component skew-normal mixture used by the historical paper
 ## builder, but on the matched LOCO-adjusted baseline.  Components are sorted by
 ## location so the parameter columns have stable meaning across chromosomes.
-build_skew_mixture <- function(y, q_tau, taus, seed) {
+build_skew_mixture <- function(y, q_tau, taus, seed, f_stage1) {
   if (!requireNamespace("mixsmsn", quietly = TRUE) || !requireNamespace("sn", quietly = TRUE)) {
     stop("The skew/mixture weight builder requires mixsmsn and sn in freshRlib.",
          call. = FALSE)
@@ -454,17 +472,36 @@ build_skew_mixture <- function(y, q_tau, taus, seed) {
     z$p1 * sn::dsn(x, xi = z$xi1, omega = z$omega1, alpha = z$alpha1) +
       (1 - z$p1) * sn::dsn(x, xi = z$xi2, omega = z$omega2, alpha = z$alpha2)
   }
+  ## Use the density that scaled the Stage 1 RIF for testosterone.  The
+  ## historical mixture path for the other mixture traits remains unchanged
+  ## until it gets a separately registered validation.  The fallback is only
+  ## for defensive callers evaluating the closure away from q_tau; the normal
+  ## path receives q_tau exactly and reuses the already computed vector.
+  use_stage1_density <- grepl("^testosterone", trait)
+  density_for_weights <- function(x, z) {
+    if (use_stage1_density && length(x) == length(q_tau) &&
+        isTRUE(all.equal(as.numeric(x), q_tau))) {
+      return(f_stage1)
+    }
+    if (use_stage1_density) stage1_kde_at(y, x) else pdf(x, z)
+  }
   grad_p <- fungwasStage2::make_fd_grad("p1", cdf)
   grad_gamma <- function(x, z) grad_p(x, z) * z$p1 * (1 - z$p1)
   W <- fungwasStage2::make_weights_generic(
-    taus = taus, q_tau = q_tau, dist_cdf = cdf, dist_pdf = pdf, params = p,
+    taus = taus, q_tau = q_tau, dist_cdf = cdf,
+    dist_pdf = density_for_weights, params = p,
     grad_funcs = list(
       gamma = grad_gamma,
       beta_left = fungwasStage2::make_fd_grad("xi1", cdf),
       beta_right = fungwasStage2::make_fd_grad("xi2", cdf)
     )
   )
+  f_model <- as.numeric(pdf(q_tau, p))
   list(W = W, taus = taus, q_tau = q_tau,
+       density_stage1 = f_stage1,
+       density_model = f_model,
+       density_model_over_stage1 = f_model / f_stage1,
+       density_method = "Stage 1 production Silverman Gaussian KDE at empirical type-8 quantiles",
        components = data.table(component = c("lower", "upper"),
                                weight = pii, xi = mu,
                                omega = sqrt(sigma2), alpha = shape),
@@ -475,7 +512,7 @@ make_outputs <- function() {
   if (identical(family, "shifted_lognormal")) {
     return(build_lognormal(y_base, q_tau, taus))
   }
-  mix <- build_skew_mixture(y_base, q_tau, taus, seed)
+  mix <- build_skew_mixture(y_base, q_tau, taus, seed, f_stage1)
   if (identical(family, "skew")) return(list(skew = mix))
   list(mixture = mix)
 }
@@ -529,6 +566,12 @@ provenance <- list(
   loco_scale_mode = loco_scale_mode,
   loco_scale_factor = unname(scale_factor),
   baseline = "LOCO-adjusted phenotype, BGEN-matched (Stage 1 RIF then residualizes X)",
+  density_stage1 = "Silverman Gaussian KDE at empirical type-8 quantiles, population SD, floor 1e-8",
+  density_weight_mode = if (grepl("^testosterone", trait)) {
+    "matched_to_stage1_kde"
+  } else {
+    "family_specific"
+  },
   stage1_file = normalizePath(stage1_file, mustWork = TRUE),
   seed = seed
 )

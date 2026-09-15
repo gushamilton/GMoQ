@@ -134,7 +134,9 @@ The resolver looks for
 literal trait directory and trait-specific `chrNN` root. The legacy
 `--stage1-dir` form remains available for a flat trait directory.
 
-Do not use the prototype density correction or alter the installed package from
-these scripts. Keep full logs and all individual-level inputs on BP; only
-aggregate W, baseline summaries, and Stage 2 result files belong in any
-exportable evidence bundle.
+The testosterone `skew` builder uses the exact Stage 1 Silverman KDE density at
+the empirical quantiles when constructing W, matching the density that scaled
+the Stage 1 RIF. The correction is recorded in the weight provenance and does
+not alter the installed package. Keep full logs and all individual-level
+inputs on BP; only aggregate W, baseline summaries, and Stage 2 result files
+belong in any exportable evidence bundle.
