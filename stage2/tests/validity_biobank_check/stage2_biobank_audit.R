@@ -27,14 +27,24 @@ cov_sources <- if (length(args) >= 7 && identical(args[7], "pooled_jackknife")) 
 } else {
   "pooled"
 }
+file_arg <- commandArgs()[grep("^--file=", commandArgs())]
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg[1]),
+                                                           mustWork = FALSE)) else "."
+SNAP     <- if (length(args) >= 8) args[8] else file.path(script_dir, "snapshot")
+truth_file <- file.path(SNAP, "truth_cs.R")
+cells_file <- file.path(SNAP, "cells.json")
+if (!file.exists(truth_file) || !file.exists(cells_file)) {
+  truth_file <- file.path(WS, "src", "truth_cs.R")
+  cells_file <- file.path(WS, "cells.json")
+}
 .libPaths(c(LIB, .libPaths()))
 stopifnot(identical(.libPaths()[1], LIB))
 library(fungwasStage2)
-source(file.path(WS, "src", "truth_cs.R"))
+source(truth_file)
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 ## ---- cell (minimal JSON parse; no jsonlite under --vanilla) -----------------
-cells_txt <- paste(readLines(file.path(WS, "cells.json"), warn = FALSE), collapse = "")
+cells_txt <- paste(readLines(cells_file, warn = FALSE), collapse = "")
 blocks <- regmatches(cells_txt, gregexpr("\\{[^{}]*\\}", cells_txt))[[1]]
 getf <- function(b, k) {
   m <- regmatches(b, regexpr(paste0("\"", k, "\"[[:space:]]*:[[:space:]]*[^,}]+"), b))

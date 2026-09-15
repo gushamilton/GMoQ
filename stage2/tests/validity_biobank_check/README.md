@@ -21,7 +21,9 @@ blocks. The selected cells are:
 | 5 | `A_loc_maf0.05_normal_Z16` | 0.05 | low-frequency location signal |
 | 6 | `A_disp_maf0.05_normal_Z16` | 0.05 | low-frequency dispersion signal |
 
-The source DGM is `Y = a*g + (1 + c*g)*E`, with standard Normal `E` and
+The driver uses the checked-in `snapshot/cells.json` and `snapshot/truth_cs.R`
+by default; an explicit snapshot directory can be supplied as the eighth
+argument. The source DGM is `Y = a*g + (1 + c*g)*E`, with standard Normal `E` and
 counted allele dosage `g`. The dispersion coefficient `c` is a standard
 deviation multiplier. The audit compares each OLS result with the exact
 finite-mixture RIF projection target in `truth_cs.R`; `Ztarget=16` refers to

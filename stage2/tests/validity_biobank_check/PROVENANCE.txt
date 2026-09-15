@@ -23,6 +23,19 @@ Source compatibility:
   Current Stage 2 source: work-inference commit b1be4d7.
   Current package library: /user/work/fh6520/gmoq_finish_20260915/inference/lib
 
+Vendored truth/cell snapshot (copied byte-for-byte from the remote inputs):
+  snapshot/truth_cs.R   sha256 ddb95024b39b19244257ef8be088135bc3cb8756a3d82a6201217d22f17afdbf
+  snapshot/make_cells.R  sha256 2a999ce36fd1b122faeee8deb59bb0dd579e0cb3300c35fc5efa753bc6b15687
+  snapshot/cells.json    sha256 4c916f788b201f4b9e407a0c7db7177c468af7135eef44ce3b49464b8faa47e4
+  The driver prefers this snapshot beside the script. It falls back to
+  WS/src/truth_cs.R and WS/cells.json only when an older external layout is
+  explicitly used.
+  Generator identity: snapshot/make_cells.R, source workspace
+  /user/work/fh6520/covsource_run/src/make_cells.R.
+  The Stage 1 core.py and pooled_cov.py blobs are identical between legacy
+  source 24eef02 and root baseline 46cdbc0 (no mathematical Stage 1 change;
+  later differences are CLI/input guards and packaging metadata).
+
 Driver:
   stage2_biobank_audit.R reads the existing .beta/.setau/.sigma0u/.jkcovu,
   .dresid and .mac binaries and calls the package's own .pooled_cov_data()
