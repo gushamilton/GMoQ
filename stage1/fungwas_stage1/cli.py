@@ -37,6 +37,7 @@ import sqlite3
 import struct
 import sys
 import time
+import zlib
 from collections import Counter
 from pathlib import Path
 from typing import Optional, List, Set
@@ -881,7 +882,124 @@ def match_samples(bgen_samples: list, sample_ids: list):
     return valid_mask, bgen_indices
 
 
-def extract_dosage(variant, bgen_indices: Optional[np.ndarray] = None):
+def _variant_bit_depth(variant) -> int:
+    """Read a BGEN variant's probability bit depth.
+
+    ``bgen`` stores the depth in each layout-2 record but does not currently expose it
+    on its Python variant object.  Read the layout-2 preamble from ``copy_data`` when
+    needed so callers can retain the native 8-bit dosage fast path.
+    """
+    advertised = getattr(variant, "bit_depth", None)
+    if advertised is not None:
+        return int(advertised)
+
+    # bgen 1.9.7 wheels do not expose layout/compression despite newer stubs
+    # advertising them; the production input is layout 2.
+    layout = int(getattr(variant, "layout", 2))
+    if layout == 1:
+        return 16
+    if layout != 2:
+        raise ValueError(f"Unsupported BGEN layout: {layout}")
+
+    raw = bytes(variant.copy_data())
+    offset = 0
+
+    def take(width: int) -> bytes:
+        nonlocal offset
+        end = offset + width
+        if end > len(raw):
+            raise ValueError("BGEN variant is truncated while reading its genotype header")
+        value = raw[offset:end]
+        offset = end
+        return value
+
+    def take_prefixed(width: int) -> None:
+        length = int.from_bytes(take(width), "little")
+        take(length)
+
+    # Variant metadata precedes the layout-2 genotype block.
+    take_prefixed(2)  # varid
+    take_prefixed(2)  # rsid
+    take_prefixed(2)  # chromosome
+    take(4)  # position
+    n_alleles = int.from_bytes(take(2), "little")
+    expected_alleles = getattr(variant, "alleles", None)
+    if not 1 <= n_alleles <= 1024:
+        raise ValueError("BGEN variant has an invalid allele count")
+    if expected_alleles is not None and n_alleles != len(expected_alleles):
+        raise ValueError("BGEN variant preamble has the wrong allele count")
+    for _ in range(n_alleles):
+        take_prefixed(4)
+    block_length = int.from_bytes(take(4), "little")
+    block = take(block_length)
+
+    compression = getattr(variant, "compression", None)
+    if compression in ("zlib", 1) or compression is None:
+        if len(block) < 4:
+            raise ValueError("BGEN compressed genotype block is missing its uncompressed length")
+        # Only the preamble is needed.  Limiting inflate avoids decoding every
+        # probability just to discover the per-record bit depth.  Older bgen wheels
+        # expose neither layout nor compression, so fall back to a raw layout-2 block
+        # when the payload is not zlib-compressed.
+        inflater = zlib.decompressobj()
+        try:
+            compressed = block[4:]
+            block = inflater.decompress(compressed, 8)
+            if len(block) < 8:
+                block += inflater.decompress(inflater.unconsumed_tail, 8 - len(block))
+            compression = "zlib"
+        except zlib.error:
+            if block[4:8] == b"\x28\xb5\x2f\xfd":
+                raise ValueError(
+                    "BGEN genotype block is zstd-compressed but the reader exposes no compression metadata"
+                )
+            block = block
+            compression = None
+    elif compression == "zstd":
+        try:
+            import zstandard as zstd
+        except ImportError as exc:
+            raise ValueError("Cannot inspect zstd-compressed BGEN bit depth without zstandard") from exc
+        if len(block) < 4:
+            raise ValueError("BGEN zstd genotype block is missing its uncompressed length")
+        expected_length = int.from_bytes(block[:4], "little")
+        block = zstd.ZstdDecompressor().decompress(block[4:], max_output_size=expected_length)
+    elif compression not in (None, ""):
+        raise ValueError(f"Unsupported BGEN compression: {compression}")
+
+    if len(block) < 8:
+        raise ValueError("BGEN genotype block is missing its layout-2 preamble")
+    n_samples = int.from_bytes(block[:4], "little")
+    expected_samples = getattr(variant, "n_samples", None)
+    if expected_samples is not None and n_samples != int(expected_samples):
+        raise ValueError("BGEN genotype preamble has the wrong sample count")
+    min_ploidy = block[6]
+    max_ploidy = block[7]
+    if min_ploidy > max_ploidy or max_ploidy > 63:
+        raise ValueError("BGEN genotype preamble has invalid ploidy bounds")
+    # Layout 2 stores one ploidy/missingness byte for every sample even when
+    # min_ploidy == max_ploidy; the reader may skip materialising those values,
+    # but they remain in the on-disk preamble.
+    header_offset = 8 + n_samples
+    if compression == "zlib" and len(block) < header_offset + 2:
+        needed = header_offset + 2 - len(block)
+        block += inflater.decompress(inflater.unconsumed_tail, needed)
+    elif compression == "zstd" and len(block) < header_offset + 2:
+        raise ValueError("Cannot bounded-read variable-ploidy zstd BGEN preamble")
+    if header_offset + 2 > len(block):
+        raise ValueError("BGEN genotype block is missing phased/bit-depth fields")
+    phased = block[header_offset]
+    bit_depth = int(block[header_offset + 1])
+    if phased not in (0, 1) or not 1 <= bit_depth <= 32:
+        raise ValueError("BGEN genotype preamble has invalid phased/bit-depth fields")
+    return bit_depth
+
+
+def extract_dosage(
+    variant,
+    bgen_indices: Optional[np.ndarray] = None,
+    probability_bit_depth: Optional[int] = None,
+):
     """
     Extract dosage from variant for the first allele (alleles[0]).
     This ensures dosage matches effect_allele which is set to alleles[0].
@@ -898,10 +1016,25 @@ def extract_dosage(variant, bgen_indices: Optional[np.ndarray] = None):
     -------
     dosages : numpy array of dosages for alleles[0]
     """
-    # alt_dosage is the expected count of allele[1]
-    # For diploid, dosage of allele[0] = 2 - alt_dosage
-    alt_dosages = variant.alt_dosage
-    dosages = 2.0 - alt_dosages
+    if probability_bit_depth is None:
+        probability_bit_depth = _variant_bit_depth(variant)
+
+    if probability_bit_depth <= 8:
+        # alt_dosage is the expected count of allele[1].  For diploid, dosage of
+        # allele[0] = 2 - alt_dosage.  bgen's native 8-bit path is vectorised.
+        dosages = 2.0 - variant.alt_dosage
+    else:
+        # The bgen 1.9.7 high-bit alt_dosage path can decode the stored probabilities
+        # correctly while returning an inconsistent dosage.  Reconstruct allele[0]
+        # directly from the decoded [AA, Aa, aa] probabilities for those variants.
+        if bool(variant.is_phased):
+            raise ValueError("Phased BGEN dosage extraction is unsupported for high bit depths")
+        probabilities = np.asarray(variant.probabilities, dtype=np.float64)
+        if probabilities.ndim != 2 or probabilities.shape[1] != 3:
+            raise ValueError(
+                "High-bit BGEN dosage extraction requires diploid biallelic probabilities"
+            )
+        dosages = 2.0 * probabilities[:, 0] + probabilities[:, 1]
     if bgen_indices is not None:
         return dosages[bgen_indices]
     return dosages
@@ -1279,6 +1412,11 @@ def main():
         args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
         seek_variants=args.seek_variants
     )
+
+    # bgen does not expose bit depth on its Python variant object.  It is a per-record
+    # field, so each selected variant gets a bounded preamble probe; production 8-bit
+    # records still use the native vectorised dosage path after that small check.
+    variants = iter(variants)
     
     # Match samples
     valid_mask, bgen_indices = match_samples(bgen_samples, sample_ids)
@@ -1467,7 +1605,8 @@ def main():
                 active_chr = variant_chr
 
             # Extract dosage
-            all_dosages = extract_dosage(variant)
+            probability_bit_depth = _variant_bit_depth(variant)
+            all_dosages = extract_dosage(variant, probability_bit_depth=probability_bit_depth)
             dosages = all_dosages[bgen_indices]
             
             G_batch[:, idx_in_batch] = dosages

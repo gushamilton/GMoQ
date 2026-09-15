@@ -4,10 +4,15 @@ The expected dosages in this file are derived from the genotype probabilities su
 to ``BgenWriter``.  They are deliberately not obtained by reading the fixture back with
 the same package that the CLI uses.  That leaves a reader allele or missingness bug
 visible to the test.
+
+The end-to-end fixture is intentionally layout-2, unphased, diploid, 8-bit BGEN,
+matching the encoding used by the production inputs.  A separate small 32-bit
+regression covers the dependency's high-bit dosage fallback.
 """
 
 import csv
 import gzip
+import struct
 import sys
 from pathlib import Path
 
@@ -49,7 +54,7 @@ def _known_dosages():
     return {"rs_frac": fractional, "rs_missing": missing}
 
 
-def _write_bgen(path: Path, sample_order, dosages):
+def _write_bgen(path: Path, sample_order, dosages, bit_depth=8):
     from bgen import BgenWriter
 
     order = [int(s[1:]) for s in sample_order]
@@ -69,7 +74,7 @@ def _write_bgen(path: Path, sample_order, dosages):
                 pos=1000 + j,
                 alleles=[effect, other],
                 genotypes=probs,
-                bit_depth=8,
+                bit_depth=(bit_depth[rsid] if isinstance(bit_depth, dict) else bit_depth),
             )
 
 
@@ -195,3 +200,68 @@ def test_match_samples_rejects_ambiguous_ids():
         cli.match_samples(["S1", "S1"], ["S1"])
     with pytest.raises(ValueError, match="Phenotype sample IDs are not unique"):
         cli.match_samples(["S1", "S2"], ["S1", "S1"])
+
+
+def test_high_bit_bgen_dosage_uses_decoded_probabilities(tmp_path):
+    """High-bit dosage agrees with independent truth despite bgen's alt path."""
+    dosages = {
+        "rs_frac": np.resize(np.asarray([0.1234567, 0.7654321, 1.2345678, 1.8765432]), N_GENO),
+        "rs_missing": np.resize(np.asarray([0.2345678, 0.6543219, 1.3456782, 1.7654321]), N_GENO),
+    }
+    bgen = tmp_path / "high-bit.bgen"
+    _write_bgen(bgen, SAMPLES, dosages, bit_depth=32)
+
+    variants, samples, handle = cli.get_variants_bgen(
+        str(bgen), None, ["rs_frac", "rs_missing"], seek_variants=True
+    )
+    assert samples == list(SAMPLES)
+    assert handle is not None
+    for variant in variants:
+        expected = dosages[variant.rsid]
+        np.testing.assert_allclose(
+            cli.extract_dosage(variant), expected, atol=2e-6, equal_nan=True
+        )
+
+
+def test_mixed_bit_depth_records_are_checked_per_variant(tmp_path):
+    """A later high-bit record is repaired even when the first record is 8-bit."""
+    dosages = _known_dosages()
+    dosages["rs_missing"] = np.resize(
+        np.asarray([0.2345678, 0.6543219, 1.3456782, 1.7654321]), N_GENO
+    )
+    bgen = tmp_path / "mixed-bit.bgen"
+    _write_bgen(bgen, SAMPLES, dosages, bit_depth={"rs_frac": 8, "rs_missing": 32})
+
+    variants, _, handle = cli.get_variants_bgen(
+        str(bgen), None, ["rs_frac", "rs_missing"], seek_variants=True
+    )
+    assert handle is not None
+    observed = {variant.rsid: cli.extract_dosage(variant) for variant in variants}
+    for rsid, expected in dosages.items():
+        np.testing.assert_allclose(observed[rsid], expected, atol=2e-6, equal_nan=True)
+
+
+def test_unknown_compression_is_rejected_instead_of_guessing_bit_depth():
+    """Missing compression metadata must not turn compressed bytes into depth 8."""
+    def prefixed(width, payload):
+        return struct.pack("<I" if width == 4 else "<H", len(payload)) + payload
+
+    metadata = b"".join([
+        prefixed(2, b"v1"), prefixed(2, b"rsid"), prefixed(2, b"22"),
+        struct.pack("<I", 1000), struct.pack("<H", 2),
+        prefixed(4, b"A"), prefixed(4, b"C"),
+    ])
+    compressed_block = struct.pack("<I", 20) + b"\x28\xb5\x2f\xfdgarbage"
+    raw = metadata + struct.pack("<I", len(compressed_block)) + compressed_block
+
+    class UnknownCompression:
+        layout = 2
+        compression = None
+        n_samples = 2
+        alleles = ["A", "C"]
+
+        def copy_data(self):
+            return raw
+
+    with pytest.raises(ValueError, match="zstd-compressed"):
+        cli._variant_bit_depth(UnknownCompression())
