@@ -37,5 +37,6 @@ Exact commands used (each through bprun on the existing allocation):
   R --vanilla --slave --file=stage2_biobank_audit.R --args 5 RAW OUT 2500
   R --vanilla --slave --file=stage2_biobank_audit.R --args 6 RAW OUT 2500
   R --vanilla --slave --file=summarise_biobank_audit.R --args OUT
-  A separate OUT_COMPARE replayed cell 6 with pooled and jackknife OLS paired
-  on the same 15,000 Stage 1 replicates.
+  A separate OUT_COMPARE replayed cell 6 with:
+    R --vanilla --slave --file=stage2_biobank_audit.R --args 6 RAW OUT_COMPARE 2500 WS LIB pooled_jackknife
+  pairing pooled and jackknife OLS on the same 15,000 replicates.

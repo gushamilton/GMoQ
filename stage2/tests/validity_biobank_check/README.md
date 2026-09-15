@@ -54,9 +54,10 @@ R --vanilla --slave --file=summarise_biobank_audit.R --args OUT \
 ```
 
 Repeat the first command for cell indices `1`, `2`, `4`, `5`, and `6` in the
-same `OUT` directory. The paired jackknife diagnostic uses the same driver
-with its OLS `pooled` and `jackknife` loop unchanged; place those RDS files in
-a separate output directory before running the summariser.
+same `OUT` directory. The default driver is pooled-only. For the paired
+jackknife diagnostic, use the optional seventh argument
+`pooled_jackknife` for cell `6` and place that RDS file in a separate output
+directory before running the summariser.
 
 The checked-in aggregate results contain no raw Stage 1 data. In the pooled
 OLS replay, null type-I error and projection coverage are near nominal for

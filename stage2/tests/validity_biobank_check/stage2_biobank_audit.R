@@ -22,6 +22,11 @@ outdir   <- args[3]
 subn     <- if (length(args) >= 4) as.integer(args[4]) else 2500L
 WS       <- if (length(args) >= 5) args[5] else "/user/work/fh6520/covsource_run"
 LIB      <- if (length(args) >= 6) args[6] else "/user/work/fh6520/gmoq_finish_20260915/inference/lib"
+cov_sources <- if (length(args) >= 7 && identical(args[7], "pooled_jackknife")) {
+  c("pooled", "jackknife")
+} else {
+  "pooled"
+}
 .libPaths(c(LIB, .libPaths()))
 stopifnot(identical(.libPaths()[1], LIB))
 library(fungwasStage2)
@@ -101,9 +106,10 @@ flush_buf <- function() {
   SEt <- t(SEm); colnames(SEt) <- colnames(Qsl); rownames(SEt) <- rownames(Qsl)
   stage1 <- list(taus = TAUS, q_tau = tr$q_tau, Q_slope = Qsl, SE_tau = SEt)
 
-  ## Bounded audit configuration: the shipped OLS transform with pooled and
-  ## jackknife covariance, paired on the unchanged Stage 1 payload.
-  for (fn in "LS") for (est in "ols") for (cs in c("pooled", "jackknife")) {
+  ## Bounded audit configuration: the shipped OLS transform with pooled
+  ## covariance by default.  The optional pooled_jackknife argument adds a
+  ## paired explicit-jackknife diagnostic on the unchanged Stage 1 payload.
+  for (fn in "LS") for (est in "ols") for (cs in cov_sources) {
     cdta <- if (cs == "pooled") cov_pooled else cov_jk
     r <- if (cs == "pooled") {
       param_gwas(stage1, transform = "custom_W", transform_args = list(W = fits[[fn]]),
