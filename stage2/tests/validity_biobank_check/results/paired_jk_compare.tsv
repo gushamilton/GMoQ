@@ -1,0 +1,3 @@
+cell	fit	est	param	d_cov95_t	d_se_ratio	d_t1_05	d_t1_05_paired_mcse	emp_sd_jk_over_pooled
+A_disp_maf0.05_normal_Z16	LS	ols	beta_mu	0.0127999999999999	0.0446806357739231	-0.0128	0.000922689716341883	1
+A_disp_maf0.05_normal_Z16	LS	ols	beta_sigma2	0.0162666666666667	0.0653923444003229	0	0	1
