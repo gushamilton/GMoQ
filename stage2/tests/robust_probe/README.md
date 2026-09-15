@@ -18,6 +18,12 @@ score_i = g_resid_i * (RIF_resid_i - g_resid_i * beta)
 V_HC0  = score' score / d_resid^2
 ```
 
+This is a covariance and asymptotic-Normal diagnostic only. Every method in
+these summaries uses the fixed two-sided Normal cutoff 1.95996398454; the
+script does not reproduce the shipped jackknife t reference, Stage 2 Q
+calibration, or production p-value pipeline. Its rejection and coverage
+columns therefore must not be read as full production-inference validation.
+
 The first SNP is correlated with `C` and remains conditionally null. SNPs 2--6
 are independent marginal-null controls. Summaries treat the dataset as the
 Monte Carlo unit; the SNP-group summary for SNPs 2--6 averages within dataset
@@ -45,14 +51,18 @@ SNP is the key diagnostic. For `beta_sigma2`, HC0 has rejection `0.070` and
 coverage `0.930`, JK has `0.067` and `0.933`, while pooled has `0.268` and
 `0.732`; mean SE / individual-SNP empirical SD is `0.956`, `0.956`, and
 `0.581`, respectively. For `beta_mu`, HC0/JK rejection is `0.049`/`0.050`
-versus pooled `0.169`. The common-MAF correlated SNP is near nominal for HC0
-and JK, with pooled modestly low on beta_mu and beta_sigma2. Independent
-SNPs 2--6 remain near nominal for all sources, so the defect is tied to the
-genotype-correlated heteroscedastic null rather than a universal variance
-inflation.
+versus pooled `0.169`. HC0 substantially improves the pooled failure and
+agrees with JK, but the rare beta_sigma2 rate remains above 0.05 (MCSE about
+0.008), so residual miscalibration and basis bias remain unresolved. The
+common-MAF correlated SNP is closer to nominal for HC0 and JK, with pooled
+modestly low on beta_mu and beta_sigma2. Independent SNPs 2--6 remain near
+nominal for all sources, so the defect is tied to the genotype-correlated
+heteroscedastic null rather than a universal variance inflation.
 
 On this small probe, HC0 formation averaged `0.0145` seconds per arm, versus
 `0.0256` seconds for the current Stage 1 call and `0.0145` versus `0.0212`
-seconds for the y-first comparator. This is about 57--69% extra CPU time in
-the six-SNP N=10,000 diagnostic; full-scan storage and compute would require a
-separate design review.
+seconds for the y-first comparator. The implementation forms the full 45 x 45
+HC0 covariance for each SNP and projects it afterwards to K=2, so 57--69% is
+not a minimal project-first K=2 cost estimate. An optimized project-first
+implementation may be cheaper and needs a separate benchmark; full-scan
+storage and compute remain a design question.

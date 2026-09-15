@@ -16,5 +16,9 @@
   "basis": "C,C^2,C^3",
   "cells": ["cov_both_common", "cov_both_rare"],
   "tau_count": 45,
+  "projection_parameters": 2,
+  "full_tau_covariance_before_projection": true,
+  "cutoff": "two-sided asymptotic Normal |z| > 1.95996398454 for every method; not the shipped jackknife t reference",
+  "inference_scope": "covariance/asymptotic-Normal diagnostic only; not production p-value or Q calibration validation",
   "output_files": ["meta.json", "summary.csv", "timing.csv"]
 }
