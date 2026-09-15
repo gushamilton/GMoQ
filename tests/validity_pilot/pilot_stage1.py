@@ -267,7 +267,10 @@ def main() -> None:
     ap.add_argument("--Nref", type=int, default=200000)
     ap.add_argument("--seed", type=int, default=9142026)
     args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
+    try:
+        os.makedirs(args.out, exist_ok=False)
+    except FileExistsError:
+        ap.error(f"Refusing to overwrite experiment directory {args.out!r}; use a new registered run ID")
     stage_dir = os.path.join(args.out, "stage1")
     os.makedirs(stage_dir, exist_ok=True)
 

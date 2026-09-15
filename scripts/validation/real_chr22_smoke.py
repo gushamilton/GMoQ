@@ -104,7 +104,10 @@ def main() -> None:
     if args.blocks <= 45:
         ap.error("--blocks must exceed the shipped 45-tau grid")
 
-    args.out.mkdir(parents=True, exist_ok=True)
+    try:
+        args.out.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        ap.error(f"Refusing to overwrite experiment directory {args.out!s}; use a new registered run ID")
     snp_ids = read_snp_ids(args.snps)
     sample_ids, selected = select_real_dosages(args.bgen, args.sample, snp_ids, args.n_variants)
     causal = selected[0]

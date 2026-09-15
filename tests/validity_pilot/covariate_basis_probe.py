@@ -68,7 +68,11 @@ def main():
     ap.add_argument("--blocks", type=int, default=1000); ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--Nref", type=int, default=200000); ap.add_argument("--seed", type=int, default=9142026)
     ap.add_argument("--source-commit", default="")
-    a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
+    a = ap.parse_args()
+    try:
+        os.makedirs(a.out, exist_ok=False)
+    except FileExistsError:
+        ap.error(f"Refusing to overwrite experiment directory {a.out!r}; use a new registered run ID")
     p.gs.add_stage1_to_path(a.repo)
     from fungwas_stage1 import core
     if not core.HAVE_CPP: raise RuntimeError("probe requires shipped Stage 1 C++")

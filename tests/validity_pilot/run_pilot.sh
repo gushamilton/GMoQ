@@ -10,7 +10,7 @@ N="${3:-5000}"
 blocks="${4:-1000}"
 threads="${5:-8}"
 
-mkdir -p "$out"
+# Stage 1 creates this directory exclusively and refuses an existing run.
 python="${GMOQ_PYTHON:-}"
 if [[ -z "$python" ]]; then
   echo 'GMOQ_PYTHON must point to the Stage 1 environment interpreter' >&2

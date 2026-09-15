@@ -22,6 +22,7 @@ cov_meta_file <- get_arg("--cov-meta")
 weights_file <- if (has_arg("--weights")) get_arg("--weights") else NULL
 baseline_file <- if ("--baseline-json" %in% args) get_arg("--baseline-json") else NULL
 out_file <- get_arg("--out")
+if (file.exists(out_file)) stop("Refusing to overwrite an existing experiment result: ", out_file)
 if (is.null(weights_file) && is.null(baseline_file)) {
   stop("provide --weights or --baseline-json")
 }

@@ -24,6 +24,8 @@ def main() -> None:
                     help="Stage 1 output whose beta_tau columns define the grid")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
+    if args.out.exists():
+        ap.error(f"Refusing to overwrite baseline {args.out!s}; use a new registered run ID")
 
     from fungwas_stage1 import cli
 
@@ -65,7 +67,8 @@ def main() -> None:
         "taus": taus.tolist(),
         "q_tau": np.quantile(y_match, taus, method="median_unbiased").tolist(),
     }
-    args.out.write_text(json.dumps(result, indent=2) + "\n")
+    with args.out.open("x") as stream:
+        stream.write(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 
 

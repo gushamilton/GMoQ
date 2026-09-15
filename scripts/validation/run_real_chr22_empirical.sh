@@ -19,7 +19,12 @@ LOCO="${PAPER_ROOT}/results/paper/regenie_step1/full/log_bmi/log_bmi_step1_pred.
 SNPS="${2:-$(dirname "${OUT_ROOT}")/selected_snps.txt}"
 PREFIX="${OUT_ROOT}/stage1/log_bmi_chr22_smoke"
 
-mkdir -p "${OUT_ROOT}/stage1"
+mkdir -p "$(dirname "${OUT_ROOT}")"
+if ! mkdir "${OUT_ROOT}"; then
+  echo "Refusing to overwrite experiment directory ${OUT_ROOT}; use a new registered run ID" >&2
+  exit 2
+fi
+mkdir "${OUT_ROOT}/stage1"
 export PYTHONPATH="/user/work/fh6520/gmoq_finish_20260915/inputs/pydeps:/user/work/fh6520/gmoq_finish_20260915/inputs/stage1"
 export OMP_NUM_THREADS=2
 export OPENBLAS_NUM_THREADS=2
