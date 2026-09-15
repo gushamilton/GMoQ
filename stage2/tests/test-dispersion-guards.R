@@ -79,19 +79,20 @@ f0 <- estimate_rav(a_hat, v_hat, se_a, se_v, rep(0, M), trim = 0)
 stopifnot(near(f0$r_av, sum(a_hat * v_hat) / sum(a_hat^2 - se_a^2), 1e-12))
 ok("with cov = 0 it reduces to the dilution-corrected slope")
 
-## Trimming is defined on each variant's ratio contribution.  Make one variant
-## have a very large numerator but an ordinary ratio; numerator-only trimming
-## would discard it, while ratio trimming keeps it.
+## Trimming is defined on each variant's ratio contribution.  Give a small
+## group an ordinary ratio but a much larger corrected denominator: numerator-
+## only trimming discards that group, while ratio trimming retains it.
 Mtrim <- 1000L
-ratio_target <- seq(0.5, 1.5, length.out = Mtrim)
-a_trim <- c(rep(1, Mtrim), 10)
-sa_trim <- rep(0.1, Mtrim + 1L)
-v_trim <- c(ratio_target * (1 - sa_trim[1]^2), 10^2 - sa_trim[1]^2)
-sv_trim <- rep(0.1, Mtrim + 1L)
-trimmed <- estimate_rav(a_trim, v_trim, sa_trim, sv_trim,
-                        cov_mu_sigma2 = rep(0, Mtrim + 1L), trim = 0.1)
-num_trim <- a_trim * v_trim
+ratio_target <- c(seq(0.5, 1.5, length.out = 900L),
+                  seq(1.0, 1.1, length.out = 100L))
+a_trim <- c(rep(1, 900L), rep(10, 100L))
+sa_trim <- rep(0.1, Mtrim)
 den_trim <- a_trim^2 - sa_trim^2
+v_trim <- ratio_target * den_trim / a_trim
+sv_trim <- rep(0.1, Mtrim)
+trimmed <- estimate_rav(a_trim, v_trim, sa_trim, sv_trim,
+                        cov_mu_sigma2 = rep(0, Mtrim), trim = 0.1)
+num_trim <- a_trim * v_trim
 ratio_trim <- num_trim / den_trim
 lim_trim <- quantile(ratio_trim, c(0.1, 0.9))
 keep_trim <- is.finite(ratio_trim) & ratio_trim >= lim_trim[1] &
