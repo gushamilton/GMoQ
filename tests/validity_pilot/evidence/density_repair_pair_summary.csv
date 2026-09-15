@@ -1,0 +1,25 @@
+"base_cell","source","W","parameter","comparison","attempted_datasets","paired_datasets","nonfinite_differences","mean_difference","difference_mcse","empirical_sd_difference"
+"repair_v06","jackknife","oracle","beta_mu","D_fourth_order - A_production",100,100,0,-1.46904662016134e-05,1.22529701083145e-05,0.000122529701083145
+"repair_v06","jackknife","oracle","beta_sigma2","D_fourth_order - A_production",100,100,0,0.00092418325646288,4.78014695282672e-05,0.000478014695282672
+"repair_v06","jackknife","estimated","beta_mu","D_fourth_order - A_production",100,100,0,-1.46904662016184e-05,1.22529701083145e-05,0.000122529701083145
+"repair_v06","jackknife","estimated","beta_sigma2","D_fourth_order - A_production",100,100,0,0.000923419883028236,4.76415913705905e-05,0.000476415913705905
+"repair_v06","pooled","oracle","beta_mu","D_fourth_order - A_production",100,100,0,-1.46904662016134e-05,1.22529701083145e-05,0.000122529701083145
+"repair_v06","pooled","oracle","beta_sigma2","D_fourth_order - A_production",100,100,0,0.00092418325646288,4.78014695282672e-05,0.000478014695282672
+"repair_v06","pooled","estimated","beta_mu","D_fourth_order - A_production",100,100,0,-1.46904662016184e-05,1.22529701083145e-05,0.000122529701083145
+"repair_v06","pooled","estimated","beta_sigma2","D_fourth_order - A_production",100,100,0,0.000923419883028236,4.76415913705905e-05,0.000476415913705905
+"repair_v0","jackknife","oracle","beta_mu","D_fourth_order - A_production",100,100,0,7.89212916916413e-06,1.2022248945222e-05,0.00012022248945222
+"repair_v0","jackknife","oracle","beta_sigma2","D_fourth_order - A_production",100,100,0,-3.03168412814504e-05,4.43415498335656e-05,0.000443415498335656
+"repair_v0","jackknife","estimated","beta_mu","D_fourth_order - A_production",100,100,0,7.89212916916613e-06,1.20222489452218e-05,0.000120222489452218
+"repair_v0","jackknife","estimated","beta_sigma2","D_fourth_order - A_production",100,100,0,-3.03172929760371e-05,4.43211740994334e-05,0.000443211740994334
+"repair_v0","pooled","oracle","beta_mu","D_fourth_order - A_production",100,100,0,7.89212916916413e-06,1.2022248945222e-05,0.00012022248945222
+"repair_v0","pooled","oracle","beta_sigma2","D_fourth_order - A_production",100,100,0,-3.03168412814504e-05,4.43415498335656e-05,0.000443415498335656
+"repair_v0","pooled","estimated","beta_mu","D_fourth_order - A_production",100,100,0,7.89212916916613e-06,1.20222489452218e-05,0.000120222489452218
+"repair_v0","pooled","estimated","beta_sigma2","D_fourth_order - A_production",100,100,0,-3.03172929760371e-05,4.43211740994334e-05,0.000443211740994334
+"repair_v24","jackknife","oracle","beta_mu","D_fourth_order - A_production",100,100,0,-9.98914835209796e-06,2.5118460322596e-05,0.00025118460322596
+"repair_v24","jackknife","oracle","beta_sigma2","D_fourth_order - A_production",100,100,0,0.00376079930150253,0.00010101851043603,0.0010101851043603
+"repair_v24","jackknife","estimated","beta_mu","D_fourth_order - A_production",100,100,0,-9.98914835209804e-06,2.51184603225955e-05,0.000251184603225955
+"repair_v24","jackknife","estimated","beta_sigma2","D_fourth_order - A_production",100,100,0,0.00376130408643341,0.000101158977245525,0.00101158977245525
+"repair_v24","pooled","oracle","beta_mu","D_fourth_order - A_production",100,100,0,-9.98914835209796e-06,2.5118460322596e-05,0.00025118460322596
+"repair_v24","pooled","oracle","beta_sigma2","D_fourth_order - A_production",100,100,0,0.00376079930150253,0.00010101851043603,0.0010101851043603
+"repair_v24","pooled","estimated","beta_mu","D_fourth_order - A_production",100,100,0,-9.98914835209804e-06,2.51184603225955e-05,0.000251184603225955
+"repair_v24","pooled","estimated","beta_sigma2","D_fourth_order - A_production",100,100,0,0.00376130408643341,0.000101158977245525,0.00101158977245525
