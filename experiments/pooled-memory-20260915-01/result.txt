@@ -1,0 +1,19 @@
+Status: completed
+Host: bp1-compute053
+Slurm job: 18966436
+Threads: OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+R: module languages/R/4.5.1
+Package: /user/work/fh6520/gmoq_finish_20260915/root/lib/fungwasStage2
+Command: Rscript --vanilla profile.R
+Source note: installed integration candidate; the .pooled_cov_data implementation
+is unchanged from baseline46cdbc0. This experiment measures its allocation only.
+
+Observed output:
+variants=1000 elapsed=0.037 cov_payload_bytes=8280048 total_object_bytes=8288592
+variants=10000 elapsed=0.443 cov_payload_bytes=82800048 total_object_bytes=82880592
+
+Conclusion: the helper currently expands the shared covariance to one full
+upper triangle per variant. At45taus this is8280 payload bytes per variant,
+before temporary allocations and genotype coefficient input. A compact or
+chunked representation remains a possible memory optimization; no numerical
+or statistical change was made in this profiling experiment.

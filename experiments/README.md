@@ -1,0 +1,56 @@
+# Experiment register
+
+Check this register **before launching an experiment**. A completed experiment
+may have found a failure; “completed” does not mean “passed”. Reuse its evidence
+unless a new source change, scientific question or independent confirmation
+justifies a new run.
+
+Small aggregate results, scripts, settings and conclusions belong in Git.
+Participant-level inputs and large binary payloads stay on BluePebble. The
+existing private repository is `gushamilton/GMoQ`; development work is on
+`work/complete-gmoq`.
+
+## Runs
+
+| Stable ID | State | Question and settings | Source and preserved evidence | BP output |
+|---|---|---|---|---|
+| `allele-alignment-20260915-01` | Completed | Do saved chr22 log-BMI/REGENIE effect alleles agree? 17,550 matched variants. | [Result, inputs and command](../docs/ALLELE_CONVENTION.md); script introduced at `39a3ebc`. Same pairs throughout; correlation .99285. | `gmoq_finish_20260915/root/out/allele_alignment.json` |
+| `location-scale-pilot-20260915-01` | Completed; superseded | Initial 100-dataset, N=10,000 location/scale/covariate pilot. | Source `f1b4a2c`; superseded by the expanded run below. Do not rerun for missing summaries. | `gmoq_finish_20260915/validity/pilot` |
+| `location-scale-pilot-20260915-02` | Completed; limitations found | Expanded 15-cell pilot, 100 datasets, N=10,000, 45 taus, 1,000 blocks; pooled/JK, oracle/estimated W. | Source `48171e3`; [metadata, aggregate results, per-cell provenance and commands](../tests/validity_pilot/evidence/VALIDITY_EVIDENCE.md). Strong variance projection bias detected. | `gmoq_finish_20260915/validity/pilot_linear` |
+| `covariate-basis-20260915-01` | Completed; limitations found | Paired linear C versus C,C²,C³; 100 datasets, N=10,000, common/low-frequency correlated null SNP. | Source `be70f0a`; [summary and provenance](../tests/validity_pilot/evidence/VALIDITY_EVIDENCE.md). Rich basis removes most bias; pooled low-frequency inference still inflated. | `gmoq_finish_20260915/validity/cov_probe` |
+| `biobank-covariance-20260915-01` | Completed; limitations found | Reanalyse six completed cells, 15,000 datasets/cell, N=461,320, 45 taus, 1,000 blocks; exact OLS projection target. | Current Stage 2 `b1be4d7`; [frozen truth, selected chunks, source compatibility, commands and aggregates](../stage2/tests/validity_biobank_check/README.md). Null/location calibrated; low-frequency dispersion pooled coverage .9285 versus JK .9447. | `gmoq_finish_20260915/validity/biobank_check/{out,out_compare}`; original raw data `covsource_run/raw` |
+| `real-chr22-smoke-20260915-01` | Completed | Actual CLI, 24 real variants, N=463,005, known mean effect .25, 45 taus, 65 blocks; independent rerun and decode timing. | Input source `d231e27`; [scripts and result](../scripts/validation/README.md), [timings and interpretation](../docs/VALIDATION_2026-09-15.md). Mean recovered .250635; repeated decompressed files identical. This is not replicated coverage evidence. | `gmoq_finish_20260915/inputs/real_chr22_smoke` |
+| `empirical-logbmi-20260915-01` | Completed | Fresh 24-variant empirical run, N=461,320, age/sex/10 PCs, regression LOCO scaling; matched Normal mean/variance weights. | Source `ba82da8`; [exact preprocessing and aggregate result](../scripts/validation/real_chr22_empirical_provenance.md). Earlier cached raw-BMI weight fit excluded. | `gmoq_finish_20260915/inputs/real_chr22_smoke/empirical/log_bmi_matched_both_pooled.tsv` |
+| `pooled-memory-20260915-01` | Completed | Measure existing covariance expansion at 45 taus. | Installed candidate `root/lib`, R 4.5.1; [script and output](pooled-memory-20260915-01/). 1,000 variants = 8,280,048 covariance bytes/.037 s; 10,000 = 82,800,048 bytes/.443 s. This measures allocation, not genome-wide throughput. | `gmoq_finish_20260915/root/profile_pooled_memory.R` |
+| `hc0-covariate-20260915-01` | In preparation/running | Independent HC0 covariance comparison on the failing covariate probe; OLS estimates unchanged. | Luna inference worker; source/settings/results to be committed before marking complete. | See worker manifest when registered. |
+| `density-bias-20260915-01` | In preparation/running | Paired empirical quantiles/KDE versus exact mixture density/quantiles to isolate strong-effect bias. | Luna validity worker; source/settings/results to be committed before marking complete. | See worker manifest when registered. |
+
+BP paths above are relative to `/user/work/fh6520/`. Legacy directories retain
+their existing names; the stable IDs index them without moving or overwriting
+them. `validity/pilot_smoke` was a one-replicate execution check, not validity
+evidence. `validity/pilot_final` was an earlier Stage-1-only product; use the
+completed `pilot_linear` result instead.
+
+The independent `covsource_run`/`cs1`/`cs2` campaign has existing jobs and outputs.
+Inspect its live job handles and completed chunks before scheduling anything
+similar; this development work does not own or restart those jobs.
+
+## Rules for new runs
+
+1. Assign a new stable ID and register the scientific question before submission.
+   A changed seed, configuration, source, or confirmation dataset gets a new ID.
+2. Commit the script/configuration first. Record source commit (and any dirty
+   patch/hash), seed, dataset replication unit, input identifiers, environment,
+   tau grid, sample size, blocks, threads, host and Slurm job ID.
+3. Create the output directory exclusively; refuse an existing directory. Never
+   overwrite a completed run. Resume only a verified incomplete run with the same
+   configuration and a checked manifest; record the resumed job handle.
+4. Commit aggregate results and the conclusion, including failures and Monte
+   Carlo uncertainty. Record exact commands and large-output locations. Preserve
+   source commits referenced by the evidence with experiment-source Git tags.
+5. Mark the run completed only after checking its outputs. Reanalysis of existing
+   raw data should get its own report/run ID and retain the original raw data.
+
+All BluePebble execution, including small validation and manifest-check scripts,
+belongs on a compute node. Reuse at most one held allocation and release it when
+finished. Git and file inspection can use the login node.
