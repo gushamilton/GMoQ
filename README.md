@@ -219,14 +219,14 @@ W <- make_weights_vqtl(taus, qnorm(taus), mu = 0, sd = 1)
 
 # 2. Run Stage 2
 results <- param_gwas_from_file(
-  stage1_reuslts = "results/chr22.stage1.tsv.gz",
+  stage1_file = "results/chr22.stage1.tsv.gz",
   W = W,
   se_mode = "tau_cov",         # Use accurate jackknife covariance from Stage 1
   cov_file = "results/chr22.cov.gz"
 )
 
 # 3. Save or analyze
-head(results) # Contains betas and SEs for 'beta_mu' and 'beta_sigma'
+head(results) # Contains betas and SEs for 'beta_mu' and 'beta_sigma2'
 ```
 
 ### HPC Submission

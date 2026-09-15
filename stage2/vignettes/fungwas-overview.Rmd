@@ -14,7 +14,7 @@ knitr::opts_chunk$set(
   fig.width = 6,
   fig.height = 5
 )
-library(fungwas)
+library(fungwasStage2)
 set.seed(123)
 ```
 
@@ -71,7 +71,7 @@ stage1 <- quantile_gwas(Y, G, taus = taus)
 
 # Stage 2: mean/variance mapping (vQTL weights)
 W <- make_weights_vqtl(taus, stage1$q_tau, mu = mean(Y), sd = sd(Y))
-fit <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W))
+fit <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W), se_mode = "diagonal")
 
 head(t(fit$params))
 ```
@@ -98,7 +98,7 @@ taus <- seq(0.05, 0.95, 0.05)
 stage1 <- quantile_gwas(Y, G, taus = taus)
 
 W_var <- make_weights_vqtl(taus, stage1$q_tau, mu = mean(Y), sd = sd(Y))
-fit_var <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W_var))
+fit_var <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W_var), se_mode = "diagonal")
 
 head(t(fit_var$params))
 ```
@@ -133,8 +133,8 @@ fit_mix <- param_gwas(
     p1 = p1, mu1 = mu1, sd1 = sd1,
     mu2 = mu2, sd2 = sd2,
     include_membership = TRUE
-  )
-)
+  ),
+  se_mode = "diagonal")
 
 head(t(fit_mix$params))
 ```
@@ -232,7 +232,7 @@ Weight matrices (`W`) define how quantile slopes correspond to parameter changes
 4. **Map to parameters**:
 
    ```r
-   fit <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W))
+   fit <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W), se_mode = "diagonal")
    ```
 
 5. **Inspect results**:

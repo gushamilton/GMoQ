@@ -13,7 +13,7 @@ knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>"
 )
-library(fungwas)
+library(fungwasStage2)
 set.seed(123)
 ```
 

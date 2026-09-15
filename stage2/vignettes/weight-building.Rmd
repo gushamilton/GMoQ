@@ -14,7 +14,7 @@ knitr::opts_chunk$set(
   fig.width = 6,
   fig.height = 5
 )
-library(fungwas)
+library(fungwasStage2)
 set.seed(123)
 ```
 
@@ -155,7 +155,7 @@ W_fd <- make_weights_generic(
 )
 
 # Run GWAS with FD weights
-fit_fd <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W_fd))
+fit_fd <- param_gwas(stage1, transform = "custom_W", transform_args = list(W = W_fd), se_mode = "diagonal")
 
 cor(est[, "beta_meanlog"], t(fit_fd$params)[, "beta_meanlog"])
 cor(est[, "beta_sdlog"],   t(fit_fd$params)[, "beta_sdlog"])

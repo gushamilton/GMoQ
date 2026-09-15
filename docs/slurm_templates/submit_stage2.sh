@@ -33,7 +33,7 @@ cat ${STAGE1_DIR}/chr*.cov.gz > ${STAGE1_DIR}/all_chromosomes.cov.gz
 # Run Stage 2
 echo "Running Stage 2..."
 Rscript -e "
-library(fungwas)
+library(fungwasStage2)
 
 # Load weights
 weights <- readRDS('${WEIGHT_FILE}')

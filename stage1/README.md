@@ -73,7 +73,7 @@ Y = np.random.randn(N)  # Raw phenotype (NOT pre-computed RIF!)
 taus = np.linspace(0.02, 0.98, 45)
 
 # Run Stage 1 - RIF is computed internally
-result = run_stage1(G, Y, taus, n_blocks=None, n_threads=4)  # auto blocks = max(T+20, 64)
+result = run_stage1(G, Y, taus, n_blocks=None, n_threads=4)  # auto blocks = 1000
 
 # Access results
 print(result['betas'].shape)       # (M, T) tau-level betas

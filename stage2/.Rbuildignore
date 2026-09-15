@@ -1,0 +1,9 @@
+^docs$
+^_pkgdown\.yml$
+^pkgdown$
+^scripts$
+^diagnose_.*$
+^stage2$
+^tests/out$
+^.*\.Rproj$
+^\.Rproj\.user$

@@ -111,7 +111,7 @@ setup(
         'scipy',
     ],
     extras_require={
-        'bgen': ['bgen-reader>=4.0'],
+        'bgen': ['bgen>=1.9.7'],
     },
     entry_points={
         'console_scripts': [
