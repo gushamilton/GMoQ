@@ -69,7 +69,9 @@ def run_one(seed: int, n: int, separation: float, gamma: float):
     rng = np.random.default_rng(seed)
     maf, p_upper = 0.3, 0.5
     g = rng.binomial(2, maf, size=n).astype(float)
-    x = g - 2.0 * maf
+    # Stage 1 includes an intercept in its covariate projection, so use the
+    # realized sample-centered dosage rather than only the population mean.
+    x = g - np.mean(g)
     upper = rng.random(n) < (1.0 / (1.0 + np.exp(-gamma * x)))
     y = np.where(upper, separation / 2.0, -separation / 2.0) + rng.normal(size=n)
 
