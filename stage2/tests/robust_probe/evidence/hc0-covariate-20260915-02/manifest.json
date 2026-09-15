@@ -1,0 +1,20 @@
+{
+  "run_id": "hc0-covariate-20260915-02",
+  "status": "COMPLETE",
+  "remote_output_dir": "/user/work/fh6520/gmoq_finish_20260915/inference/robust_probe/hc0-covariate-20260915-02",
+  "remote_host": "bp1-compute053",
+  "executed_script": "stage2/tests/robust_probe/hc0_covariate_probe.py",
+  "executed_script_sha256": "c8af9822644150ad8d64c30324d15ec2c503996a850849189bc232d66183716f",
+  "source_commit": "be70f0a",
+  "source_status": "validity snapshot; remote copy has no git metadata",
+  "covariate_probe_sha256": "f1ebc694ad51d07277919ab7bc2df209f7569cc3e2c938cddee807aac62b9760",
+  "N": 10000,
+  "reps": 1000,
+  "blocks": 1000,
+  "threads": 2,
+  "seed": 19152026,
+  "basis": "C,C^2,C^3",
+  "cells": ["cov_both_common", "cov_both_rare"],
+  "tau_count": 45,
+  "output_files": ["meta.json", "summary.csv", "timing.csv"]
+}
