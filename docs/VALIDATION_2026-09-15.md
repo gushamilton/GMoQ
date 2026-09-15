@@ -2,9 +2,18 @@
 
 This report records a bounded development pass starting from commit `46cdbc0`.
 OLS with pooled covariance is the primary file-based workflow; jackknife is an
-explicit comparison. All execution reported here ran on BluePebble compute node
-`bp1-compute001`, using allocation 18964919 and at most two threads per concurrent
-worker. The original cluster checkout and its staged work were preserved.
+explicit comparison. Execution ran on BluePebble compute nodes, with at most
+two threads per concurrent worker. The initial checks used `bp1-compute001`
+(allocation 18964919); subsequent registered checks used `bp1-compute053`
+(18966436) and `bp1-compute019` (18966618). See the
+[experiment register](../experiments/README.md) for per-run provenance. The
+original cluster checkout and its staged work were preserved.
+
+The user confirmed that pooled speed and retaining both covariance options
+are priorities. The stress-case limitations below remain documented; the
+optional full-nuisance bootstrap investigation is deferred. No claim that
+pooled is preferable in a quantified fraction of all applications is supported
+by these bounded experiments.
 
 ## Repairs
 
