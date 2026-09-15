@@ -62,6 +62,8 @@ from .core import (
     check_blocks_vs_samples,
     set_numpy_fallback_allowed,
     require_cpp_extension,
+    DENSITY_METHODS,
+    DENSITY_METHOD_SILVERMAN_GAUSSIAN,
 )
 from .cov_meta import build_cov_meta, write_cov_meta
 from .pooled_cov import (
@@ -663,7 +665,9 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
 
 
 def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_cols: list[str],
-                        X: np.ndarray, taus: np.ndarray) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
+                        X: np.ndarray, taus: np.ndarray,
+                        density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
+                        ) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
     """Compute residualized RIF matrices for one or more phenotypes."""
     log_mem(f"Residualizing phenotypes on {X.shape[1]} covariates...")
     Q, _ = np.linalg.qr(X)
@@ -674,7 +678,7 @@ def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_col
         log_mem(f"Computing RIF matrix for {col}...")
         t_rif = time.perf_counter()
         y = np.asarray(y_values[col], dtype=np.float64)
-        rif, q_tau, _ = compute_rif(y, taus)
+        rif, q_tau, _ = compute_rif(y, taus, density_method=density_method)
         log_mem(f"RIF build for {col}: {time.perf_counter() - t_rif:.2f}s")
         rif_resid_list.append(rif - Q @ (Q.T @ rif))
         q_tau_list.append(q_tau)
@@ -1188,7 +1192,9 @@ def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np
                               X_full: np.ndarray, taus: np.ndarray,
                               loco_predictions: Optional[dict[str, dict[str, np.ndarray]]],
                               chrom: Optional[str], valid_mask: np.ndarray,
-                              loco_scales: Optional[dict[str, float]] = None) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
+                              loco_scales: Optional[dict[str, float]] = None,
+                              density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
+                              ) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
     """Build residualized RIF matrices for a chromosome, optionally using LOCO-adjusted phenotypes."""
     if loco_predictions is None:
         y_values_chr = {col: y_values_full[col][valid_mask] for col in pheno_cols}
@@ -1203,7 +1209,10 @@ def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np
             y_values_chr[col] = y_values_full[col] - scale * per_chr[chrom_key]
         y_values_chr = {col: y_values_chr[col][valid_mask] for col in pheno_cols}
 
-    rif_resid_list, q_chr, q_tau_list = build_rif_residuals(y_values_chr, pheno_cols, X_full[valid_mask], taus)
+    rif_resid_list, q_chr, q_tau_list = build_rif_residuals(
+        y_values_chr, pheno_cols, X_full[valid_mask], taus,
+        density_method=density_method
+    )
     return rif_resid_list, q_chr, q_tau_list
 
 
@@ -1290,6 +1299,12 @@ def main():
     default_taus = ",".join([f"{t:.3f}" for t in np.linspace(0.02, 0.98, 45)])
     parser.add_argument('--taus', default=default_taus,
                         help='Comma-separated tau values (default: 45 taus from 0.02 to 0.98)')
+    parser.add_argument('--density-method', choices=DENSITY_METHODS,
+                        default=DENSITY_METHOD_SILVERMAN_GAUSSIAN,
+                        help='Kernel for the Stage 1 RIF density (default: '
+                             'silverman_gaussian). fourth_order_gaussian is an '
+                             'optional fourth-order Gaussian kernel using the same '
+                             'Silverman bandwidth.')
     parser.add_argument('--blocks', type=int, default=None,
                         help=f'Number of jackknife blocks (default: {DEFAULT_N_BLOCKS}). '
                              'Must exceed the number of taus. Fewer blocks make the fixed-RIF '
@@ -1331,7 +1346,8 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     
-    log_mem(f"Starting FungWas Stage 1 (taus={T}, blocks={args.blocks})")
+    log_mem(f"Starting FungWas Stage 1 (taus={T}, blocks={args.blocks}, "
+            f"density_method={args.density_method})")
     logger.info("Note: For Stage 2, consider mean-centering non-intercept columns of your W matrix to reduce collinearity.")
     t_start = time.time()
     t_load = time.perf_counter()
@@ -1483,7 +1499,8 @@ def main():
     # which is why no published result was affected; the call below is that same
     # function with no LOCO adjustment.
     RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
-        pheno_cols, y_values_full, X_full, taus, None, None, valid_mask
+        pheno_cols, y_values_full, X_full, taus, None, None, valid_mask,
+        density_method=args.density_method
     )
 
     # Pooled cross-quantile covariance, Sigma_0 = Psi_r' Psi_r / n, accumulated
@@ -1596,7 +1613,7 @@ def main():
                 log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
                 RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
                     pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                    loco_scales
+                    loco_scales, density_method=args.density_method
                 )
                 if args.sigma0:
                     t_s0 = time.perf_counter()
@@ -1689,6 +1706,7 @@ def main():
             loco_scale_factor=(None if loco_scales is None
                                else loco_scales.get(col)),
             covariate_basis_rank=int(X_full.shape[1]),
+            density_method=args.density_method,
         ))
     for p_idx, prefix in enumerate(out_prefixes):
         if not args.sigma0:

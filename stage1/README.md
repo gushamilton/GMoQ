@@ -108,6 +108,13 @@ fungwas-stage1 \
     --out results/chr22
 ```
 
+The RIF density kernel is selected with `--density-method`. The default
+`silverman_gaussian` preserves the historical estimator. The explicit
+`fourth_order_gaussian` option uses
+`K(u) = (1.5 - 0.5*u^2) phi(u)` with the same Silverman bandwidth; Stage 1
+records the choice in its covariance metadata so matched Stage 2 weights cannot
+silently use a different density construction.
+
 #### Multi-phenotype CLI (single BGEN pass)
 
 Provide comma-separated phenotype columns to scan multiple phenotypes with one

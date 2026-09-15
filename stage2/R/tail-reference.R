@@ -167,6 +167,7 @@ N_EFF_COLUMN <- "d_resid"
         loco_predictor = .json_string(txt, "loco_predictor"),
         loco_scale_mode = .json_string(txt, "loco_scale_mode"),
         loco_scale_factor = .json_number(txt, "loco_scale_factor"),
+        density_method = .json_string(txt, "density_method"),
         fingerprint    = .json_string(txt, "fingerprint")
       )
     )

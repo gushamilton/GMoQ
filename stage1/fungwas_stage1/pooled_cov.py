@@ -77,7 +77,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 #: Bumped whenever the on-disk sidecar schema gains or changes a field.
-SIGMA0_META_VERSION = 1
+#: Version 2 records the density kernel used to construct the Stage 1 RIF.
+SIGMA0_META_VERSION = 2
 
 #: ``estimator`` value recorded in the sidecar.
 SIGMA0_ESTIMATOR = "pooled_influence_covariance"
@@ -143,7 +144,8 @@ def analysis_fingerprint(phenotype: str,
                          n_samples: int,
                          loco_predictor: Optional[str],
                          loco_scale_mode: Optional[str] = None,
-                         loco_scale_factor: Optional[float] = None) -> str:
+                         loco_scale_factor: Optional[float] = None,
+                         density_method: Optional[str] = None) -> str:
     """Stable hash over everything ``Sigma_0`` depends on but the genotype.
 
     Two Stage 1 artefacts with the same fingerprint were produced from the same
@@ -177,6 +179,8 @@ def analysis_fingerprint(phenotype: str,
         payload["loco_scale_mode"] = str(loco_scale_mode)
     if loco_scale_factor is not None:
         payload["loco_scale_factor"] = round(float(loco_scale_factor), 12)
+    if density_method is not None:
+        payload["density_method"] = str(density_method)
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:32]
 
@@ -191,7 +195,8 @@ def build_sigma0_meta(phenotype: str,
                       loco_scale_factor: Optional[float] = None,
                       covariate_basis_rank: Optional[int] = None,
                       package_version: Optional[str] = None,
-                      matrix_file: Optional[str] = None) -> dict:
+                      matrix_file: Optional[str] = None,
+                      density_method: Optional[str] = None) -> dict:
     """Build the ``.sigma0.meta.json`` payload.
 
     Parameters
@@ -249,11 +254,12 @@ def build_sigma0_meta(phenotype: str,
         "loco_scale_mode": None if loco_scale_mode is None else str(loco_scale_mode),
         "loco_scale_factor": (None if loco_scale_factor is None
                               else float(loco_scale_factor)),
+        "density_method": (None if density_method is None else str(density_method)),
         "chromosomes": chromosomes,
         "matrix_file": matrix_file,
         "fingerprint": analysis_fingerprint(
             phenotype, covariates, taus, n_samples, loco_predictor,
-            loco_scale_mode, loco_scale_factor
+            loco_scale_mode, loco_scale_factor, density_method
         ),
     }
 
@@ -359,6 +365,7 @@ def sigma0_analysis_block(meta: dict) -> dict:
         "loco_predictor": meta["loco_predictor"],
         "loco_scale_mode": meta.get("loco_scale_mode"),
         "loco_scale_factor": meta.get("loco_scale_factor"),
+        "density_method": meta.get("density_method"),
         "fingerprint": meta["fingerprint"],
     }
 
@@ -380,7 +387,7 @@ def check_fingerprint(sigma0_meta: dict, cov_meta: dict) -> None:
         )
     theirs = sigma0_analysis_block(sigma0_meta)
     for key in ("phenotype", "n_samples", "n_covariates", "covariates",
-                "loco_predictor", "fingerprint"):
+                "loco_predictor", "density_method", "fingerprint"):
         a, b = theirs.get(key), analysis.get(key)
         if a != b:
             raise ValueError(

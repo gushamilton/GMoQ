@@ -363,23 +363,51 @@ if (is.finite(expected_scale) && !isTRUE(all.equal(scale_factor, expected_scale,
 q_tau <- as.numeric(stats::quantile(y_base, probs = taus, type = 8, names = FALSE))
 if (any(!is.finite(q_tau))) stop("Non-finite baseline quantiles.", call. = FALSE)
 
-## Stage 1's RIF divides by this exact Gaussian KDE evaluated at the empirical
-## type-8 quantiles.  The historical mixture builder used the fitted-model PDF
-## here instead, which changes the scale of every Stage 2 weight.  Keep this
-## calculation in R byte-for-byte at the level of the Python Stage 1 formula:
-## population (N, not N-1) SD, Silverman's 1.06 rule, and the same 1e-8 floor.
-stage1_kde_at <- function(y, x, density_floor = 1e-8) {
+## Stage 1 records the density kernel in its covariance metadata. Read it
+## before rebuilding f(q), so an optional fourth-order Stage 1 run cannot
+## silently receive Gaussian weights. Legacy sidecars predate this field and
+## are interpreted as the historical Gaussian estimator.
+cov_meta_path <- sub("\\.stage1\\.tsv\\.gz$", ".cov.meta.json", stage1_file)
+cov_meta <- read_json(cov_meta_path)
+analysis <- if (is.list(cov_meta)) cov_meta$analysis else NULL
+density_method <- if (!is.null(analysis) && !is.null(analysis$density_method) &&
+                      length(analysis$density_method) &&
+                      !is.na(analysis$density_method[[1L]])) {
+  as.character(analysis$density_method[[1L]])
+} else {
+  "silverman_gaussian"
+}
+if (!density_method %in% c("silverman_gaussian", "fourth_order_gaussian")) {
+  stop("Unsupported Stage 1 density method in covariance metadata: ", density_method,
+       call. = FALSE)
+}
+
+## Stage 1's RIF divides by this exact kernel estimate evaluated at empirical
+## type-8 quantiles. Keep this calculation in R byte-for-byte at the level of
+## the Python Stage 1 formula: population SD, Silverman's 1.06 rule, and the
+## same denominator floor. The fourth-order method uses
+## K(u)=(1.5-0.5*u^2)*phi(u) with the same bandwidth.
+stage1_kde_at <- function(y, x, density_floor = 1e-8,
+                          density_method = "silverman_gaussian") {
   n <- length(y)
   if (n < 2L) stop("Too few baseline values for Stage 1 KDE.", call. = FALSE)
+  if (!density_method %in% c("silverman_gaussian", "fourth_order_gaussian")) {
+    stop("Unsupported Stage 1 density method: ", density_method, call. = FALSE)
+  }
   sd_population <- sqrt(sum((y - mean(y))^2) / n)
   h <- 1.06 * sd_population * n^(-0.2)
   if (!is.finite(h) || h <= 0) stop("Invalid Stage 1 KDE bandwidth.", call. = FALSE)
   f <- vapply(as.numeric(x), function(q) {
-    mean(exp(-0.5 * ((y - q) / h)^2)) / (h * sqrt(2 * pi))
+    u <- (y - q) / h
+    ker <- exp(-0.5 * u^2)
+    if (identical(density_method, "fourth_order_gaussian")) {
+      ker <- ker * (1.5 - 0.5 * u^2)
+    }
+    mean(ker) / (h * sqrt(2 * pi))
   }, numeric(1))
   pmax(f, density_floor)
 }
-f_stage1 <- stage1_kde_at(y_base, q_tau)
+f_stage1 <- stage1_kde_at(y_base, q_tau, density_method = density_method)
 
 ## Build shifted-lognormal W using the package's generic derivative API.  The
 ## parameter names are retained from the paper outputs: additive is the shift
@@ -450,7 +478,7 @@ build_lognormal <- function(y, q_tau, taus) {
 ## Fit the same two-component skew-normal mixture used by the historical paper
 ## builder, but on the matched LOCO-adjusted baseline.  Components are sorted by
 ## location so the parameter columns have stable meaning across chromosomes.
-build_skew_mixture <- function(y, q_tau, taus, seed, f_stage1) {
+build_skew_mixture <- function(y, q_tau, taus, seed, f_stage1, density_method) {
   if (!requireNamespace("mixsmsn", quietly = TRUE) || !requireNamespace("sn", quietly = TRUE)) {
     stop("The skew/mixture weight builder requires mixsmsn and sn in freshRlib.",
          call. = FALSE)
@@ -492,7 +520,11 @@ build_skew_mixture <- function(y, q_tau, taus, seed, f_stage1) {
         isTRUE(all.equal(as.numeric(x), q_tau))) {
       return(f_stage1)
     }
-    if (use_stage1_density) stage1_kde_at(y, x) else pdf(x, z)
+    if (use_stage1_density) {
+      stage1_kde_at(y, x, density_method = density_method)
+    } else {
+      pdf(x, z)
+    }
   }
   grad_p <- fungwasStage2::make_fd_grad("p1", cdf)
   grad_gamma <- function(x, z) grad_p(x, z) * z$p1 * (1 - z$p1)
@@ -510,7 +542,7 @@ build_skew_mixture <- function(y, q_tau, taus, seed, f_stage1) {
        density_stage1 = f_stage1,
        density_model = f_model,
        density_model_over_stage1 = f_model / f_stage1,
-       density_method = "Stage 1 production Silverman Gaussian KDE at empirical type-8 quantiles",
+       density_method = density_method,
        components = data.table(component = c("lower", "upper"),
                                weight = pii, xi = mu,
                                omega = sqrt(sigma2), alpha = shape),
@@ -521,16 +553,13 @@ make_outputs <- function() {
   if (identical(family, "shifted_lognormal")) {
     return(build_lognormal(y_base, q_tau, taus))
   }
-  mix <- build_skew_mixture(y_base, q_tau, taus, seed, f_stage1)
+  mix <- build_skew_mixture(y_base, q_tau, taus, seed, f_stage1, density_method)
   if (identical(family, "skew")) return(list(skew = mix))
   list(mixture = mix)
 }
 
-## Validate against the fresh Stage 1 provenance when available.  This catches
+## Validate against the fresh Stage 1 provenance when available. This catches
 ## accidental use of the raw-BMI baseline for log-BMI before any Stage 2 call.
-cov_meta_path <- sub("\\.stage1\\.tsv\\.gz$", ".cov.meta.json", stage1_file)
-cov_meta <- read_json(cov_meta_path)
-analysis <- if (is.list(cov_meta)) cov_meta$analysis else NULL
 if (!is.null(analysis)) {
   if (!is.null(analysis$phenotype) && !identical(as.character(analysis$phenotype), trait)) {
     stop("Stage 1 metadata phenotype is ", analysis$phenotype, "; expected ", trait,
@@ -554,6 +583,11 @@ if (!is.null(analysis)) {
       !isTRUE(all.equal(as.numeric(analysis$loco_scale_factor), scale_factor,
                         tolerance = 1e-8))) {
     stop("LOCO scale factor differs from Stage 1 metadata; refusing mismatched W.",
+         call. = FALSE)
+  }
+  if (!is.null(analysis$density_method) &&
+      !identical(as.character(analysis$density_method), density_method)) {
+    stop("Density method differs from Stage 1 metadata; refusing mismatched W.",
          call. = FALSE)
   }
 }
@@ -581,7 +615,9 @@ provenance <- list(
   loco_scale_mode = loco_scale_mode,
   loco_scale_factor = unname(scale_factor),
   baseline = "LOCO-adjusted phenotype, BGEN-matched (Stage 1 RIF then residualizes X)",
-  density_stage1 = "Silverman Gaussian KDE at empirical type-8 quantiles, population SD, floor 1e-8",
+  density_stage1 = paste0(density_method,
+                          " at empirical type-8 quantiles, population SD, floor 1e-8"),
+  density_method = density_method,
   density_weight_mode = if (grepl("^testosterone", trait)) {
     "matched_to_stage1_kde"
   } else {

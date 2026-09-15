@@ -49,7 +49,7 @@ SIGMA0_ALL_CHROM <- "ALL"
 
 #' Highest \code{.sigma0.meta.json} schema version this Stage 2 understands
 #' @keywords internal
-SIGMA0_META_VERSION_MAX <- 1L
+SIGMA0_META_VERSION_MAX <- 2L
 
 #' Normalise a chromosome label the way Stage 1 does
 #'
@@ -152,6 +152,7 @@ SIGMA0_META_VERSION_MAX <- 1L
       loco_predictor      = .json_string(txt, "loco_predictor"),
       loco_scale_mode     = .json_string(txt, "loco_scale_mode"),
       loco_scale_factor   = .json_number(txt, "loco_scale_factor"),
+      density_method      = .json_string(txt, "density_method"),
       chromosomes         = .json_string_array(txt, "chromosomes"),
       fingerprint         = .json_string(txt, "fingerprint")
     )
@@ -297,6 +298,8 @@ read_sigma0 <- function(sigma0_file) {
       s0_meta$loco_scale_mode, analysis$loco_scale_mode)
   cmp("loco_scale_factor", "the LOCO scale factor",
       s0_meta$loco_scale_factor, analysis$loco_scale_factor)
+  cmp("density_method", "the Stage 1 density method",
+      s0_meta$density_method, analysis$density_method)
   cmp("fingerprint", "the analysis fingerprint",
       s0_meta$fingerprint, analysis$fingerprint)
 

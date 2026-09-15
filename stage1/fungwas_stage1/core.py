@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 #: around 1 GB.
 DEFAULT_N_BLOCKS = 1000
 
+# Density estimators used to construct the Stage 1 RIF.  The Gaussian path is
+# the historical/default estimator.  The fourth-order Gaussian kernel is an
+# explicit optional method: it has zero second moment and therefore removes
+# the leading smooth KDE bias, but its negative lobes mean that a density floor
+# is still required at the RIF denominator.  Keeping the choice explicit is
+# important because it changes the estimand's nuisance construction.
+DENSITY_METHOD_SILVERMAN_GAUSSIAN = "silverman_gaussian"
+DENSITY_METHOD_FOURTH_ORDER_GAUSSIAN = "fourth_order_gaussian"
+DENSITY_METHODS = (
+    DENSITY_METHOD_SILVERMAN_GAUSSIAN,
+    DENSITY_METHOD_FOURTH_ORDER_GAUSSIAN,
+)
+
 ALLOW_NUMPY_FALLBACK = False
 NUMPY_FALLBACK_WARNING = (
     "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
@@ -278,8 +291,10 @@ def resolve_covar_cols(requested: Optional[list[str]], available: list[str]) -> 
     return requested
 
 
-def compute_rif(Y: np.ndarray, taus: np.ndarray, 
-                density_floor: float = 1e-8) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def compute_rif(Y: np.ndarray, taus: np.ndarray,
+                density_floor: float = 1e-8,
+                density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
+                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute Recentered Influence Function matrix.
     
@@ -291,6 +306,10 @@ def compute_rif(Y: np.ndarray, taus: np.ndarray,
         Quantile levels
     density_floor : float
         Minimum density value to avoid division issues
+    density_method : {"silverman_gaussian", "fourth_order_gaussian"}
+        Kernel used for the density at each empirical quantile.  The default
+        is the historical Silverman Gaussian KDE.  ``fourth_order_gaussian``
+        uses ``(1.5 - 0.5*u**2) * phi(u)`` with the same Silverman bandwidth.
         
     Returns
     -------
@@ -301,6 +320,18 @@ def compute_rif(Y: np.ndarray, taus: np.ndarray,
     fhat : array (T,)
         Kernel density estimates at each quantile
     """
+    Y = np.asarray(Y, dtype=np.float64)
+    taus = np.asarray(taus, dtype=np.float64)
+    if density_method not in DENSITY_METHODS:
+        raise ValueError(
+            f"density_method must be one of {DENSITY_METHODS}, got {density_method!r}"
+        )
+    if not np.isfinite(density_floor) or density_floor <= 0:
+        raise ValueError(f"density_floor must be finite and positive, got {density_floor!r}")
+    if Y.ndim != 1 or Y.size < 2 or not np.all(np.isfinite(Y)):
+        raise ValueError("Y must be a finite one-dimensional array with at least two values")
+    if taus.ndim != 1 or taus.size == 0 or np.any(~np.isfinite(taus)) or np.any((taus <= 0) | (taus >= 1)):
+        raise ValueError("taus must be a non-empty one-dimensional array strictly inside (0, 1)")
     N = len(Y)
     T = len(taus)
     
@@ -312,8 +343,13 @@ def compute_rif(Y: np.ndarray, taus: np.ndarray,
     h = 1.06 * np.std(Y) * N ** (-0.2)
     
     fhat = np.zeros(T)
+    normalizer = np.sqrt(2 * np.pi)
     for t, q in enumerate(q_tau):
-        fhat[t] = np.mean(np.exp(-0.5 * ((Y - q) / h) ** 2)) / (h * np.sqrt(2 * np.pi))
+        u = (Y - q) / h
+        kernel = np.exp(-0.5 * u ** 2)
+        if density_method == DENSITY_METHOD_FOURTH_ORDER_GAUSSIAN:
+            kernel *= 1.5 - 0.5 * u ** 2
+        fhat[t] = np.mean(kernel) / (h * normalizer)
     fhat = np.maximum(fhat, density_floor)
     
     # RIF = q + (tau - I(Y <= q)) / f(q)
