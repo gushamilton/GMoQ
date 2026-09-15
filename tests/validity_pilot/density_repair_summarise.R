@@ -5,9 +5,10 @@ args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1L) stop("usage: density_repair_summarise.R <probe_dir>")
 dir <- normalizePath(args[1L])
 detail <- read.csv(file.path(dir, "pilot_rows.csv"), stringsAsFactors = FALSE)
+ds <- read.csv(file.path(dir, "pilot_rows_datasets.csv"), stringsAsFactors = FALSE)
 aux <- read.csv(file.path(dir, "density_repair_aux.csv"), stringsAsFactors = FALSE)
 runtime <- read.csv(file.path(dir, "density_repair_runtime.csv"), stringsAsFactors = FALSE)
-if (!nrow(detail) || !nrow(aux) || !nrow(runtime)) stop("repair output is empty")
+if (!nrow(detail) || !nrow(ds) || !nrow(aux) || !nrow(runtime)) stop("repair output is empty")
 
 mcse <- function(x) {
   x <- x[is.finite(x)]
@@ -31,19 +32,36 @@ for (i in seq_len(nrow(keys))) {
   for (arm in c("A_production_kde", "D_fourth_order_kde")) {
     za <- z[z$arm == arm, , drop = FALSE]
     if (!nrow(za)) next
+    dsz <- ds[ds$cell == za$cell[1L] & ds$path == "current" &
+              ds$source == k$source & ds$W == k$W, , drop = FALSE]
+    attempted <- nrow(dsz)
+    successful <- sum(dsz$fit_ok %in% TRUE)
     ia <- ia + 1L
     proj_bias <- za$estimate - za$target_projection
     sci_bias <- za$estimate - za$target_scientific
     cut <- qt(0.975, df = za$param_ref_df)
+    finite_est <- is.finite(za$estimate)
+    finite_se <- is.finite(za$se)
+    finite_z_proj <- is.finite(za$z_projection) & is.finite(cut)
+    finite_z_sci <- is.finite(za$z_scientific) & is.finite(cut)
+    proj_cover_n <- sum(finite_z_proj & abs(za$z_projection) <= cut)
+    sci_cover_n <- sum(finite_z_sci & abs(za$z_scientific) <= cut)
     ia_rows <- data.frame(
       base_cell = k$base_cell, source = k$source, W = k$W,
-      parameter = k$parameter, arm = arm, datasets = nrow(za),
+      parameter = k$parameter, arm = arm, attempted_datasets = attempted,
+      successful_fits = successful, detail_rows = nrow(za),
+      nonfinite_estimates = sum(!finite_est), nonfinite_se = sum(!finite_se),
+      nonfinite_z_projection = sum(!finite_z_proj), nonfinite_z_scientific = sum(!finite_z_sci),
       bias_projection = mean_or_na(proj_bias), bias_projection_mcse = mcse(proj_bias),
       bias_scientific = mean_or_na(sci_bias), bias_scientific_mcse = mcse(sci_bias),
       empirical_sd_projection = sd_or_na(proj_bias), mean_reported_se = mean_or_na(za$se),
       se_over_empirical_sd = mean_or_na(za$se) / sd_or_na(proj_bias),
-      cover_projection = mean(abs(za$z_projection) <= cut, na.rm = TRUE),
-      cover_scientific = mean(abs(za$z_scientific) <= cut, na.rm = TRUE),
+      bias_projection_finite_datasets = sum(is.finite(proj_bias)),
+      bias_scientific_finite_datasets = sum(is.finite(sci_bias)),
+      cover_projection = if (attempted) proj_cover_n / attempted else NA_real_,
+      cover_scientific = if (attempted) sci_cover_n / attempted else NA_real_,
+      cover_projection_finite = if (sum(finite_z_proj)) proj_cover_n / sum(finite_z_proj) else NA_real_,
+      cover_scientific_finite = if (sum(finite_z_sci)) sci_cover_n / sum(finite_z_sci) else NA_real_,
       stringsAsFactors = FALSE)
     arm_rows[[ia]] <- ia_rows
   }
@@ -63,11 +81,16 @@ for (i in seq_len(nrow(keys))) {
   zz <- merge(lhs, rhs, by = "rep", all = FALSE)
   if (!nrow(zz)) next
   d <- zz$estimate_D - zz$estimate_A
+  dsz <- ds[ds$cell %in% unique(z$cell) & ds$path == "current" &
+            ds$source == k$source & ds$W == k$W, , drop = FALSE]
+  attempted_pair <- if (nrow(dsz)) max(table(dsz$cell)) else 0L
   ip <- ip + 1L
   pair_rows[[ip]] <- data.frame(
     base_cell = k$base_cell, source = k$source, W = k$W,
     parameter = k$parameter, comparison = "D_fourth_order - A_production",
-    datasets = length(d), mean_difference = mean(d), difference_mcse = mcse(d),
+    attempted_datasets = attempted_pair, paired_datasets = length(d),
+    nonfinite_differences = sum(!is.finite(d)),
+    mean_difference = mean_or_na(d), difference_mcse = mcse(d),
     empirical_sd_difference = sd_or_na(d), stringsAsFactors = FALSE)
 }
 pair_summary <- do.call(rbind, pair_rows)
