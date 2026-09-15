@@ -1,0 +1,322 @@
+RUNNING test-pooled-covariance.R
+fungwasStage2 loaded from: /user/work/fh6520/gmoq_finish_20260915/inputs/pooled-memory-repair-20260915-01/lib/fungwasStage2 
+OK: pooled and jackknife agree to float32 when given the same covariance
+OK: SE = sqrt(a' Sigma_0 a / d_resid) exactly, across MAF 0.001 to 0.50
+OK: cov_source defaults to pooled and explicit jackknife is recorded
+OK: pooled reference t_461320; p differs from normal by 0.00051 at z=5.4513
+OK: q_method = chisq_naive omits Q_pval rather than applying a fallback
+OK: GLS is finite and reproducible; cond(Sigma_0) = 98.2
+OK: GLS/OLS SE ratio is constant across SNPs at 0.8840 (spread)
+OK refused: tau grid differs 
+OK refused: covariate set differs 
+OK refused: sample count differs 
+OK refused: phenotype differs 
+OK refused: LOCO predictor differs 
+OK refused: fingerprint differs 
+OK refused: no d_resid column 
+OK refused: no Sigma_0 for chromosome 
+OK refused: no 'analysis' block 
+OK refused: schema version 
+OK refused: Missing pooled-covariance metadata 
+OK refused: requires the Stage 1 
+OK refused: caller required 
+OK refused: caller required 
+OK: require_covariates / require_n_samples pass when they match
+OK: per-chromosome matrices, with 022 normalised to 22
+OK: read_sigma0 round-trips float64 bit-exactly
+OK: null loco_scale_mode and loco_scale_factor accepted
+OK: loco_scale_mode and loco_scale_factor with values accepted
+OK: both JSON parsers (jsonlite and base-R) read new fields identically
+OK refused: the LOCO scale mode differs 
+OK refused: the LOCO scale factor differs 
+OK: mismatched loco_scale fields refused with clear messages
+
+ALL POOLED-COVARIANCE TESTS PASSED
+PASSED test-pooled-covariance.R
+RUNNING test-multi-taucov.R
+OK: tau_cov multi-model AIC/BIC matches expected values
+PASSED test-multi-taucov.R
+RUNNING test-gls-param-gwas.R
+GLS tau_cov diagnostics: 2 SNPs, 2 solved (100.0000%); ridge repair attempted 0 (0.0000%), rescued 0, Sigma still not SPD 0; skipped: beta non-finite 0, bad offset 0, cov non-finite 0, Sigma solve fail 0, WtSinvW not SPD 0, theta fail 0, Vtheta fail 0, Q invalid 0
+GLS path: q_method = "saddlepoint" resolves to the exact Hotelling F reference for Q. The GLS quadratic form has a degenerate eigenvalue spectrum, so there is nothing for a saddlepoint to approximate. Recorded as Q_ref_dist = "hotelling_f".
+Warning messages:
+1: Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(tau_cov_estimator = "gls"), so the GLS lack-of-fit statistic Q cannot be referenced. Q on the GLS path is Hotelling's T^2 on the residual dimensions, NOT chi2(T - K): with an estimated Sigma the chi-square reference rejects 12% of correctly specified variants at nominal 5% when nu = 500, and 99% when nu = 60. Stage 1 records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column; re-run Stage 1, or pass nu explicitly. No Q p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pchisq(Q, T - K): that is the defect this refusal exists to prevent. 
+2: Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+Warning message:
+Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+OK: tau_cov param_gwas GLS estimates and OLS fallback match expected values
+PASSED test-gls-param-gwas.R
+RUNNING test-gls-qpval.R
+PASS: GLS path returns Q_pval 
+PASS: GLS path returns Q_df_eff 
+PASS: GLS path returns Q_scale 
+PASS: GLS reference is recorded as hotelling_f 
+PASS: GLS Q_df_eff is exactly T - K: the GLS quadratic form has a flat spectrum 
+PASS: GLS Q_scale is the Hotelling null-mean inflation nu/(nu - m - 1) 
+PASS: Q_df_eff * Q_scale is the null mean of Q (calibrated ratio has mean 1) 
+PASS: Sigma known: mean(Q) is T - K 
+PASS: Sigma known: var(Q) is 2(T - K) 
+PASS: Sigma known: Q_pval is uniform (KS) 
+PASS: Sigma known: rejection at 0.05 is nominal 
+PASS: Sigma estimated: Q_pval is uniform (KS) 
+PASS: Sigma estimated: rejection at 0.05 is nominal 
+PASS: Sigma estimated: rejection at 0.20 is nominal 
+PASS: chi2(T - K) on the GLS Q is grossly anti-conservative at nu = 120 (measured 0.637 at nominal 0.05) 
+PASS: the Hotelling correction changes the answer by more than a factor of five 
+PASS: misspecification residual is scaled to the intended non-centrality 
+PASS: misspecified: mean(Q) matches the non-central prediction (m + lambda) 
+PASS: misspecified: Q_pval rejects at 0.05 (measured 0.993) 
+PASS: misspecified Q_pval is stochastically smaller than the null one 
+PASS: OLS output gains no new fields 
+PASS: OLS still returns its own calibrated triple 
+PASS: OLS Q_pval is bit-identical to .q_pvalue_calibrated (reference untouched) 
+PASS: OLS effective df is still well below T - K (its spectrum is not flat) 
+PASS: the two statistics are on different scales, as documented 
+PASS: q_method = 'liu' refuses on the GLS path 
+PASS: q_method = 'satterthwaite' refuses on the GLS path 
+PASS: q_method = 'hotelling' refuses on the OLS path 
+PASS: nu below m + 1 yields no Q p-value (Q is degenerate, not just mis-referenced) 
+PASS: nu below m + 1 warns rather than failing silently 
+PASS: nu unknown: Q is still returned, Q_pval is omitted (unknown_nu = 'omit') 
+PASS: unknown_nu = 'normal' emits the Sigma-known chi2 limit and records it as such 
+PASS: unknown_nu = 'error' stops 
+PASS: chisq_naive returns no calibrated p-value on the GLS path 
+PASS: the Q STATISTIC is bit-identical across q_method on the GLS path 
+
+All GLS Q p-value tests passed.
+PASSED test-gls-qpval.R
+RUNNING test-q-calibration.R
+Warning message:
+Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+PASS: default q_method is saddlepoint 
+PASS: default q_method returns a calibrated p-value 
+Warning message:
+Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+PASS: chisq_naive is still selectable 
+PASS: chisq_naive returns no calibrated p-value, as published 
+PASS: the Q STATISTIC is bit-identical across q_method (only the reference changes) 
+PASS: parameter estimates are unchanged 
+PASS: C++ trace c1 matches the R reference 
+PASS: C++ trace c2 matches the R reference 
+PASS: C++ trace c3 matches the R reference 
+PASS: C++ trace c4 matches the R reference 
+PASS: number of non-zero eigenvalues equals T - k 
+PASS: covariance upper triangle is read in row-major order 
+PASS: satterthwaite returns finite p-values in [0, 1] 
+PASS: satterthwaite p-value decreases with Q 
+PASS: liu returns finite p-values in [0, 1] 
+PASS: liu p-value decreases with Q 
+PASS: saddlepoint returns finite p-values in [0, 1] 
+PASS: saddlepoint p-value decreases with Q 
+Warning messages:
+1: Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+2: Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+3: Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+Warning message:
+Degrees of freedom of the Stage 1 covariance are unknown for this call to param_gwas(). theta/SE is t distributed, not normal, because Sigma is estimated by a block jackknife; with B = 65 blocks a normal reference inflates Type-I error by 17x at p = 5e-8. Stage 1 now records the block count in <prefix>.cov.meta.json and the per-SNP N_eff in the d_resid column, but this covariance predates both. Re-run Stage 1, or pass nu explicitly. No parameter p-value will be emitted (unknown_nu = "omit"). Do not recompute one with pnorm(): that is the defect this refusal exists to prevent. 
+PASS: effective df is positive and at most T - k 
+PASS: correlated residuals give an effective df below the naive T - k 
+
+All q-calibration tests passed.
+PASSED test-q-calibration.R
+RUNNING test-q-negative-eigenvalues.R
+PASS: test spectrum really has negative eigenvalues 
+PASS: test spectrum puts the pre-fix starting bracket lo = -1 outside the CGF domain 
+PASS: no eigenvalue is discarded when M is full rank (nothing is structurally zero) 
+PASS: power sum c1 equals the exact value including the negative eigenvalues 
+PASS: power sum c2 equals the exact value including the negative eigenvalues 
+PASS: power sum c3 equals the exact value including the negative eigenvalues 
+PASS: power sum c4 equals the exact value including the negative eigenvalues 
+PASS: c1 differs materially from the positive-only sum a one-sided rule would give 
+PASS: the R reference retains exactly T - ncol(W) eigenvalues 
+PASS: and some of those retained are negative 
+PASS: C++ drops exactly the ncol(W) structural zeros 
+PASS: c1 matches the R reference on the projected indefinite case 
+PASS: c2 matches the R reference on the projected indefinite case 
+PASS: c3 matches the R reference on the projected indefinite case 
+PASS: c4 matches the R reference on the projected indefinite case 
+PASS: saddlepoint converges at q/E[Q] = 1.5 (two-sided spectrum) 
+PASS: saddlepoint matches the bracketed R reference at q/E[Q] = 1.5 
+PASS: the saddlepoint root is inside the CGF domain at q/E[Q] = 1.5 
+PASS: saddlepoint converges at q/E[Q] = 3 (two-sided spectrum) 
+PASS: saddlepoint matches the bracketed R reference at q/E[Q] = 3 
+PASS: the saddlepoint root is inside the CGF domain at q/E[Q] = 3 
+PASS: saddlepoint converges at q/E[Q] = 6 (two-sided spectrum) 
+PASS: saddlepoint matches the bracketed R reference at q/E[Q] = 6 
+PASS: the saddlepoint root is inside the CGF domain at q/E[Q] = 6 
+PASS: saddlepoint converges at q/E[Q] = 12 (two-sided spectrum) 
+PASS: saddlepoint matches the bracketed R reference at q/E[Q] = 12 
+PASS: the saddlepoint root is inside the CGF domain at q/E[Q] = 12 
+PASS: saddlepoint converges at q/E[Q] = 30 (two-sided spectrum) 
+PASS: saddlepoint matches the bracketed R reference at q/E[Q] = 30 
+PASS: the saddlepoint root is inside the CGF domain at q/E[Q] = 30 
+PASS: IS reference is precise at q/E[Q] = 3 (rse 0.165%) 
+PASS: saddlepoint within 12% of exact Monte Carlo at q/E[Q] = 3 (2.349e-02 vs 2.362e-02, ratio 0.994) 
+PASS: IS reference is precise at q/E[Q] = 6 (rse 0.253%) 
+PASS: saddlepoint within 12% of exact Monte Carlo at q/E[Q] = 6 (5.022e-04 vs 4.771e-04, ratio 1.053) 
+PASS: IS reference is precise at q/E[Q] = 20 (rse 0.484%) 
+PASS: saddlepoint within 12% of exact Monte Carlo at q/E[Q] = 20 (2.203e-11 vs 1.982e-11, ratio 1.111) 
+PASS: saddlepoint within 12% of plain Monte Carlo (2.349e-02 vs 2.376e-02, 95030 hits) 
+PASS: hard spectrum still has a positive mean 
+PASS: saddlepoint converges on the hostile spectrum at q/E[Q] = 2 
+PASS: and matches the bracketed reference at q/E[Q] = 2 
+PASS: saddlepoint converges on the hostile spectrum at q/E[Q] = 5 
+PASS: and matches the bracketed reference at q/E[Q] = 5 
+PASS: saddlepoint converges on the hostile spectrum at q/E[Q] = 15 
+PASS: and matches the bracketed reference at q/E[Q] = 15 
+PASS: saddlepoint converges on the hostile spectrum at q/E[Q] = 50 
+PASS: and matches the bracketed reference at q/E[Q] = 50 
+PASS: PD case retains the whole spectrum 
+PASS: PD power sum c1 is exact 
+PASS: PD power sum c2 is exact 
+PASS: PD power sum c3 is exact 
+PASS: PD power sum c4 is exact 
+PASS: PD saddlepoint matches the reference (lo = 0 bracket loses nothing) 
+PASS: smallest genuine eigenvalue sits far above the retention tolerance 
+PASS: constructed spectrum has positive mean but negative third power sum 
+PASS: one structural zero dropped, the rest kept 
+PASS: c1 exact here 
+PASS: c3 is exact and negative 
+PASS: liu returns NA when the skewness a chi-square could match is not available 
+PASS: the saddlepoint, which makes no shape assumption, still converges there 
+PASS: and agrees with the bracketed R reference on that spectrum 
+
+All negative-eigenvalue tests passed.
+PASSED test-q-negative-eigenvalues.R
+RUNNING test-t-reference.R
+fungwasStage2 loaded from: /user/work/fh6520/gmoq_finish_20260915/inputs/pooled-memory-repair-20260915-01/lib/fungwasStage2 
+OK: n_blocks round-trips and the per-SNP law is used
+OK: df = 1/(1/(B-1) + c/n_eff); location 911.3-995.2, spread 776.5-987.8
+OK: the law reproduces the production df quoted in BP1_effective_df.md
+OK: df varies across SNPs and spread < location everywhere (gap 7-135)
+OK: p equals 2*pt(-|theta/se|, per-SNP df) to 0 
+OK: at the sharpest SNP normal 2.052e-25 -> t_999 3.380e-24 -> per-SNP t_911 4.341e-24
+OK: Q is returned and uncalibrated Q_pval is omitted
+OK: without d_resid the df falls back visibly to 911 / 776 and warns
+OK: no block count -> no p-value, warns, ref_dist = none, rest still produced
+OK: a missing sidecar behaves identically
+OK: unknown_nu = 'normal' emits normal p-values and records ref_dist = normal
+OK: unknown_nu = 'error' stops rather than guessing
+OK: explicit nu overrides the per-SNP law
+OK: a recorded constant nu is honoured but warned about
+OK: at nu = 1e8 the t p-value matches the normal one to 1.92e-09 
+OK: contrast flatness classifies location vs scale, conservative in between
+OK: metadata readers behave as specified
+OK: df_coef overrides c per parameter
+NOTE: no joint k-parameter test exists; F reference not applicable
+OK: all t-reference tests passed
+PASSED test-t-reference.R
+RUNNING test-cov-ids-mandatory.R
+NULL
+Reading Stage 1 file: /tmp/RtmpWak3iH/cov_ids_test_61d2b117bf411/test.stage1.tsv
+Loading covariance file: /tmp/RtmpWak3iH/cov_ids_test_61d2b117bf411/test.cov.gz
+OK: missing covariance IDs sidecar triggers error
+PASSED test-cov-ids-mandatory.R
+RUNNING test-namespace-dynlib.R
+ok: NAMESPACE carries the C++ directives, and roxygen can regenerate them
+PASSED test-namespace-dynlib.R
+RUNNING test-dispersion-guards.R
+== dispersion_skew_guard ==
+  ok  G matches 0.6855 * gskew * Z^2 / sqrt(N) from MAF
+  ok  G is exactly zero at MAF 0.5, for any Z_mu
+  ok  G recovered from d_resid agrees with G from MAF (magnitude)
+  ok  d_resid route cannot distinguish p from 1-p, as documented
+  ok  refuses when neither maf nor (n_eff, N) is supplied
+
+== estimate_rav ==
+   r_av = 0.1329 (se 0.0037, 22 blocks), truth 0.1350
+  ok  recovers a known r_av within 4 jackknife SE
+  ok  block jackknife SE is finite and positive
+   naive OLS slope          0.1267  (truth 0.1350)
+   dilution-corrected only  0.1997
+   both corrections         0.1329
+  ok  the corrected estimator beats naive OLS
+  ok  with cov = 0 it reduces to the dilution-corrected slope
+  ok  trim removes extreme ratio contributions, not merely extreme numerators
+  ok  refuses fewer than 20 usable variants
+  ok  warns when the within-variant covariance is not supplied
+
+== residualise_dispersion ==
+  ok  point estimate is alpha_v - r_av * alpha
+  ok  SE is the delta method including the within-variant covariance
+   r_av recovered 0.6857 (truth 0.70)
+   rejection at 0.05 before correction 0.4516, after 0.0523 (nominal 0.05)
+  ok  a pure mean-variance coupling is removed: rejection returns to nominal
+  ok  se_rav inflates the SE, and does so in proportion to |alpha|
+  ok  refuses a non-scalar r_av
+
+== dispersion_report ==
+  ok  returns uncorrected and corrected columns side by side, plus the guard
+  ok  picks the mu/sigma2 covariance out of param_cov_upper by name
+  ok  dispersion_report reuses the fit's calibrated t reference for raw and residual p-values
+  ok  dispersion_report omits p-values when the fit has no supported reference
+  ok  guard column matches dispersion_skew_guard
+  ok  the uncorrected estimate is preserved verbatim, not overwritten
+  ok  no r_av supplied => no corrected columns invented
+  ok  warns when param_cov_upper is absent
+
+== dispersion_skew_bias / correct_dispersion_skew ==
+  ok  A W = I, so the bias projects onto beta_sigma2 in full: identical for ols and gls
+  ok  correcting b(tau) first and correcting the coefficient after are identical
+  ok  bias = (1 - 2p) * beta_mu^2
+  ok  debias subtracts Var(beta_mu_hat) from beta_mu_hat^2
+  ok  debias = FALSE leaves the raw square
+  ok  exactly zero at EAF 0.5, for any beta_mu
+  ok  covariant under an allele flip
+  ok  refuses to guess: an effect-allele frequency or mu3_over_var is mandatory
+  ok  mu3_over_var overrides the Hardy-Weinberg identity
+  ok  SE is the stated delta-method variance including the within-variant covariance
+  ok  the SE widens: the correction is estimated, and that is paid for
+  ok  variance stays positive across the whole admissible covariance range
+  ok  length-1 arguments recycle to length(beta_mu)
+  ok  costs essentially nothing when there is no location effect
+   false dispersion rate at 0.05: 1.0000 uncorrected, 0.0479 corrected (nominal 0.05)
+  ok  a pure location effect's false dispersion rate returns to nominal
+  ok  dispersion_report adds the corrected columns when eaf is supplied
+  ok  and still preserves the uncorrected estimate verbatim
+  ok  no eaf supplied => no corrected columns invented
+
+== guardrail 1: EAF orientation ==
+  ok  refuses an eaf column that lies below 0.5 at EVERY variant (folded signature)
+  ok  dispersion_skew_bias refuses the same folded signature
+  ok  eaf_orientation = 'effect' downgrades the folded signature to a warning, not silence
+  ok  a genuine EAF column straddling 0.5 passes silently
+  ok  eaf_orientation = 'folded' is refused outright
+  ok  an unrecognised eaf_orientation is refused
+  ok  an unverifiable (scalar, sub-0.5) eaf warns when the orientation is not asserted
+  ok  ...and is silent once the orientation is asserted
+   |Z| at the flipped variants: 1.71 uncorrected, 0.00 right way, 3.32 folded
+  ok  a folded k roughly doubles the false |Z| instead of removing it -- worse than no correction
+  ok  dispersion_report refuses when eaf and maf are the SAME OBJECT
+  ok  dispersion_report refuses when eaf and maf are ELEMENT-WISE identical
+  ok  ...including when one of them is a length-1 value recycled against the other
+  ok  dispersion_report refuses an eaf with no eaf_orientation: there is no default
+
+== guardrail 2: the W identity, not the column names ==
+  ok  check_vqtl_design accepts make_weights_vqtl's design and recovers its sd
+  ok  an SD-parameterised Normal design carries the SAME column names, ratio 2*sd
+  ok  check_vqtl_design refuses it even though the names match
+  ok  ...with a message that diagnoses the SD-vs-variance parameterisation
+   truth 0: uncorrected +1.508e-02, 'corrected' on the wrong W -2.412e-02 (1.60x, sign flipped)
+  ok  on that W the correction would over-subtract by 2*sd: +1.51e-02 -> -2.41e-02
+  ok  check_vqtl_design refuses the 5-parameter mixture design under mu_name = 'beta_mu1'
+  ok  check_vqtl_design refuses without the sd that built W
+  ok  ...and refuses the right W paired with the wrong sd
+  ok  warns on a tau grid that is not symmetric about 0.5
+  ok  ...and does not warn on a symmetric one
+  ok  dispersion_report refuses a fit whose W is merely NAMED beta_sigma2
+  ok  dispersion_report refuses a fit that carries no W at all
+  ok  dispersion_report refuses without W_sd, the sd that built W
+  ok  check_design = FALSE proceeds but warns prominently
+  ok  the mu3_over_var route is gated on the design as well
+
+== NA corrections are counted, not returned silently ==
+  ok  an eaf of 0, 1 or NA is counted on attr(, 'na_counts')
+  ok  ...and warns rather than returning the NAs silently
+  ok  a covariance past |c| = se_mu * se_sigma2 gives a negative variance, and is counted
+  ok  ...and the warning names Cauchy-Schwarz and the mismatched covariance file
+  ok  an admissible covariance produces no NA and no warning
+  ok  dispersion_report carries the na_counts attribute through
+
+All dispersion-guard tests passed.
+PASSED test-dispersion-guards.R
