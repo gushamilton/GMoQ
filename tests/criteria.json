@@ -1,0 +1,91 @@
+{
+  "version": "1.0",
+  "frozen": "2026-09-14",
+  "what_this_is": [
+    "Preregistered pass criteria for tier 2. Committed before the run whose",
+    "numbers they judge. Every band below is taken from an existing measured",
+    "result in docs/, cited in `evidence`, widened only by the Monte Carlo",
+    "error of the tier 2 design (57,000 null observations per cell: 0.0009 on",
+    "a 0.05 rate, 0.004 on a 0.95 coverage). Nothing here was chosen after",
+    "seeing a tier 2 number. If a band has to move, move it in a commit of its",
+    "own, with the reason."
+  ],
+  "design": {
+    "N_main": 50000,
+    "n_taus_main": 45,
+    "blocks": 1000,
+    "reps_main": 300,
+    "null_variants_per_rep": 190,
+    "causal_variants_per_rep": 10,
+    "z_target_main": 8.0,
+    "null_observations_per_cell": 57000,
+    "causal_observations_per_cell": 3000,
+    "mcse_at_0.05": 0.0009,
+    "mcse_at_0.95_coverage": 0.004
+  },
+
+  "null_calibration": {
+    "_establishes": "Under a true null the interval covers at its nominal rate and the test has its nominal size. This is the single most load-bearing claim a GWAS method makes.",
+    "coverage95": {
+      "ols": { "lo": 0.940, "hi": 0.958 },
+      "gls": { "lo": 0.934, "hi": 0.960 },
+      "evidence": "docs/BP2_lumpy_phenotypes.md section 2 measures 0.9491-0.9508 for OLS across every phenotype shape tested and 0.9433-0.9438 for jackknife GLS on smooth traits; docs/OLS_VS_GLS.md gives 0.9499 for both under the null at 20,000 reps."
+    },
+    "typeI_0.05": {
+      "ols": { "lo": 0.042, "hi": 0.058 },
+      "gls": { "lo": 0.040, "hi": 0.062 },
+      "evidence": "docs/MEAN_VARIANCE_ARTEFACT.md section 6: 0.0488-0.0503 over six estimator/scale cells at 68,000 null tests each."
+    },
+    "typeI_1e-3_ratio": { "lo": 0.4, "hi": 2.2,
+      "evidence": "docs/KNOWN_ISSUES.md section 7: actual/nominal 1.042 (location) and 1.074 (scale) at p = 1e-3 after the t-reference fix." },
+    "sd_z_abs_dev": { "max": 0.03,
+      "evidence": "docs/MEAN_VARIANCE_ARTEFACT.md section 6 reports sd(z) 0.9955-1.0016 on the null class." },
+    "Q_rejection_0.05": { "lo": 0.02, "hi": 0.12,
+      "evidence": "Q is a lack-of-fit statistic with a calibrated reference; under a correctly specified model on null variants it should reject at nominal." }
+  },
+
+  "alternative": {
+    "_establishes": "Under a real distributional effect the estimator still covers its own population estimand, and its reported standard error still describes its actual variability.",
+    "coverage95_theta_pop": {
+      "normal_baseline": { "ols": 0.925, "gls": 0.900 },
+      "skewed_baseline": { "ols": 0.880, "gls": 0.850 },
+      "evidence": "docs/OLS_VS_GLS.md: 0.9409/0.9373 (OLS/GLS) under a true scale effect and 0.9406/0.9409 under a mixed one; docs/FINDINGS_pooled_dispersion.md section 3 shows the pooled covariance sagging further at rare MAF, to 0.9114 at MAF 0.05 and Z = 30. The floors are set below the worst documented value so that only a NEW failure trips them."
+    },
+    "abs_bias_over_sd": { "ols": 0.15, "gls": 0.30,
+      "evidence": "docs/OLS_VS_GLS.md binned by lack of fit: |bias| 0.021-0.051 empirical sd for OLS where the model fits, 0.128 for GLS where it does not." },
+    "se_over_empirical_sd": { "lo": 0.92, "hi": 1.08,
+      "evidence": "docs/FINDINGS_pooled_dispersion.md section 4: mean_se/emp_sd 0.898-1.003 across arms; the jackknife at B = 1000 with GLS is the low end." }
+  },
+
+  "tournament": {
+    "_establishes": "Both halves: the true model is selected, AND the models that cannot represent the truth are rejected. A tournament that only ever confirms the truth has not been tested.",
+    "wrong_model_Q_rejection_min": 0.50,
+    "true_model_Q_rejection_max": 0.15,
+    "spanning_selection_min": 0.80,
+    "evidence": "No prior measurement exists for the rejection half. The selection floor is set from docs/KNOWN_ISSUES.md section 4, which measures raw-Q BIC selecting the true additive model 59 per cent of the time; 0.80 is on SPANNING models (the truth or a superset of it), which is the weaker and better-posed question."
+  },
+
+  "pins": {
+    "_establishes": "Four established failure modes. The BLOCKING half of each is that the default, recommended path stays sound; the presence of the defect on a non-default path is recorded and, where the evidence base says it must be fixed, raised as advisory.",
+    "false_vqtl": {
+      "guard_threshold": 0.2,
+      "low_G_bucket_typeI": { "lo": 0.035, "hi": 0.070 },
+      "inflation_to_flag": 2.0,
+      "evidence": "docs/FINDINGS_pooled_dispersion.md section 5: flagging at G >= 0.2 holds the false-dispersion rate within 2x nominal, is monotone in G across every MAF, N and effect size tested, and correctly passes the MAF 0.50 / Z_mu 73.9 cell. The blocking criterion is that the guard does not MISS: no bucket the guard calls clean may be inflated."
+    },
+    "ties_gls": {
+      "ols_typeI": { "lo": 0.042, "hi": 0.058 },
+      "gls_collapse_below": 0.02,
+      "evidence": "docs/BP2_lumpy_phenotypes.md section 2: on round_0p50 the GLS Type-I is 0.0000 and coverage 0.9973 while OLS is 0.9502 / 0.0498. OLS staying correct is what blocks; the GLS collapse is recorded."
+    },
+    "ceiling_censoring": {
+      "ols_far_tail_ratio": { "lo": 0.3, "hi": 3.0 },
+      "gls_far_tail_advisory_above": 2.0,
+      "alpha": 0.0001,
+      "evidence": "docs/BP2_lumpy_phenotypes.md section 2: ceil_20 under GLS rejects at 4.90x nominal at alpha = 1e-4 and 270x at 1e-6, while OLS is unaffected. This is the only anti-conservative failure BP2 found."
+    },
+    "loco_scale": {
+      "evidence": "docs/LOCO_SCALE.md. Tested in tier 1 as a refusal (T1.REF.loco_scale_mismatch): a Sigma_0 built under a different --loco-scale than the scan must stop the run, because the damage is invisible downstream (log_bmi shape effects attenuated 2.2x with SEs inflated 2.2x)."
+    }
+  }
+}
