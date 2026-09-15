@@ -1164,6 +1164,10 @@ param_gwas_multi_from_file <- function(
   message("Reading Stage 1 file: ", stage1_file)
   stage1_dt <- data.table::fread(stage1_file)
   data.table::setDT(stage1_dt)
+  # Covariance payloads and their IDs are indexed against the unfiltered Stage 1
+  # rows. Keep that table for validation before dropping duplicated/multiallelic
+  # records; offsets are subset below using the same keep_idx.
+  stage1_dt_raw <- data.table::copy(stage1_dt)
   stage1_n_raw <- nrow(stage1_dt)
   stage1_filter <- .filter_multiallelic_stage1(stage1_dt, drop_multiallelic)
   stage1_dt <- stage1_filter$dt
@@ -1217,7 +1221,7 @@ param_gwas_multi_from_file <- function(
               call. = FALSE)
     } else {
       message("Validating covariance SNP IDs: ", cov_ids_file)
-      .validate_cov_ids(stage1_dt, cov_ids_file)
+      .validate_cov_ids(stage1_dt_raw, cov_ids_file)
     }
 
     cov_data <- .read_tau_cov_data(
