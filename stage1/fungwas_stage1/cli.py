@@ -15,13 +15,14 @@ Outputs:
     {out}.Rtau.tsv       - Population tau correlation matrix (for plugin_cor)
 
 The final column of the TSV, d_resid, is sum_i g_resid_i^2 for that SNP: the
-denominator of every per-tau slope, and the genotype's effective sample size.
-Stage 2 needs it to work out the effective degrees of freedom of the estimated
-covariance per SNP, which is what makes its t reference correct.
+denominator of every per-tau slope. Stage 2 uses it to scale pooled covariance
+and to calculate approximate effective degrees of freedom for jackknife
+inference. It is residual genotype variation, not a literal sample count.
 
 WARNING about the per-tau standard errors in this file.  se_tau_* are jackknife
-estimates, so beta/se at a single tau is t distributed, NOT normal -- and the
-effective degrees of freedom at an extreme tau are far below the block count.
+estimates, so a normal reference can miss covariance-estimation uncertainty.
+The approximate effective degrees of freedom at an extreme tau can be far
+below the block count.
 Measured at N = 50,000 with --blocks 1000: about 835 df at tau = 0.50, but 112
 at tau = 0.02, and 38 at tau = 0.02 for a MAF 0.01 variant. Do not studentise a
 per-tau slope against a normal, against blocks - 1, or against the degrees of
