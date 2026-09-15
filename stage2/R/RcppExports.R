@@ -6,7 +6,6 @@ fit_multi_models <- function(beta_stage1, se_stage1, W_list, N, n_threads = 1L) 
 }
 
 fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n_threads = 1L, cov_scales = NULL) {
-    if (is.null(cov_scales)) cov_scales <- numeric()
     .Call(`_fungwasStage2_fit_multi_models_tau_cov`, beta_stage1, cov_vec, offsets, W_list, N, n_threads, cov_scales)
 }
 
@@ -14,11 +13,11 @@ fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n
 #' 
 #' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.
 #' @param offsets Integer vector of byte offsets (0-based) into the original file (needs conversion to index).
+#' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 #' @param A The transformation matrix (n_params x K).
 #' @param K Dimension of the covariance matrix (e.g. 17).
 #' @return NumericMatrix of standard errors (n_snps x n_params).
 compute_calibrated_se <- function(cov_vec, offsets, A, K, cov_scales = NULL) {
-    if (is.null(cov_scales)) cov_scales <- numeric()
     .Call(`_fungwasStage2_compute_calibrated_se`, cov_vec, offsets, A, K, cov_scales)
 }
 
@@ -26,11 +25,11 @@ compute_calibrated_se <- function(cov_vec, offsets, A, K, cov_scales = NULL) {
 #'
 #' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.
 #' @param offsets Integer vector of byte offsets (0-based) into the original file (needs conversion to index).
+#' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 #' @param A The transformation matrix (n_params x K).
 #' @param K Dimension of the covariance matrix (e.g. 17).
 #' @return NumericMatrix of upper-triangle covariance (n_snps x n_cov_params).
 compute_param_cov <- function(cov_vec, offsets, A, K, cov_scales = NULL) {
-    if (is.null(cov_scales)) cov_scales <- numeric()
     .Call(`_fungwasStage2_compute_param_cov`, cov_vec, offsets, A, K, cov_scales)
 }
 
@@ -42,13 +41,13 @@ compute_param_cov <- function(cov_vec, offsets, A, K, cov_scales = NULL) {
 #' @param beta_stage1 Tau-level SNP effects as a K x n_snps matrix.
 #' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.
 #' @param offsets Integer vector of byte offsets (0-based) into the original file.
+#' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 #' @param W Weight/design matrix with K rows and n_params columns.
 #' @param return_cov Whether to return parameter covariance upper triangles.
 #' @param gls_ridge Relative diagonal ridge added only if the covariance solve fails.
 #' @param n_threads Number of OpenMP threads.
 #' @return List with params, se, Q, and optionally param_cov_upper.
 compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov = FALSE, gls_ridge = 1e-8, n_threads = 1L, cov_scales = NULL) {
-    if (is.null(cov_scales)) cov_scales <- numeric()
     .Call(`_fungwasStage2_compute_gls_param_gwas`, beta_stage1, cov_vec, offsets, W, return_cov, gls_ridge, n_threads, cov_scales)
 }
 
@@ -61,6 +60,7 @@ compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov 
 #'
 #' @param cov_vec Concatenated upper triangles of the per-SNP covariances.
 #' @param offsets Byte offsets (0-based) of each SNP's record.
+#' @param cov_scales Optional per-SNP positive multiplier for a shared covariance payload.
 #' @param Qstat Numeric vector of observed Q statistics (n_snps).
 #' @param Dvar Numeric matrix (K x n_snps) of per-tau variances, se_tau^2.
 #' @param M Residual projector I - W (W'W)^-1 W' (K x K).
@@ -69,6 +69,6 @@ compute_gls_param_gwas <- function(beta_stage1, cov_vec, offsets, W, return_cov 
 #' @return Numeric matrix (n_snps x 6): c1, c2, c3, c4, p_saddle, n_eig.
 #'   \code{p_saddle} is negative where the saddlepoint does not apply.
 compute_q_calibration <- function(cov_vec, offsets, Qstat, Dvar, M, K, n_threads, cov_scales = NULL) {
-    if (is.null(cov_scales)) cov_scales <- numeric()
     .Call(`_fungwasStage2_compute_q_calibration`, cov_vec, offsets, Qstat, Dvar, M, K, n_threads, cov_scales)
 }
+
