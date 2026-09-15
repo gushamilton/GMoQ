@@ -3,17 +3,7 @@
 # ============================================================
 
 suppressPackageStartupMessages(library(data.table))
-suppressPackageStartupMessages(library(Rcpp))
-
-args <- commandArgs(trailingOnly = FALSE)
-file_arg <- args[grep("^--file=", args)]
-this_file <- sub("^--file=", "", file_arg)
-pkg_root <- normalizePath(file.path(dirname(this_file), ".."))
-source(file.path(pkg_root, "R", "tail-reference.R"))
-source(file.path(pkg_root, "R", "gwas.R"))
-source(file.path(pkg_root, "R", "param_gwas.R"))
-source(file.path(pkg_root, "R", "RcppExports.R"))
-Rcpp::sourceCpp(file.path(pkg_root, "src", "models.cpp"))
+suppressPackageStartupMessages(library(fungwasStage2))
 
 workdir <- tempfile("multi_from_file_")
 dir.create(workdir)
@@ -80,13 +70,13 @@ cat("OK: unsafe_skip_cov_ids bypasses missing cov IDs check\n")
 # be subset to the retained raw indices.
 stage1_filtered_file <- file.path(workdir, "filtered.stage1.tsv")
 stage1_filtered_dt <- data.table(
-  snp_id = c("rs_keep", "rs_multi", "rs_multi"),
+  snp_id = c("rs_multi", "rs_keep", "rs_multi"),
   chr = c(1L, 1L, 1L),
-  bp = c(100L, 200L, 200L),
+  bp = c(200L, 100L, 200L),
   effect_allele = c("A", "C", "G"),
   other_allele = c("G", "T", "A"),
-  beta_tau_0.1 = c(0.4, 0.2, 0.8),
-  beta_tau_0.9 = c(0.1, 0.9, 0.1),
+  beta_tau_0.1 = c(0.2, 0.4, 0.8),
+  beta_tau_0.9 = c(0.9, 0.1, 0.1),
   se_tau_0.1 = c(1, 1, 1),
   se_tau_0.9 = c(1, 1, 1)
 )
@@ -109,15 +99,16 @@ filtered_fit <- param_gwas_multi_from_file(
   cov_file = filtered_cov_file
 )
 
-# Only rs_keep survives. Its beta vector is (0.4, 0.1), giving Q = 0.045
-# against the first covariance record and hence the known AIC/BIC below.
+# Only the middle row rs_keep survives. Its beta vector is (0.4, 0.1), giving
+# Q = 0.0225 against the second covariance record (2I). This tests a nonzero
+# raw-record offset, rather than accidentally passing with the first record.
 if (nrow(filtered_fit) != 1L || !identical(rownames(filtered_fit), NULL)) {
   stop("Expected one retained row in the multi-file jackknife result")
 }
 if (!identical(colnames(filtered_fit), c("AIC_add", "BIC_add"))) {
   stop("Unexpected model-score columns: ", paste(colnames(filtered_fit), collapse = ", "))
 }
-expected_scores <- c(AIC_add = 2.045, BIC_add = 0.045 + log(100))
+expected_scores <- c(AIC_add = 2.0225, BIC_add = 0.0225 + log(100))
 if (max(abs(as.numeric(filtered_fit[1, ]) - expected_scores)) > 1e-6) {
   stop("Retained covariance record was not used: got ",
        paste(format(as.numeric(filtered_fit[1, ]), digits = 12), collapse = ", "))
