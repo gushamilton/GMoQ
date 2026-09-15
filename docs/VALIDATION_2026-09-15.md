@@ -51,6 +51,17 @@ cannot expose a consistently reversed dosage convention.
 
 ## Real-genotype and empirical runs
 
+The later compact pooled representation preserves one covariance matrix per
+chromosome and a scale per SNP. Its independent fixture matched the dense
+representation for OLS/GLS estimates, standard errors, parameter p-values,
+Q calculations, returned covariance and model comparisons. Ten existing
+installed-package regression scripts also passed, including explicit
+jackknife handling. At 45 quantiles and 10,000 variants, measured covariance
+storage fell from 82,880,096 to 168,424 bytes (about 492-fold); the single
+construction timing was 0.605 versus 0.010 seconds. These figures measure
+covariance-object construction, not total process memory or full GWAS speed.
+See the [source and profile](../stage2/tests/pooled-memory-repair-20260915-01/).
+
 A current-CLI check used 24 real chromosome-22 variants and 463,005 people,
 45 quantiles and 65 blocks. A simulated mean effect of +0.25 at rs9617528
 produced an OLS estimate of +0.250635, with pooled SE 0.003961. Stage 1 took
