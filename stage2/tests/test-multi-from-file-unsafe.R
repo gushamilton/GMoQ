@@ -44,6 +44,7 @@ err <- tryCatch({
     W_list = W_list,
     N = 100,
     se_mode = "tau_cov",
+    cov_source = "jackknife",
     cov_file = cov_file
   )
   NULL
@@ -65,6 +66,7 @@ suppressWarnings(
     W_list = W_list,
     N = 100,
     se_mode = "tau_cov",
+    cov_source = "jackknife",
     cov_file = cov_file,
     unsafe_skip_cov_ids = TRUE
   )

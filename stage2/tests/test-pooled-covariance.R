@@ -3,14 +3,15 @@
 #
 # Stage 1 can emit one T x T matrix per trait per chromosome,
 # Sigma_0 = Psi_r' Psi_r / n, and Stage 2 forms Sigma_v = Sigma_0 / d_resid.
-# The jackknife path stays the default and stays selectable: every published
-# result used it, so this must not be a one-way door.
+# The pooled path is the default after validation, while the explicit jackknife
+# path remains selectable: every published result used it, so this must not be
+# a one-way door.
 #
 # Covered here:
 #   1. cov_source = "pooled" reproduces, exactly, the SEs and Q you get by
 #      handing Stage 2 the same matrices as a per-SNP jackknife payload
 #   2. the per-SNP scale really is d_resid: SE scales as 1/sqrt(d_resid)
-#   3. the jackknife path is unchanged and still the default
+#   3. the jackknife path is unchanged and still selectable explicitly
 #   4. REFUSALS: wrong tau grid, wrong covariate set, wrong sample count,
 #      wrong phenotype, wrong LOCO predictor, missing d_resid, missing
 #      chromosome, metadata with no analysis block, unknown schema version
@@ -189,7 +190,10 @@ run_pooled <- function(prefix, ...) {
       sigma0_file = paste0(prefix, ".sigma0.tsv.gz"), ...)
 }
 run_jk <- function(prefix, ...) {
-  run(prefix, cov_file = paste0(prefix, ".cov.gz"), ...)
+  run(prefix, cov_source = "jackknife", cov_file = paste0(prefix, ".cov.gz"), ...)
+}
+run_default <- function(prefix, ...) {
+  run(prefix, ...)
 }
 
 fails <- function(expr, pattern) {
@@ -223,11 +227,13 @@ stopifnot(max(abs(res_p$location_se - se_exp[1] / sqrt(d_resid))) < 1e-12)
 stopifnot(max(abs(res_p$spread_se - se_exp[2] / sqrt(d_resid))) < 1e-12)
 cat("OK: SE = sqrt(a' Sigma_0 a / d_resid) exactly, across MAF 0.001 to 0.50\n")
 
-# 3. default is still the jackknife
-res_default <- suppressMessages(run_jk(pfx, tau_cov_estimator = "ols"))
-stopifnot(identical(unique(res_default$cov_source), "jackknife"))
+# 3. pooled is the default; explicit jackknife remains available
+res_default <- suppressMessages(run_default(pfx, tau_cov_estimator = "ols"))
+stopifnot(identical(unique(res_default$cov_source), "pooled"))
+res_explicit_jk <- suppressMessages(run_jk(pfx, tau_cov_estimator = "ols"))
+stopifnot(identical(unique(res_explicit_jk$cov_source), "jackknife"))
 stopifnot(identical(unique(res_p$cov_source), "pooled"))
-cat("OK: cov_source defaults to jackknife and is recorded in the output\n")
+cat("OK: cov_source defaults to pooled and explicit jackknife is recorded\n")
 
 # 7. the reference distribution
 stopifnot(identical(unique(res_p$ref_df_source), "pooled_sigma0_n_samples"))
@@ -243,6 +249,11 @@ stopifnot(abs(2 * pt(-z, N_PROD) / (2 * pnorm(-z)) - 1) < 1e-3)
 stopifnot(identical(unique(res_j$ref_df_source), "per_snp_satterthwaite"))
 cat(sprintf("OK: pooled reference t_%d; p differs from normal by %.2g at z=5.4513\n",
             N_PROD, abs(2 * pt(-z, N_PROD) / (2 * pnorm(-z)) - 1)))
+
+## An explicitly uncalibrated Q method must not be relabelled with a naive
+## chi-square p-value by the file wrapper.
+stopifnot(!("Q_pval" %in% names(res_default)))
+cat("OK: q_method = chisq_naive omits Q_pval rather than applying a fallback\n")
 
 # 6. GLS: stable, seed-free, and identical on repeat
 g1 <- suppressMessages(run_pooled(pfx, tau_cov_estimator = "gls"))
@@ -303,7 +314,10 @@ fails(suppressMessages(run_pooled(bad)), "schema version")
 bad <- file.path(tmp, "nosidecar"); write_stage1(bad); write_cov_meta(bad)
 fails(suppressMessages(run_pooled(bad)), "Missing pooled-covariance metadata")
 
-fails(suppressMessages(run(pfx, cov_source = "pooled")), "requires sigma0_file")
+missing_s0 <- file.path(tmp, "missing_sigma0")
+write_stage1(missing_s0); write_cov_meta(missing_s0)
+fails(suppressMessages(run(missing_s0, cov_source = "pooled")),
+      "requires the Stage 1")
 
 # ------------------------------------------------------------------
 # 5. caller assertions

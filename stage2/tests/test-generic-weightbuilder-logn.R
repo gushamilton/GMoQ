@@ -2,7 +2,6 @@
 # Test script: Log-normal GWAS (meanlog, sdlog)
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(ggplot2)
 

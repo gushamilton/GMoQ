@@ -23,8 +23,12 @@
 # count and no seed, and costs 8 KB per chromosome against 229-289 bytes per
 # variant.
 #
-# WHY THE JACKKNIFE PATH STAYS. Every published result used it. cov_source is a
-# switch, not a replacement, and "jackknife" remains the default.
+# WHY THE JACKKNIFE PATH STAYS. Every published result used it. The pooled
+# covariance is now the scan default because it is reproducible, positive
+# semi-definite and closely matches the individual-level HC0 reference on the
+# validated null path, but cov_source is still a switch and "jackknife" remains
+# available explicitly for loci or datasets where the pooled working-
+# independence assumption is not appropriate.
 #
 # WHY THIS REFUSES RATHER THAN WARNS. Sigma_v = Sigma_0 / d_resid holds only
 # when Sigma_0 was built from the same phenotype, covariate set, tau grid, LOCO

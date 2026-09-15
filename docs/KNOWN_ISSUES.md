@@ -24,9 +24,10 @@ tests, 18 Stage 2 tests.
 
 ## 2. The one substantive defect: tail calibration
 
-*(This section is about the block-jackknife covariance, which is still the
-default. The pooled covariance of section 10 does not have this defect: its
-degrees of freedom are 5e04 to 9e05 rather than 62, so its reference is normal.)*
+*(This section is about the explicitly selected block-jackknife covariance.
+The pooled covariance is the Stage 2 default; it does not have this defect:
+its degrees of freedom are 5e04 to 9e05 rather than 62, so its reference is
+normal.)*
 
 `SE_hat` is unbiased but **9% noisy** at `--blocks 65`. A noisy denominator is
 punished severely in the tail, because the ratio of nominal to actual error
@@ -424,9 +425,10 @@ Full analysis and verification: `fungwas_paper/docs/BP1_sample_match.md`.
 
 ## 10. The pooled cross-quantile covariance (new path, 2026-09-14)
 
-**A second covariance source, selectable from Stage 2 as
-`cov_source = "pooled"`. The block jackknife is unchanged and remains the
-default; every published result used it and this is not a one-way door.**
+**The pooled covariance is the Stage 2 default, selectable as
+`cov_source = "pooled"`. The block jackknife is unchanged and remains
+available explicitly as `cov_source = "jackknife"`; every published result
+used it and this is not a one-way door.**
 
 Stage 1 now also writes, per trait per chromosome,
 

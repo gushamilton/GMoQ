@@ -79,6 +79,33 @@ f0 <- estimate_rav(a_hat, v_hat, se_a, se_v, rep(0, M), trim = 0)
 stopifnot(near(f0$r_av, sum(a_hat * v_hat) / sum(a_hat^2 - se_a^2), 1e-12))
 ok("with cov = 0 it reduces to the dilution-corrected slope")
 
+## Trimming is defined on each variant's ratio contribution.  Make one variant
+## have a very large numerator but an ordinary ratio; numerator-only trimming
+## would discard it, while ratio trimming keeps it.
+Mtrim <- 1000L
+ratio_target <- seq(0.5, 1.5, length.out = Mtrim)
+a_trim <- c(rep(1, Mtrim), 10)
+sa_trim <- rep(0.1, Mtrim + 1L)
+v_trim <- c(ratio_target * (1 - sa_trim[1]^2), 10^2 - sa_trim[1]^2)
+sv_trim <- rep(0.1, Mtrim + 1L)
+trimmed <- estimate_rav(a_trim, v_trim, sa_trim, sv_trim,
+                        cov_mu_sigma2 = rep(0, Mtrim + 1L), trim = 0.1)
+num_trim <- a_trim * v_trim
+den_trim <- a_trim^2 - sa_trim^2
+ratio_trim <- num_trim / den_trim
+lim_trim <- quantile(ratio_trim, c(0.1, 0.9))
+keep_trim <- is.finite(ratio_trim) & ratio_trim >= lim_trim[1] &
+  ratio_trim <= lim_trim[2]
+expected_trim <- sum(num_trim[keep_trim]) / sum(den_trim[keep_trim])
+old_numerator_trim <- {
+  lim_old <- quantile(num_trim, c(0.1, 0.9))
+  keep_old <- num_trim >= lim_old[1] & num_trim <= lim_old[2]
+  sum(num_trim[keep_old]) / sum(den_trim[keep_old])
+}
+stopifnot(abs(trimmed$r_av - expected_trim) < 1e-12,
+          abs(trimmed$r_av - old_numerator_trim) > 1e-3)
+ok("trim removes extreme ratio contributions, not merely extreme numerators")
+
 stopifnot(inherits(try(estimate_rav(1:5, 1:5, rep(1, 5), rep(1, 5), rep(0, 5)),
                        silent = TRUE), "try-error"))
 ok("refuses fewer than 20 usable variants")
@@ -146,7 +173,13 @@ fake <- list(
   param_cov_upper = cbind(cov_beta_mu_beta_mu = se_a[1:P]^2,
                           cov_beta_mu_beta_sigma2 = cov_l[1:P],
                           cov_beta_sigma2_beta_sigma2 = se_v[1:P]^2))
+df_report <- rep(37, P)
+fake$param_ref_dist <- "t"
+fake$param_ref_df <- rbind(beta_mu = df_report, beta_sigma2 = df_report)
+fake$P_params <- rbind(beta_mu = 2 * pt(-abs(a_hat[1:P] / se_a[1:P]), df_report),
+                       beta_sigma2 = 2 * pt(-abs(v_hat[1:P] / se_v[1:P]), df_report))
 colnames(fake$params) <- colnames(fake$SE_params) <- paste0("rs", 1:P)
+colnames(fake$param_ref_df) <- colnames(fake$P_params) <- paste0("rs", 1:P)
 rep1 <- dispersion_report(fake, r_av = r_hat, se_rav = se_r, N = 461320, maf = 0.3)
 stopifnot(nrow(rep1) == P)
 stopifnot(all(c("beta_sigma2", "z_sigma2", "beta_sigma2_resid", "z_sigma2_resid",
@@ -154,6 +187,19 @@ stopifnot(all(c("beta_sigma2", "z_sigma2", "beta_sigma2_resid", "z_sigma2_resid"
 ok("returns uncorrected and corrected columns side by side, plus the guard")
 stopifnot(near(rep1$cov_mu_sigma2, cov_l[1:P], 1e-12))
 ok("picks the mu/sigma2 covariance out of param_cov_upper by name")
+stopifnot(near(rep1$p_sigma2,
+               2 * pt(-abs(v_hat[1:P] / se_v[1:P]), df_report), 1e-15),
+          near(rep1$p_sigma2_resid,
+               2 * pt(-abs(rep1$z_sigma2_resid), df_report), 1e-15))
+ok("dispersion_report reuses the fit's calibrated t reference for raw and residual p-values")
+fake_no_ref <- fake
+fake_no_ref$P_params <- NULL
+fake_no_ref$param_ref_df <- NULL
+fake_no_ref$param_ref_dist <- "none"
+rep_no_ref <- dispersion_report(fake_no_ref, r_av = r_hat, N = 461320, maf = 0.3)
+stopifnot(all(is.na(rep_no_ref$p_sigma2)),
+          all(is.na(rep_no_ref$p_sigma2_resid)))
+ok("dispersion_report omits p-values when the fit has no supported reference")
 stopifnot(near(rep1$G_skew_guard,
                dispersion_skew_guard(rep1$z_mu, N = 461320, maf = 0.3), 1e-12))
 ok("guard column matches dispersion_skew_guard")

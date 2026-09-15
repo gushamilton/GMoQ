@@ -3,7 +3,6 @@
 # First 60 SNPs have allele frequencies + phenotype influenced by same U
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(ggplot2)
 

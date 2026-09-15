@@ -140,6 +140,7 @@ run_stage2 <- function(prefix, ...) {
     stage1_file = paste0(prefix, ".stage1.tsv.gz"),
     W = W,
     se_mode = "tau_cov",
+    cov_source = "jackknife",
     cov_file = paste0(prefix, ".cov.gz"),
     tau_cov_estimator = "ols",
     q_method = "chisq_naive",
@@ -209,9 +210,10 @@ i <- which.min(p_norm)
 cat(sprintf("OK: at the sharpest SNP normal %.3e -> t_%d %.3e -> per-SNP t_%.0f %.3e\n",
             p_norm[i], n_blocks - 1L, p_naive[i], res$location_df[i], res$location_p[i]))
 
-# Q untouched
-stopifnot("Q" %in% names(res), "Q_pval" %in% names(res), all(is.finite(res$Q)))
-cat("OK: Q / Q_pval still present and finite\n")
+# Q is still returned, but q_method = chisq_naive deliberately has no p-value.
+# The file wrapper must not add an uncalibrated chi-square fallback.
+stopifnot("Q" %in% names(res), !("Q_pval" %in% names(res)), all(is.finite(res$Q)))
+cat("OK: Q is returned and uncalibrated Q_pval is omitted\n")
 
 # ------------------------------------------------------------------
 # 4. no d_resid column: visible fallback, not a silent one

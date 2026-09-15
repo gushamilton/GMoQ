@@ -2,7 +2,6 @@
 # Test script for two-component Normal mixture GWAS
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(ggplot2)
 

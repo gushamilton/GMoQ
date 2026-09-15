@@ -2,7 +2,6 @@
 # Test script for two-component Normal mixture with mean, variance, and membership effects
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(ggplot2)
 

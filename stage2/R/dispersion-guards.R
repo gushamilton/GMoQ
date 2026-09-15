@@ -251,9 +251,17 @@ estimate_rav <- function(beta_mu, beta_sigma2, se_mu, se_sigma2,
 
   keep <- rep(TRUE, length(num))
   if (trim > 0) {
-    # trim on the per-variant ratio contribution, not on either sum alone
-    lim <- stats::quantile(num, c(trim, 1 - trim), na.rm = TRUE)
-    keep <- num >= lim[1] & num <= lim[2]
+    # Trim the per-variant ratio contribution, not the numerator alone.  The
+    # estimator is a ratio of two corrected sums, so a large numerator is not
+    # necessarily influential when its denominator is large as well.
+    ratio <- num / den
+    finite <- is.finite(ratio)
+    if (sum(finite) < 20L) {
+      stop("Fewer than 20 finite per-variant ratio contributions remain after ",
+           "the r_av trim denominator check.")
+    }
+    lim <- stats::quantile(ratio[finite], c(trim, 1 - trim), na.rm = TRUE)
+    keep <- finite & ratio >= lim[1] & ratio <= lim[2]
   }
   num <- num[keep]; den <- den[keep]
   if (!is.null(blk)) blk <- blk[keep]
@@ -406,10 +414,19 @@ residualise_dispersion <- function(beta_mu, beta_sigma2, se_mu, se_sigma2,
 #'   Default \code{TRUE}. Setting it \code{FALSE} is a deliberate act and warns
 #'   prominently.
 #' @param debias Passed to \code{\link{correct_dispersion_skew}}.
+#' @param df Optional degrees of freedom for the parameter reference. When
+#'   omitted, the calibrated reference carried by \code{fit} is used. If the
+#'   fit has no reference distribution and \code{df} is not supplied, p-values
+#'   are returned as \code{NA} rather than silently using a Normal reference.
+#'   The same df is used for the derived residual and skewness-corrected
+#'   statistics; their extra estimated-correction uncertainty is represented in
+#'   their SEs, while this shared t reference is an approximation.
 #' @param mu_name,sigma2_name Parameter row names to use.
 #'
-#' @return A data frame with one row per variant. When the skewness correction is
-#'   applied, \code{attr(result, "na_counts")} carries the count of variants left
+#' @return A data frame with one row per variant. The uncorrected p-value reuses
+#'   the calibrated reference carried by \code{fit}; when no supported reference
+#'   is present it is \code{NA}. When the skewness correction is applied,
+#'   \code{attr(result, "na_counts")} carries the count of variants left
 #'   uncorrected and why.
 #' @export
 dispersion_report <- function(fit, r_av = NULL, se_rav = 0, N = NULL,
@@ -417,7 +434,8 @@ dispersion_report <- function(fit, r_av = NULL, se_rav = 0, N = NULL,
                               eaf_orientation = NULL, mu3_over_var = NULL,
                               W_sd = NULL, w_sd_ratio = 1, taus = NULL,
                               check_design = TRUE, debias = TRUE,
-                              mu_name = "beta_mu", sigma2_name = "beta_sigma2") {
+                              mu_name = "beta_mu", sigma2_name = "beta_sigma2",
+                              df = NULL) {
   if (is.null(fit$params) || is.null(fit$SE_params)) {
     stop("fit must carry params and SE_params from param_gwas().")
   }
@@ -443,15 +461,54 @@ dispersion_report <- function(fit, r_av = NULL, se_rav = 0, N = NULL,
     cl <- rep(0, length(a))
   }
 
+  ## The fit already carries the calibrated reference used by param_gwas().
+  ## Re-use its p-values when no override is requested, and thread its degrees
+  ## of freedom into every derived dispersion statistic.  A report assembled
+  ## from an old fit with no reference must remain explicit: pnorm() here would
+  ## recreate the silent tail error this wrapper is intended to prevent.
+  fit_df <- NULL
+  if (is.null(df) && !is.null(fit$param_ref_df)) {
+    ref_df <- as.matrix(fit$param_ref_df)
+    if (!is.null(rownames(ref_df)) && sigma2_name %in% rownames(ref_df)) {
+      fit_df <- as.numeric(ref_df[sigma2_name, ])
+    }
+  }
+  report_df <- if (!is.null(df)) as.numeric(df) else fit_df
+  if (!is.null(report_df)) {
+    if (length(report_df) == 1L) report_df <- rep(report_df, length(v))
+    if (length(report_df) != length(v)) {
+      stop("df must be length 1 or the number of fitted variants.")
+    }
+  } else if (is.null(df) && identical(fit$param_ref_dist, "normal")) {
+    ## Explicit normal-reference fits are retained for compatibility, but are
+    ## represented as df = Inf so downstream helpers use the same reference.
+    report_df <- rep(Inf, length(v))
+  }
+
+  p_sigma2 <- rep(NA_real_, length(v))
+  if (!is.null(df)) {
+    p_sigma2 <- 2 * stats::pt(-abs(v / sv), df = report_df)
+  } else if (!is.null(fit$P_params)) {
+    pp <- as.matrix(fit$P_params)
+    if (!is.null(rownames(pp)) && sigma2_name %in% rownames(pp)) {
+      p_sigma2 <- as.numeric(pp[sigma2_name, ])
+    }
+  } else if (!is.null(report_df)) {
+    p_sigma2 <- 2 * stats::pt(-abs(v / sv), df = report_df)
+  }
+
   out <- data.frame(variant = colnames(fit$params),
                     beta_mu = a, se_mu = sa, z_mu = a / sa,
                     beta_sigma2 = v, se_sigma2 = sv, z_sigma2 = v / sv,
                     cov_mu_sigma2 = cl,
-                    p_sigma2 = 2 * stats::pnorm(-abs(v / sv)),
+                    p_sigma2 = p_sigma2,
                     stringsAsFactors = FALSE)
 
   if (!is.null(r_av)) {
-    out <- cbind(out, residualise_dispersion(a, v, sa, sv, cl, r_av, se_rav))
+    rr <- residualise_dispersion(a, v, sa, sv, cl, r_av, se_rav,
+                                 df = report_df)
+    if (is.null(report_df)) rr$p_sigma2_resid[] <- NA_real_
+    out <- cbind(out, rr)
   }
 
   nac <- NULL
@@ -488,7 +545,9 @@ dispersion_report <- function(fit, r_av = NULL, se_rav = 0, N = NULL,
     cs  <- correct_dispersion_skew(a, v, sa, sv, cl, eaf = eaf,
                                    eaf_orientation = eaf_orientation,
                                    mu3_over_var = mu3_over_var,
-                                   debias = debias, w_sd_ratio = w_sd_ratio)
+                                   debias = debias, w_sd_ratio = w_sd_ratio,
+                                   df = report_df)
+    if (is.null(report_df)) cs$p_sigma2_skewcorr[] <- NA_real_
     nac <- attr(cs, "na_counts")
     out <- cbind(out, cs)
   }

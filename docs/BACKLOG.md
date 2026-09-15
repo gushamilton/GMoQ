@@ -23,9 +23,9 @@ Status key: **DONE** (committed, with evidence) / **OPEN** (known, not done) /
 
 | # | Item | Status |
 |---|---|---|
-| B1 | **Should `cov_source` default to pooled?** Currently jackknife. The pooled-OLS vs jackknife-OLS comparison - the one that decides it - has never been measured. `FINDINGS_pooled_dispersion.md`'s jackknife claim rests on a table with no pooled-OLS column. Simulation running on `sim/covsource`. | **OPEN** |
+| B1 | **Should `cov_source` default to pooled?** The validated pooled path is now the default, with `cov_source = "jackknife"` retained explicitly for lead loci or datasets where the pooled working-independence assumption is not appropriate. | **RESOLVED** |
 | B2 | **Does empirical `W` help anywhere?** Settled as no overall (`EMPIRICAL_W.md`), but it helps chi2(4) under OLS by 83x while still leaving 108x nominal. Whether that is worth a mode is undecided. | **OPEN** |
-| B3 | **Q calibration on the jackknife path.** `Q_CALIBRATION` verified with an exact Wishart Sigma independent of `b`. A block jackknife is neither exactly Wishart nor independent of `b`, and its `nu` comes from a law fitted for a scalar contrast. The default path rests on derivation, not measurement. | **UNVERIFIED** |
+| B3 | **Q calibration on the jackknife path.** `Q_CALIBRATION` verified with an exact Wishart Sigma independent of `b`. A block jackknife is neither exactly Wishart nor independent of `b`, and its `nu` comes from a law fitted for a scalar contrast. The explicit jackknife path rests on derivation, not measurement. | **UNVERIFIED** |
 | B4 | **Q on int8-quantised Sigma.** GLS needs an inverse the stored covariance is documented as unfit for. Bounds where the guard can be trusted. | **UNKNOWN** |
 
 ## C. Claims in the docs that need checking

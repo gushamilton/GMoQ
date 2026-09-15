@@ -20,7 +20,8 @@ dispersion_report(
   check_design = TRUE,
   debias = TRUE,
   mu_name = "beta_mu",
-  sigma2_name = "beta_sigma2"
+  sigma2_name = "beta_sigma2",
+  df = NULL
 )
 }
 \arguments{
@@ -71,11 +72,21 @@ prominently.}
 
 \item{debias}{Passed to \code{\link{correct_dispersion_skew}}.}
 
+\item{df}{Optional degrees of freedom for the parameter reference. When
+omitted, the calibrated reference carried by \code{fit} is used. If the fit
+has no reference distribution and \code{df} is not supplied, p-values are
+returned as \code{NA} rather than silently using a Normal reference. The same
+df is used for derived residual and skewness-corrected statistics; their extra
+estimated-correction uncertainty is represented in their SEs, while this
+shared t reference is an approximation.}
+
 \item{mu_name, sigma2_name}{Parameter row names to use.}
 }
 \value{
-A data frame with one row per variant. When the skewness correction is
-applied, \code{attr(result, "na_counts")} carries the count of variants left
+A data frame with one row per variant. The uncorrected p-value reuses the
+calibrated reference in \code{fit}; when no supported reference is present it
+is \code{NA}. When the skewness correction is applied,
+\code{attr(result, "na_counts")} carries the count of variants left
 uncorrected and why.
 }
 \description{
@@ -108,4 +119,3 @@ column names. By default this function verifies \code{fit$W} elementwise with
 1.0 under OLS), and \code{w_sd_ratio} having to match the \code{sd} that built
 \code{W}.
 }
-

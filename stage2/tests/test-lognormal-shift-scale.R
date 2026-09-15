@@ -17,7 +17,6 @@
 #   3) param_gwas()
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(ggplot2)
 

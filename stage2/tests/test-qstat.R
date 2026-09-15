@@ -2,7 +2,6 @@
 # Test: Model comparison using Q statistic
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(fitdistrplus)  # provides fitdist() used below
 

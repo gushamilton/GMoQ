@@ -69,7 +69,8 @@ cat("Running Stage 2 (SE Mode: dwls)...\n")
 fit_dwls <- param_gwas_from_file(stage1_file, W = W, se_mode = "dwls")
 
 cat("Running Stage 2 (SE Mode: tau_cov - GOLD STANDARD)...\n")
-fit_taucov <- param_gwas_from_file(stage1_file, W = W, se_mode = "tau_cov", cov_file = cov_file)
+fit_taucov <- param_gwas_from_file(stage1_file, W = W, se_mode = "tau_cov",
+                                   cov_source = "jackknife", cov_file = cov_file)
 
 # -------------------------
 # 3. Compare SEs

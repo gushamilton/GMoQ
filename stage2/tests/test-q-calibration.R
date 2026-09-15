@@ -1,8 +1,9 @@
 # ============================================================
 # Test: calibrated null distribution for the lack-of-fit statistic Q
 #
-#  1. the DEFAULT behaviour is unchanged (chisq_naive reproduces the old
-#     p-value exactly) -- the published results must stay reproducible;
+#  1. the DEFAULT behaviour remains the calibrated saddlepoint path, while
+#     explicit chisq_naive preserves the old Q statistic without fabricating a
+#     p-value -- the published estimates must stay reproducible;
 #  2. the C++ helper agrees with a plain-R reference implementation;
 #  3. the covariance upper triangle is read in ROW-major order;
 #  4. the calibrated p-values are ordered sensibly and lie in [0, 1].

@@ -2,7 +2,6 @@
 # Test script for vQTL detection with fgwas
 # ============================================================
 
-devtools::document()
 library(fungwasStage2)
 library(ggplot2)
 

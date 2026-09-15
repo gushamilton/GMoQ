@@ -6,7 +6,7 @@ This R package implements "Stage 2" of the FungWas framework: mapping quantile G
 
 ## Key Features
 -   **Flexible Mapping:** Map quantile effects to ANY parametric model where you can derive $dQ(\tau) / d\theta$.
--   **Accurate SEs:** Uses rigorous Jackknife-based covariance from Stage 1 (`tau_cov` mode) or efficient approximations.
+-   **Accurate SEs:** Uses the validated pooled Stage 1 covariance sidecar by default (`cov_source = "pooled"`) or the per-SNP delete-one-block jackknife when selected explicitly.
 -   **Pre-built Models:** Includes helpers for:
     -   vQTLs (`make_weights_vqtl`)
     -   Normal Mixtures (`make_weights_normal_mixture`)
@@ -84,6 +84,22 @@ results <- param_gwas_from_file(
   stage1_file = "results/chr22.stage1.tsv.gz",
   W = W,
   se_mode = "tau_cov",
+  sigma0_file = "results/chr22.sigma0.tsv.gz"
+)
+```
+
+The pooled covariance is the default for `se_mode = "tau_cov"`; it is checked
+against the Stage 1 phenotype, covariates, tau grid and sample metadata before
+use. When `sigma0_file` is omitted, Stage 2 looks for the conventional sibling
+`*.sigma0.tsv.gz` sidecar. To reproduce an analysis that relies on the per-SNP delete-one-block
+covariance, select it explicitly:
+
+```r
+results <- param_gwas_from_file(
+  stage1_file = "results/chr22.stage1.tsv.gz",
+  W = W,
+  se_mode = "tau_cov",
+  cov_source = "jackknife",
   cov_file = "results/chr22.cov.gz"
 )
 ```
@@ -98,7 +114,7 @@ results <- param_gwas_from_file(
   stage1_file = "path/to/stage1.tsv.gz",
   W = my_weight_matrix,
   se_mode = "tau_cov",
-  cov_file = "path/to/stage1.cov.gz"
+  sigma0_file = "path/to/stage1.sigma0.tsv.gz"
 )
 ```
 
@@ -109,6 +125,7 @@ results <- param_gwas_from_file(
   stage1_file = "path/to/stage1.tsv.gz",
   W = my_weight_matrix,
   se_mode = "tau_cov",
+  cov_source = "jackknife",
   cov_file = "path/to/stage1.cov.gz",
   unsafe_skip_cov_ids = TRUE
 )
@@ -187,7 +204,7 @@ Convenience wrapper that reads Stage 1 and (optionally) covariance files.
 ```r
 model_scores <- param_gwas_multi_from_file(
   stage1_file = "path/to/stage1.tsv.gz",
-  cov_file = "path/to/stage1.cov.gz",
+  sigma0_file = "path/to/stage1.sigma0.tsv.gz",
   W_list = W_list,
   N = 20000
 )
@@ -220,8 +237,8 @@ The Stage 2 output includes per-SNP parameter estimates and diagnostics. For sco
 - **beta_mu_se:** Standard error of `beta_mu`.
 - **beta_sigma2:** Estimated effect of the SNP on the log-variance (variance parameter) of the target distribution.
 - **beta_sigma2_se:** Standard error of `beta_sigma2`.
-- **Q:** Heterogeneity (misfit) statistic, computed as a quadratic form of residual quantile slopes, testing whether the SNP affects *any* parameters of the chosen model. Under standard large-sample assumptions this is approximately $\chi^2_{df}$ with $df = T - K$.
-- **Q_pval:** P-value for the Q statistic under the $\chi^2$ reference distribution.
+- **Q:** Heterogeneity (misfit) statistic, computed as a quadratic form of residual quantile slopes, testing whether the SNP affects *any* parameters of the chosen model. Its reference depends on the estimator and covariance source.
+- **Q_pval:** Calibrated lack-of-fit p-value when the selected `q_method` has a supported reference. The default OLS path uses a covariance-aware weighted chi-square mixture; the GLS path uses the Hotelling F reference when covariance degrees of freedom are known. An explicitly naive or unsupported reference omits `Q_pval` rather than silently applying $\chi^2_{T-K}$.
 
 ## Testing
 Proof / Validation scripts are located in `tests/`. These are standalone R scripts verifying parameter recovery on simulated data.

@@ -42,6 +42,7 @@ err <- tryCatch({
     stage1_file = stage1_file,
     W = W,
     se_mode = "tau_cov",
+    cov_source = "jackknife",
     cov_file = cov_file
   )
   NULL
