@@ -99,8 +99,8 @@ def main() -> None:
     core.require_cpp_extension("density repair probe")
     out = os.path.abspath(args.out)
     run_id = args.run_id or os.path.basename(out.rstrip(os.sep))
-    if os.path.exists(out) and os.listdir(out):
-        raise SystemExit(f"refusing non-empty output directory: {out}")
+    if os.path.exists(out):
+        raise SystemExit(f"refusing existing output directory: {out}")
     stage_dir = os.path.join(out, "stage1")
     truth_dir = os.path.join(out, "truth")
     os.makedirs(stage_dir, exist_ok=True)
