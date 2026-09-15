@@ -860,6 +860,20 @@ def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
 
 def match_samples(bgen_samples: list, sample_ids: list):
     """Match phenotype samples to BGEN samples and return indices."""
+    duplicated_bgen = [sample for sample, count in Counter(bgen_samples).items() if count > 1]
+    if duplicated_bgen:
+        preview = ", ".join(map(str, duplicated_bgen[:5]))
+        raise ValueError(
+            f"BGEN sample IDs are not unique ({len(duplicated_bgen)} duplicates; "
+            f"examples: {preview}). Refusing ambiguous sample matching."
+        )
+    duplicated_pheno = [sample for sample, count in Counter(sample_ids).items() if count > 1]
+    if duplicated_pheno:
+        preview = ", ".join(map(str, duplicated_pheno[:5]))
+        raise ValueError(
+            f"Phenotype sample IDs are not unique ({len(duplicated_pheno)} duplicates; "
+            f"examples: {preview}). Refusing to analyse a sample more than once."
+        )
     sample_to_idx = {s: i for i, s in enumerate(bgen_samples)}
     matched_indices = [sample_to_idx.get(fid) for fid in sample_ids]
     valid_mask = np.array([idx is not None for idx in matched_indices])
