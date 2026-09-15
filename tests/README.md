@@ -2,9 +2,9 @@
 
 The historical tier scripts are regression checks. The compact paired
 known-truth pilot is documented in [`validity_pilot/README.md`](validity_pilot/README.md)
-and is the relevant diagnostic for scientific validity. The former
-`docs/TEST_SUITE.md` link is not present in this checkout; do not treat the
-legacy tier bands below as a scientific validity certificate.
+and is the relevant diagnostic for scientific validity. The historical suite
+design is retained in [`docs/TEST_SUITE.md`](../docs/TEST_SUITE.md); do not treat
+the legacy tier bands below as a scientific validity certificate.
 
 Four tiers, each runnable on its own:
 
