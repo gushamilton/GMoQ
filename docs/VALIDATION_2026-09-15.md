@@ -63,6 +63,10 @@ peak memory; additive pooled Stage 2 took about 1.8 seconds. These are timings
 for the stated small variant panel, not genome-wide throughput estimates.
 Empirical effect truth is unknown, so this establishes execution and traceable
 preprocessing rather than unbiasedness.
+An exploratory two-parameter fit using the paper's cached BMI weights is
+excluded from validated empirical evidence: those weights were built on raw
+BMI without this log-BMI LOCO preprocessing. The matched baseline has been
+generated, but its two-parameter fit has not yet been run.
 
 ## Statistical findings
 
