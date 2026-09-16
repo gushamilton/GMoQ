@@ -1,0 +1,44 @@
+# Part 1: between-run agreement of point estimates (Pearson r on shared SNPs)
+param	pair	r_beta	r_z	med_se_ratio
+beta_left	a vs b	0.92779	0.93161	1.0950
+beta_left	a vs d	0.93046	0.93417	1.0951
+beta_left	b vs d	0.99993	0.99993	1.0001
+beta_left	b vs c	0.99510	0.99572	1.0122
+beta_left	c vs d	0.99515	0.99569	0.9881
+beta_right	a vs b	0.87910	0.90965	1.1467
+beta_right	a vs d	0.88424	0.91342	1.1470
+beta_right	b vs d	0.99978	0.99983	1.0003
+beta_right	b vs c	0.99025	0.99287	1.0194
+beta_right	c vs d	0.99022	0.99273	0.9812
+gamma	a vs b	0.99325	0.99400	1.0037
+gamma	a vs d	0.98505	0.98610	1.0171
+gamma	b vs d	0.98878	0.98929	1.0133
+gamma	b vs c	0.99929	0.99946	1.0002
+gamma	c vs d	0.98783	0.98888	1.0131
+
+# Part 2: lambda before and after masking 1 Mb around REGENIE |z|>=5 (84 positions;
+# 12,436 of 17,550 variants kept). Masking the signal does not lower lambda in any arm.
+param	run	lambda_all	lambda_nosignal
+beta_left	a	1.3527	1.3836
+beta_left	b	1.4195	1.4731
+beta_left	c	1.4221	1.4599
+beta_left	d	1.4200	1.4724
+beta_right	a	1.3604	1.3540
+beta_right	b	1.4869	1.4997
+beta_right	c	1.4778	1.5049
+beta_right	d	1.4858	1.4987
+gamma	a	1.2671	1.2509
+gamma	b	1.2650	1.2587
+gamma	c	1.2560	1.2379
+gamma	d	1.2239	1.2065
+beta_left	permuted	0.9045	0.9175
+beta_right	permuted	0.9928	0.9874
+gamma	permuted	0.9990	0.9926
+
+# Part 3: gamma, (d) against (b) -- estimates shrink faster than SEs, so this is
+# not the SE-inflation artefact that produced the subtraction's lambda advantage.
+statistic	value
+median_abs_beta_ratio_d_over_b	0.9850
+regression_slope_d_on_b	0.9711
+median_se_ratio_d_over_b	0.9869
+median_chisq_ratio_d_over_b	0.9675

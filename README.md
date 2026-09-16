@@ -197,6 +197,15 @@ The default grid is 45 quantiles from 0.02 to 0.98, with 1,000 jackknife blocks.
 When supplying REGENIE LOCO predictions, Stage 1 uses `--loco-scale regression`
 by default to convert predictions to the phenotype's scale before subtraction.
 
+`--loco-mode covariate` instead leaves the phenotype unadjusted and appends the
+per-chromosome prediction to the basis the RIF columns and the genotype are
+residualised on. A RIF/UQR estimand is defined against the *unconditional*
+distribution of `Y`, so subtracting a prediction from `Y` redefines the target
+rather than removing a nuisance; residualising the influence-function columns
+does not. On testosterone chr22 this recovers the precision and the REGENIE
+agreement of a no-LOCO scan. See [`docs/LOCO_AS_COVARIATE.md`](docs/LOCO_AS_COVARIATE.md).
+The default remains `subtract`, so nothing changes silently.
+
 See [Stage 1 Documentation](stage1/README.md) for full CLI options.
 
 ### Optional: Use REGENIE for ultra-fast Stage 1

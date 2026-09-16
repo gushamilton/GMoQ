@@ -82,6 +82,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+#: ``--loco-mode`` values.
+#:
+#: ``subtract`` (the default, and the only historical behaviour) builds the RIF
+#: on ``Y - c*L(chr)``.  ``covariate`` leaves ``Y`` unadjusted and appends
+#: ``L(chr)`` as an extra column of the basis the RIF columns -- and the
+#: genotype -- are residualised on.  See ``compute_chr_rif_residuals`` and
+#: ``docs/LOCO_AS_COVARIATE.md``.
+LOCO_MODE_SUBTRACT = "subtract"
+LOCO_MODE_COVARIATE = "covariate"
+LOCO_MODES = (LOCO_MODE_SUBTRACT, LOCO_MODE_COVARIATE)
+
 #: ``--cov-mode`` values.
 #:
 #: ``full`` (the default, and the only historical behaviour) writes the per-SNP
@@ -1408,16 +1419,59 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
     return compute_s, write_s
 
 
+def _loco_column_for_chr(loco_predictions: dict[str, dict[str, np.ndarray]],
+                         pheno_cols: list[str], chrom_key: str,
+                         valid_mask: np.ndarray) -> np.ndarray:
+    """The chromosome's LOCO prediction on the analysed rows, as one basis column.
+
+    Under ``--loco-mode covariate`` every phenotype in a multi-phenotype run
+    shares one residualising basis ``Q``, because ``Q`` also projects the
+    genotype.  REGENIE predictions are per trait, so a multi-phenotype run
+    would need one basis per trait; that is refused upstream in ``main``.
+    """
+    col = pheno_cols[0]
+    per_chr = loco_predictions[col]
+    if chrom_key not in per_chr:
+        raise ValueError(f"Chromosome {chrom_key} missing from LOCO predictions for phenotype '{col}'")
+    return np.asarray(per_chr[chrom_key], dtype=np.float64)[valid_mask]
+
+
 def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np.ndarray],
                               X_full: np.ndarray, taus: np.ndarray,
                               loco_predictions: Optional[dict[str, dict[str, np.ndarray]]],
                               chrom: Optional[str], valid_mask: np.ndarray,
                               loco_scales: Optional[dict[str, float]] = None,
-                              density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
+                              density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN,
+                              loco_mode: str = LOCO_MODE_SUBTRACT
                               ) -> tuple[list[np.ndarray], np.ndarray, list[np.ndarray]]:
-    """Build residualized RIF matrices for a chromosome, optionally using LOCO-adjusted phenotypes."""
+    """Build residualized RIF matrices for a chromosome, handling LOCO per ``loco_mode``.
+
+    ``subtract`` (historical default) forms ``Y - c*L(chr)`` and builds the RIF on
+    that.  ``covariate`` leaves ``Y`` alone and appends ``L(chr)`` to the
+    residualising basis instead, so the RIF is built on the raw unconditional
+    distribution of ``Y`` and each influence-function column -- and, through the
+    same ``Q``, the genotype -- is residualised on ``[X, L(chr)]``.
+
+    The distinction matters because a RIF/UQR estimand is defined against the
+    *unconditional* distribution of ``Y``: ``RIF_i(tau) = q_tau + (tau -
+    1{Y_i <= q_tau}) / f(q_tau)`` depends on ``Y`` only through each sample's
+    position relative to the population's tau-th quantile.  Changing ``Y`` by a
+    genotype-independent term therefore moves ``q_tau``, ``f(q_tau)`` and every
+    indicator, i.e. it redefines the target rather than removing a nuisance.
+    That is unlike a mean GWAS, where the same subtraction leaves the slope
+    untouched and only shrinks residual variance.
+    """
     if loco_predictions is None:
         y_values_chr = {col: y_values_full[col][valid_mask] for col in pheno_cols}
+        X_chr = X_full[valid_mask]
+    elif loco_mode == LOCO_MODE_COVARIATE:
+        chrom_key = normalize_chr_label(chrom)
+        y_values_chr = {col: y_values_full[col][valid_mask] for col in pheno_cols}
+        # The scale factor is deliberately not applied: a covariate's column span
+        # -- and hence the projection -- is invariant to rescaling it, so
+        # --loco-scale has no effect in this mode.
+        loco_col = _loco_column_for_chr(loco_predictions, pheno_cols, chrom_key, valid_mask)
+        X_chr = np.column_stack([X_full[valid_mask], loco_col])
     else:
         chrom_key = normalize_chr_label(chrom)
         y_values_chr = {}
@@ -1428,9 +1482,10 @@ def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np
             scale = 1.0 if loco_scales is None else loco_scales.get(col, 1.0)
             y_values_chr[col] = y_values_full[col] - scale * per_chr[chrom_key]
         y_values_chr = {col: y_values_chr[col][valid_mask] for col in pheno_cols}
+        X_chr = X_full[valid_mask]
 
     rif_resid_list, q_chr, q_tau_list = build_rif_residuals(
-        y_values_chr, pheno_cols, X_full[valid_mask], taus,
+        y_values_chr, pheno_cols, X_chr, taus,
         density_method=density_method
     )
     return rif_resid_list, q_chr, q_tau_list
@@ -1486,6 +1541,19 @@ def main():
                              "exact when REGENIE's step-1 covariates explain little of Y; "
                              "'none' subtracts as-is (pre-v0.4.0 behaviour); or give a number "
                              "to use it verbatim.")
+    parser.add_argument('--loco-mode', dest='loco_mode', default=LOCO_MODE_SUBTRACT,
+                        choices=list(LOCO_MODES),
+                        help="How the REGENIE .loco prediction enters the model. "
+                             "'subtract' (default, historical behaviour) builds the RIF "
+                             "on Y - c*L(chr). 'covariate' leaves Y unadjusted and "
+                             "appends L(chr) to the covariate basis, so each RIF column "
+                             "and the genotype are residualised on [X, L(chr)]. RIF/UQR "
+                             "estimands are defined against the unconditional distribution "
+                             "of Y, so subtracting L changes q_tau, f(q_tau) and every "
+                             "indicator -- it redefines the target rather than removing a "
+                             "nuisance -- whereas residualising the influence-function "
+                             "columns does not. --loco-scale is ignored under 'covariate': "
+                             "a projection is invariant to rescaling the column.")
     parser.add_argument('--loco-preds', dest='loco_preds', default=None,
                         help='REGENIE step1 LOCO predictions (for future use)')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
@@ -1619,6 +1687,9 @@ def main():
                          "drop it or use a single --pheno-col.")
     if args.panel_kernel and args.panel_size < 1:
         raise ValueError("--panel-size must be >= 1")
+    if args.loco_mode == LOCO_MODE_COVARIATE and not args.loco_preds:
+        raise ValueError("--loco-mode covariate needs --loco-preds; without a "
+                         "prediction there is no column to add to the basis.")
     if args.fused_finalize and len(pheno_cols) > 1:
         raise ValueError("--fused-finalize supports a single phenotype only; "
                          "drop it or use one --pheno-col.")
@@ -1639,6 +1710,13 @@ def main():
         # covariance sidecar can name the predictor that produced it. A Sigma_0
         # built without the LOCO adjustment, or with another trait's, is wrong in
         # exactly the silent way the covariate set is.
+        if args.loco_mode == LOCO_MODE_COVARIATE and len(pheno_cols) > 1:
+            raise ValueError(
+                "--loco-mode covariate supports a single phenotype per run. The "
+                "residualising basis Q is shared across phenotypes because it also "
+                "projects the genotype, but REGENIE LOCO predictions are per trait, "
+                "so several traits would need several bases. Run them separately."
+            )
         loco_files = resolve_loco_files(args.loco_preds, pheno_cols)
         loco_predictions, loco_valid_mask = load_loco_predictions(args.loco_preds, pheno_cols, sample_aliases)
         loco_scales = None  # filled in after the sample mask is applied
@@ -1654,11 +1732,20 @@ def main():
         # that survive the later BGEN sample match. The factor is a property of the
         # phenotype's scale, not of the analysed subset, so the difference is immaterial
         # (0.2% for log_bmi: 484,460 rows vs 461,320).
-        loco_scales = {
-            col: resolve_loco_scale(args.loco_scale, y_values_full[col], loco_predictions[col], col)
-            for col in pheno_cols
-        }
-        log_mem("LOCO predictions loaded; RIFs will be recomputed per chromosome on Y - LOCO(chr)")
+        if args.loco_mode == LOCO_MODE_COVARIATE:
+            # No scale is resolved: the projection onto span([X, L]) does not
+            # change if L is rescaled, so resolve_loco_scale would only emit a
+            # factor and a variance warning that describe an adjustment this
+            # mode never makes.
+            loco_scales = None
+            log_mem("LOCO predictions loaded; Y is left unadjusted and L(chr) enters "
+                    "the residualising basis per chromosome (--loco-mode covariate)")
+        else:
+            loco_scales = {
+                col: resolve_loco_scale(args.loco_scale, y_values_full[col], loco_predictions[col], col)
+                for col in pheno_cols
+            }
+            log_mem("LOCO predictions loaded; RIFs will be recomputed per chromosome on Y - LOCO(chr)")
     # NB: the RIF and the covariate basis are NOT built here. They are built after
     # the BGEN sample match below, on exactly the rows that will be analysed. See
     # the comment at that call site.
@@ -1880,10 +1967,15 @@ def main():
                 total_compute += compute_s
                 total_write += write_s
 
-                log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
+                if args.loco_mode == LOCO_MODE_COVARIATE:
+                    log_mem(f"Adding the LOCO prediction for chromosome {variant_chr} "
+                            f"to the residualising basis")
+                else:
+                    log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
                 RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
                     pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                    loco_scales, density_method=args.density_method
+                    loco_scales, density_method=args.density_method,
+                    loco_mode=args.loco_mode
                 )
                 if args.sigma0:
                     t_s0 = time.perf_counter()
@@ -1977,7 +2069,13 @@ def main():
             loco_scale_mode=(None if loco_scales is None else args.loco_scale),
             loco_scale_factor=(None if loco_scales is None
                                else loco_scales.get(col)),
-            covariate_basis_rank=int(X_full.shape[1]),
+            loco_mode=(LOCO_MODE_COVARIATE
+                       if (loco_predictions is not None
+                           and args.loco_mode == LOCO_MODE_COVARIATE)
+                       else None),
+            covariate_basis_rank=int(X_full.shape[1] + (
+                1 if (loco_predictions is not None
+                      and args.loco_mode == LOCO_MODE_COVARIATE) else 0)),
             density_method=args.density_method,
         ))
     for p_idx, prefix in enumerate(out_prefixes):
