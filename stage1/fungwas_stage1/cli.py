@@ -1541,7 +1541,7 @@ def main():
                              "exact when REGENIE's step-1 covariates explain little of Y; "
                              "'none' subtracts as-is (pre-v0.4.0 behaviour); or give a number "
                              "to use it verbatim.")
-    parser.add_argument('--loco-mode', dest='loco_mode', default=LOCO_MODE_COVARIATE,
+    parser.add_argument('--loco-mode', dest='loco_mode', default=None,
                         choices=list(LOCO_MODES),
                         help="Where the REGENIE .loco prediction enters the model. "
                              "'covariate' (DEFAULT since 0.3.0) leaves Y unadjusted and "
@@ -1690,7 +1690,13 @@ def main():
                          "drop it or use a single --pheno-col.")
     if args.panel_kernel and args.panel_size < 1:
         raise ValueError("--panel-size must be >= 1")
-    if args.loco_mode == LOCO_MODE_COVARIATE and not args.loco_preds:
+    # --loco-mode defaults to 'covariate' (0.3.0), but only bites when there is a
+    # prediction to place. With no --loco-preds the mode is moot: nothing is
+    # subtracted and nothing is added to the basis. Only refuse when the user
+    # explicitly asked for covariate mode and gave nothing to put in it.
+    if args.loco_mode is None:
+        args.loco_mode = LOCO_MODE_COVARIATE if args.loco_preds else LOCO_MODE_SUBTRACT
+    elif args.loco_mode == LOCO_MODE_COVARIATE and not args.loco_preds:
         raise ValueError("--loco-mode covariate needs --loco-preds; without a "
                          "prediction there is no column to add to the basis.")
     if args.fused_finalize and len(pheno_cols) > 1:
