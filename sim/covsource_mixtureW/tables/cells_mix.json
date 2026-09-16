@@ -1,0 +1,21 @@
+[
+{"name": "R_disp_normal_maf0.01_Z30", "dgp": "disp", "maf": 0.01, "shape": "normal", "a": 0, "c": 0.335361782775007, "N": 461320, "reps": 5000, "ref": "vqtl2", "Ztarget": 30},
+{"name": "R_disp_normal_maf0.005_Z30", "dgp": "disp", "maf": 0.005, "shape": "normal", "a": 0, "c": 0.586626815973864, "N": 461320, "reps": 5000, "ref": "vqtl2", "Ztarget": 30},
+{"name": "M_null_maf0.005", "dgp": "null", "maf": 0.005, "shape": "mix5.89", "a": 0, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null},
+{"name": "M_loc_maf0.005_Z16", "dgp": "loc", "maf": 0.005, "shape": "mix5.89", "a": 0.113978989328067, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 16},
+{"name": "M_disp_maf0.005_Z30", "dgp": "disp", "maf": 0.005, "shape": "mix5.89", "a": 0, "c": 0.36359906170083, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 30},
+{"name": "M_null_maf0.01", "dgp": "null", "maf": 0.01, "shape": "mix5.89", "a": 0, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null},
+{"name": "M_loc_maf0.01_Z16", "dgp": "loc", "maf": 0.01, "shape": "mix5.89", "a": 0.0788973280510011, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 16},
+{"name": "M_disp_maf0.01_Z30", "dgp": "disp", "maf": 0.01, "shape": "mix5.89", "a": 0, "c": 0.20404777890822, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 30},
+{"name": "M_null_maf0.05", "dgp": "null", "maf": 0.05, "shape": "mix5.89", "a": 0, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null},
+{"name": "M_loc_maf0.05_Z16", "dgp": "loc", "maf": 0.05, "shape": "mix5.89", "a": 0.035443655687469, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 16},
+{"name": "M_disp_maf0.05_Z30", "dgp": "disp", "maf": 0.05, "shape": "mix5.89", "a": 0, "c": 0.0769248651866364, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 30},
+{"name": "M_null_maf0.3", "dgp": "null", "maf": 0.3, "shape": "mix5.89", "a": 0, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null},
+{"name": "M_loc_maf0.3_Z16", "dgp": "loc", "maf": 0.3, "shape": "mix5.89", "a": 0.0168353276447057, "c": 0, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 16},
+{"name": "M_disp_maf0.3_Z30", "dgp": "disp", "maf": 0.3, "shape": "mix5.89", "a": 0, "c": 0.034549790018971, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 30},
+{"name": "M_disp_maf0.01_Z5", "dgp": "disp", "maf": 0.01, "shape": "mix5.89", "a": 0, "c": 0.0262873761141791, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 5},
+{"name": "M_disp_maf0.3_Z5", "dgp": "disp", "maf": 0.3, "shape": "mix5.89", "a": 0, "c": 0.00557145641495456, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": 5},
+{"name": "S_disp_mix2_maf0.01_cmatched", "dgp": "disp", "maf": 0.01, "shape": "mix2", "a": 0, "c": 0.20404777890822, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null},
+{"name": "S_disp_mix4_maf0.01_cmatched", "dgp": "disp", "maf": 0.01, "shape": "mix4", "a": 0, "c": 0.20404777890822, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null},
+{"name": "S_disp_mix6_maf0.01_cmatched", "dgp": "disp", "maf": 0.01, "shape": "mix6", "a": 0, "c": 0.20404777890822, "N": 461320, "reps": 5000, "ref": "mix3", "Ztarget": null}
+]
