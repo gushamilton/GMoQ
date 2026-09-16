@@ -633,3 +633,16 @@ regenerated from a newer package: Stage 2 then refuses its own Stage 1 output.
 
 The version is now 0.2.0. Bump it whenever the on-disk formats or the
 estimator behaviour change, so a stale install is visible without running it.
+
+## The LOCO workflow can destroy the structure being estimated (2026-09-16)
+
+Measured on testosterone: a REGENIE step-1 ridge fit without the mixture
+variable as a covariate learns the mixture instead of polygenic signal, and
+subtracting it costs 8-10% in SE and 0.07-0.10 in effect correlation. See
+[LOCO_MIXTURE_HAZARD.md](LOCO_MIXTURE_HAZARD.md) for the measurement, the blind
+diagnostic that detects it without knowing membership, and which other traits in
+this project are at risk.
+
+Related: [EFFICIENCY_BOUND.md](EFFICIENCY_BOUND.md) shows the mixture
+information cost itself is only ~2% at testosterone's separation, so the LOCO
+offset was the larger term by far.
