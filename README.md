@@ -41,7 +41,7 @@ statistic.
 
 ### LOCO predictions go in the basis, not in the phenotype
 
-**Changed in 0.3.0.** `--loco-mode` now defaults to `covariate`: Stage 1 leaves
+**Changed in 0.4.0.** `--loco-mode` now defaults to `covariate`: Stage 1 leaves
 the phenotype unadjusted and appends `L(chr)` to the basis that residualises the
 RIF columns and the genotype. It used to subtract `c * L(chr)` from the
 phenotype before building the RIF.
@@ -57,7 +57,7 @@ On testosterone chr22, against a sex-stratified REGENIE comparator carrying its
 own within-stratum LOCO, subtracting cost 9.5-14.7% in standard error and moved
 the median effect by a third of a standard error away from the reference.
 `--loco-scale` is inert under `covariate`, since a projection is invariant to
-rescaling the column. Pass `--loco-mode subtract` to reproduce pre-0.3.0 runs
+rescaling the column. Pass `--loco-mode subtract` to reproduce pre-0.4.0 runs
 byte-identically.
 
 A step-1 ridge fitted without the mixture variable as a covariate will learn the

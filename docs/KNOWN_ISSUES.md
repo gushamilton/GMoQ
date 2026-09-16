@@ -631,7 +631,7 @@ This bites hardest when a long-lived analysis tree keeps its own R library
 (for example a paper repository's `.local/Rlib`) and Stage 1 is later
 regenerated from a newer package: Stage 2 then refuses its own Stage 1 output.
 
-The version is now 0.2.0. Bump it whenever the on-disk formats or the
+The version is now 0.4.0, matching the tag series; DESCRIPTION had been left at 0.1.0 while tags reached v0.3.0, so the string was no guide to behaviour at all. Bump it whenever the on-disk formats or the
 estimator behaviour change, so a stale install is visible without running it.
 
 ## The LOCO workflow can destroy the structure being estimated (2026-09-16)

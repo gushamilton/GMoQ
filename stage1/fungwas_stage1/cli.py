@@ -1701,7 +1701,7 @@ def main():
     parser.add_argument('--loco-mode', dest='loco_mode', default=None,
                         choices=list(LOCO_MODES),
                         help="Where the REGENIE .loco prediction enters the model. "
-                             "'covariate' (DEFAULT since 0.3.0) leaves Y unadjusted and "
+                             "'covariate' (DEFAULT since 0.4.0) leaves Y unadjusted and "
                              "appends L(chr) to the residualising basis, so each RIF "
                              "column and the genotype are residualised on [X, L(chr)]. "
                              "'subtract' is the historical behaviour, building the RIF on "
