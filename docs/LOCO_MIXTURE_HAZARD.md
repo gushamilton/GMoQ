@@ -59,9 +59,46 @@ at high separation G-MoQ uses all 399,710 samples for both components while
 stratified analysis discards the other sex, and joint estimation of the shared
 structure recovers more than membership uncertainty costs.
 
-Genomic inflation with and without LOCO has NOT yet been checked. Until it has,
-dropping LOCO trades a known bias for an unquantified structure/relatedness
-risk.
+## Genomic inflation: measured, and it revises the recommendation
+
+Two lambda measures on real chr22 are each confounded -- over all variants by
+genuine signal, over REGENIE-null variants (|z|<1) by a selection artefact,
+since that selects variants where G-MoQ also sees nothing. Neither level is
+interpretable. A permuted null settles it: the testosterone column was shuffled
+across 421,405 people, preserving the phenotype distribution, the mixture
+structure and the RIF construction exactly while destroying genotype
+association.
+
+| | lambda gamma | lambda beta_left | lambda beta_right |
+|---|---|---|---|
+| **permuted, true null** | **0.999** | **0.904** | **0.993** |
+| real, no LOCO | 1.265 | 1.420 | 1.487 |
+| real, with LOCO | 1.267 | 1.353 | 1.360 |
+
+| | p<0.05 | p<1e-3 | min p over 17,550 |
+|---|---|---|---|
+| permuted null | 0.042 | 0.0004 | 2.9e-5 |
+| real, no LOCO | 0.105 | 0.0148 | 1.7e-13 |
+| real, with LOCO | 0.101 | 0.0116 | 2.1e-11 |
+
+**The estimator is calibrated and slightly conservative** -- 4.2% against 5%
+nominal, 0.04% against 0.1%. So the real-data lambda of 1.35-1.49 is genuine
+chr22 signal, not miscalibration, and it also disposes of the concern that the
+no-LOCO standard-error improvement might be an artefact of SEs that are simply
+too small.
+
+**Therefore the 5-9% lambda rise on removing LOCO is real lost
+relatedness/structure control.** The machinery is calibrated and the signal is
+held constant, so the change is attributable to LOCO. The offset was failing at
+polygenic prediction (within-sex R^2 = 0.0003) while genuinely doing structure
+control -- two different jobs, one of them working.
+
+**This revises the recommendation below: do not simply drop LOCO.** Option 2,
+two-pass blind LOCO, is the fix rather than a contingency.
+
+Residual caveat: conservatism of ~2.5x at p<1e-3 costs power, and its behaviour
+at 5e-8 cannot be measured from 17,550 variants. It may partly explain the
+recall gaps against sex-stratified REGENIE (0.41-0.47 on the female component).
 
 ## What was ruled out
 
@@ -91,12 +128,14 @@ is trusted on a structured phenotype.
 
 ## Options, in order of preference
 
-1. **No LOCO**, once genomic inflation is confirmed acceptable. Simplest, and
-   matches the `--ignore-pred` comparator.
-2. **Two-pass blind LOCO.** Run G-MoQ with no LOCO, take the estimated mixture
-   posteriors, residualise the phenotype on the *estimated* structure, refit
-   step 1 on that residual, rerun. Uses only inferred quantities, so it stays
-   legitimate, and recovers genuine polygenic and relatedness control.
+1. **Two-pass blind LOCO** -- now the recommended fix, not a contingency. Run G-MoQ with no LOCO, take the estimated mixture
+   Run G-MoQ with no LOCO, take the estimated mixture posteriors, residualise
+   the phenotype on the *estimated* structure, refit step 1 on that residual,
+   rerun. Uses only inferred quantities, so it stays legitimate, and recovers
+   the relatedness control that plain no-LOCO gives up.
+2. **No LOCO.** Better standard errors and effect correlation, but measurably
+   worse genomic inflation (+5% female, +9% male). Acceptable only where
+   relatedness is controlled by other means.
 3. **Step 1 with membership as a covariate.** Correct only when membership is
    genuinely known AND the analysis does not claim to work without it. Not
    available for real latent-mixture applications.
