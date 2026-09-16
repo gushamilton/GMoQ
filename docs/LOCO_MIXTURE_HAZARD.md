@@ -97,14 +97,27 @@ chr22 signal, not miscalibration, and it also disposes of the concern that the
 no-LOCO standard-error improvement might be an artefact of SEs that are simply
 too small.
 
-**Therefore the 5-9% lambda rise on removing LOCO is real lost
+> **SUPERSEDED, 2026-09-16.** The paragraph below concluded that the 5-9% lambda
+> rise on removing LOCO was real lost relatedness/structure control. **That is
+> wrong.** Building and running two-pass blind LOCO showed the lambda gap was a
+> variance-inflation artefact of subtracting a membership proxy: the old LOCO left
+> `gamma`'s SE *and* `gamma`'s lambda untouched while inflating `beta_left`/
+> `beta_right` SEs by 9.5%/14.7%, and only those two lambdas moved. Genuine
+> confounding inflates every statistic from the same genotypes; this deflated only
+> the two it had inflated. See [TWO_PASS_LOCO.md](TWO_PASS_LOCO.md#what-the-lambda-actually-was).
+> The original paragraph is kept below for the record.
+
+~~**Therefore the 5-9% lambda rise on removing LOCO is real lost
 relatedness/structure control.** The machinery is calibrated and the signal is
 held constant, so the change is attributable to LOCO. The offset was failing at
 polygenic prediction (within-sex R^2 = 0.0003) while genuinely doing structure
-control -- two different jobs, one of them working.
+control -- two different jobs, one of them working.~~
 
-**This revises the recommendation below: do not simply drop LOCO.** Option 2,
-two-pass blind LOCO, is the fix rather than a contingency.
+**Revised recommendation: two-pass blind LOCO (option 1) is the best available
+option and plain no-LOCO is an acceptable fallback.** Two-pass recovers the whole
+precision and accuracy cost -- SEs 1-3% better than no-LOCO, 10-15% better than
+with-LOCO -- while a blind diagnostic clears its predictor of membership proxying.
+It does not lower lambda, because there was no LOCO-removable inflation to lower.
 
 Residual caveat: conservatism of ~2.5x at p<1e-3 costs power, and its behaviour
 at 5e-8 cannot be measured from 17,550 variants. It may partly explain the
@@ -136,16 +149,25 @@ Both use only what the method infers. Neither needs a label. This check would
 have caught the problem immediately and should run before any LOCO adjustment
 is trusted on a structured phenotype.
 
+**Implemented as `scripts/loco_blind_diagnostic.R`.** On the old testosterone
+LOCO it returns a membership-proxy ratio of 17.4 and flags it; on the two-pass
+LOCO it returns 0.006-0.012 and clears it. Measured values in
+[TWO_PASS_LOCO.md](TWO_PASS_LOCO.md#the-blind-diagnostic-on-old-and-new-loco).
+
 ## Options, in order of preference
 
-1. **Two-pass blind LOCO** -- now the recommended fix, not a contingency. Run G-MoQ with no LOCO, take the estimated mixture
-   Run G-MoQ with no LOCO, take the estimated mixture posteriors, residualise
-   the phenotype on the *estimated* structure, refit step 1 on that residual,
-   rerun. Uses only inferred quantities, so it stays legitimate, and recovers
-   the relatedness control that plain no-LOCO gives up.
-2. **No LOCO.** Better standard errors and effect correlation, but measurably
-   worse genomic inflation (+5% female, +9% male). Acceptable only where
-   relatedness is controlled by other means.
+1. **Two-pass blind LOCO** -- built, tested and recommended. Run G-MoQ with no
+   LOCO, take the estimated mixture posteriors, residualise the phenotype on the
+   *estimated* structure, refit step 1 on that residual, rerun. Uses only
+   inferred quantities, so it stays legitimate. Measured: SEs 1-3% better than
+   no-LOCO, effect correlations within 0.004 of it, and a LOCO predictor that
+   explains 2.2-5.7% within a component instead of 0.03-0.15%. Genomic inflation
+   is unchanged from no-LOCO. Full results and the recommended transform in
+   [TWO_PASS_LOCO.md](TWO_PASS_LOCO.md).
+2. **No LOCO.** Acceptable fallback: it costs 1-3% in SE against two-pass and
+   nothing in lambda. The "+5% female, +9% male" inflation penalty recorded in
+   an earlier draft of this document was the with-LOCO arm's SE inflation, not a
+   no-LOCO penalty.
 3. **Step 1 with membership as a covariate.** Correct only when membership is
    genuinely known AND the analysis does not claim to work without it. Not
    available for real latent-mixture applications.
