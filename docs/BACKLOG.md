@@ -98,3 +98,14 @@ scripts not on master. Decide: merge the evidence, or archive the branch.
 | Package installs and builds outside this cluster | `e96f3ef` |
 | Allele convention documented | `bace033` |
 | Relatedness, density, tau grid - closed | `6807d6e`, `56f1059` |
+
+## D. Opened 2026-09-16
+
+| id | item | status |
+|---|---|---|
+| D1 | **Genomic inflation without LOCO.** Dropping LOCO fixed the SE and accuracy penalty on testosterone chr22 (`LOCO_MIXTURE_HAZARD.md`), but lambda has not been computed with and without it. Until it is, no-LOCO trades a measured bias for an unquantified relatedness/structure risk. | **OPEN - blocks the recommendation** |
+| D2 | **Run the blind LOCO diagnostic on the antibody traits.** `jcv_log_all` and `mcv_log_all` are mixture-family, bimodal, and went through the same step-1 workflow with no membership covariate. Regress their LOCO predictors on the Stage 2 posterior membership weights. | **OPEN** |
+| D3 | **Two-pass blind LOCO.** Fit with no LOCO, take the estimated mixture posteriors, residualise on the estimated structure, refit step 1, rerun. Recovers polygenic and relatedness control without using a membership label. Only worth building if D1 shows lambda is a problem. | **OPEN, conditional on D1** |
+| D4 | **GLS is the only arm with an efficiency guarantee.** Zhao & Xiao Thms 8-9 cover the optimally-weighted projection; the OLS arm has no such result. Measured penalty 0.2% at main separation, 4% at shrink 0.7. Whether the default should move once a covariance path can deliver GLS reliably is undecided. | **OPEN** |
+| D5 | **Simulation says the OLS projection loses far more than real data shows.** 1.73 vs 1.10 against an oracle at S=4, versus a ~1% arm difference on chr22. Likely because pooled covariance gives every SNP the same `Sigma_0` shape, so GLS reweighting is uniform and buys nothing. If so, there is real efficiency neither production covariance path can currently access. | **OPEN - needs reconciling** |
+| D6 | **`jackknife + GLS` is unsafe.** 1.4-5x more liberal than the other three arms on the Type I proxy in six of six component/alpha combinations over 85,000+ null variants, and the only arm producing a false positive at 5e-8 (2 of 69). Corroborates the simulated null inflation. Should it be refused rather than merely not-default? | **OPEN** |
