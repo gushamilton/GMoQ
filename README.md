@@ -12,15 +12,53 @@ Stage 2 (R/C++) maps that quantile profile onto the parameters of a distribution
 choose, with standard errors that respect the Stage 1 covariance. The two stages are separate
 packages in one repository and are installed separately.
 
-The primary workflow is **OLS with pooled covariance**. Stage 1 writes the pooled
-`Sigma_0` sidecar by default; Stage 2 scales it by each SNP's residual genotype
-variation. Per-SNP jackknife covariance remains available as an explicit comparison.
-Pooled covariance is a working approximation: validation must include true variance
-effects and covariate structure, not just null phenotypes.
-The current Stage 1 CLI computes and writes both covariance representations;
-choosing pooled in Stage 2 avoids reading the per-SNP jackknife payload but does
-not remove the upstream jackknife computation. This preserves the comparison
-without rerunning Stage 1.
+The primary workflow is **OLS with pooled covariance** (`cov_source = "pooled"`,
+`tau_cov_estimator = "ols"`). Both defaults are measured, not assumed:
+
+- Under OLS the point estimate does not touch the covariance, so `pooled` and
+  `jackknife` give **bit-identical** estimates and differ only in the reported
+  SE, by under 1% on real data.
+- The OLS projection penalty against GLS is 0-6% for every shipped weight
+  matrix, because the membership column makes the column space of `W` invariant
+  under the tau-covariance. GLS is not worth its fragility: under density
+  misspecification it is anti-conservative while OLS is not, since OLS's point
+  estimate never touches `Sigma`.
+- `jackknife` + `gls` is **unsafe** and should not be used. Measured on 85,000+
+  null variants it is 1.4-5x more liberal than the other three arms and is the
+  only arm that produced a false positive at genome-wide significance.
+
+Stage 1 writes the pooled `Sigma_0` sidecar by default and Stage 2 scales it by
+each SNP's residual genotype variation. The per-SNP jackknife remains available
+as an explicit comparison; note that `se_tau_*` in the Stage 1 output are the
+jackknife SEs and the pooled path DOES read them, for the `Q` lack-of-fit
+statistic.
+
+### LOCO predictions go in the basis, not in the phenotype
+
+**Changed in 0.3.0.** `--loco-mode` now defaults to `covariate`: Stage 1 leaves
+the phenotype unadjusted and appends `L(chr)` to the basis that residualises the
+RIF columns and the genotype. It used to subtract `c * L(chr)` from the
+phenotype before building the RIF.
+
+This matters because RIF/UQR estimands are defined against the **unconditional
+distribution of Y**. Subtracting a predictor changes `q_tau`, `f(q_tau)` and
+every indicator -- it redefines the target rather than removing a nuisance,
+unlike a mean GWAS where any `g`-independent subtraction leaves the slope alone.
+Stage 1 already residualised covariates out of the RIF columns, which is
+correct; LOCO was the inconsistency.
+
+On testosterone chr22, against a sex-stratified REGENIE comparator carrying its
+own within-stratum LOCO, subtracting cost 9.5-14.7% in standard error and moved
+the median effect by a third of a standard error away from the reference.
+`--loco-scale` is inert under `covariate`, since a projection is invariant to
+rescaling the column. Pass `--loco-mode subtract` to reproduce pre-0.3.0 runs
+byte-identically.
+
+A step-1 ridge fitted without the mixture variable as a covariate will learn the
+mixture rather than polygenic signal, which is what happened here. Check any
+LOCO predictor with `scripts/loco_blind_diagnostic.R` before trusting it; it
+needs no membership label. See [LOCO_MIXTURE_HAZARD.md](docs/LOCO_MIXTURE_HAZARD.md).
+
 See [what the primary analysis estimates](docs/ESTIMAND.md) for effect units,
 the local model interpretation and the scope of validation.
 
