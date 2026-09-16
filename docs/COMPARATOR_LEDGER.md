@@ -50,13 +50,25 @@ term**), phenotype file `phenotypes_final.txt`.
 
 ### Step 1 provenance
 
-The two stratified step-1 runs copy the whole-cohort invocation logged at
-`results/paper/regenie_step1/full/testosterone/testosterone_step1.log` verbatim,
-changing only the sample restriction and the output path:
+The two stratified step-1 runs follow the whole-cohort invocation logged at
+`results/paper/regenie_step1/full/testosterone/testosterone_step1.log`:
 
 - same `--bed .../merged_chr1-22/chr1-22_merged`
 - same `--extract .../testosterone_qc_pass.snplist` (517,143 variants)
 - same `--bsize 1000 --lowmem`
+- `--threads 8` rather than 4 (scheduling only; does not affect the fit)
+
+**One deliberate deviation, and why it is required.** The archived whole-cohort
+step 1 reads `data/derived/paper/{phenotypes,covars_no_sex}_paper.txt`, but the
+sex-stratified step 2 runs this project compares against read
+`data/processed/{phenotypes_final,covars_no_sex}.txt`. Those are two different
+data preparations. A step 1 built on the *paper* files would define its null
+model on a different sample and a different covariate matrix from the step 2 it
+feeds, which is exactly the kind of mismatch this rebuild exists to remove. The
+stratified step 1 therefore uses the **`data/processed/` files, matching step 2
+exactly**. Every individual, phenotype value and covariate value is shared
+between the two stages; see the sample-set check below, which is what licenses
+the claim that R1 and R2 differ *only* in the LOCO term.
 
 **Where sex came from.** Sex is not in `covars_no_sex_paper.txt`. It is column 4
 of `data/derived/paper/covars_with_sex_paper.txt` and column 5 of
@@ -138,9 +150,11 @@ Female values are bit-identical; male values differ by a single constant to
 floating-point rounding. Within-stratum correlation with `testosterone` is 1 to
 twelve decimals. A constant shift is absorbed by the intercept, so the ridge
 fit, the LOCO prediction, the slope and the SE are all invariant. Two step-1
-runs (plus one for `sex`) therefore legitimately serve all four phenotypes —
-and the step-2 outputs confirm it, being byte-identical across the four
-phenotypes within each stratum in both the `--ignore-pred` and `--pred` arms.
+runs (plus one for `sex`) therefore legitimately serve all four phenotypes.
+
+The step-2 outputs bear this out empirically: within each stratum the four
+phenotypes' `.regenie` files are byte-identical in the `--ignore-pred` arm
+(archived and rerun alike, 4/4 per sex). <!--PRED-IDENTITY-->
 
 ---
 
