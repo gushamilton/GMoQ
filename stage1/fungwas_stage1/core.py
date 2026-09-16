@@ -518,6 +518,11 @@ def make_block_plan(Y_resid: np.ndarray, Q: np.ndarray, block_ids: np.ndarray,
     None of that depends on the genotypes, so it is built once per Stage 1 run and
     reused for every batch; rebuilding it per batch would cost roughly as much as
     a batch of the kernel itself.
+
+    The plan also carries the kernel's per-batch working buffers, so **one plan
+    may only be used by one kernel call at a time**.  The CLI's batch pipeline
+    runs a single batch at a time by construction; anything that wants two
+    concurrent calls needs a plan each.
     """
     check_orthonormal_basis(Q, context="make_block_plan")
     require_cpp_extension("Fast panel block-score kernel")

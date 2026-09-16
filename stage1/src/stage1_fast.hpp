@@ -190,6 +190,8 @@ struct BlockPlan {
 
     // Per-batch working buffers.  They depend only on the panel shape, which is
     // constant across a run, so they are carried on the plan and allocated once.
+    // Consequence: one plan serves one kernel call at a time.  The CLI's batch
+    // pipeline runs a single batch at a time; concurrent callers need a plan each.
     mutable Scratch gt_buf, w_buf, u_buf, s2_buf, v_buf;
 
     size_t n_buckets() const { return static_cast<size_t>(n_blocks) + 1; }
