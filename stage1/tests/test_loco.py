@@ -614,3 +614,99 @@ def test_cli_exposes_the_guard_with_a_default_that_does_not_break_ordinary_use()
     assert "'--min-sample-match'" in src
     assert "default=0.01" in src
     assert "below --min-sample-match" in src   # refuses, not merely warns
+
+
+# --- --loco-mode covariate -------------------------------------------------
+#
+# A RIF/UQR estimand is defined against the *unconditional* distribution of Y.
+# Subtracting a genotype-independent LOCO prediction moves q_tau, f(q_tau) and
+# every indicator 1{Y_i <= q_tau}, so it redefines the target; residualising the
+# influence-function columns on the same prediction does not. These tests pin
+# that distinction, and pin that the historical default is untouched.
+
+
+def _loco_mode_fixture(seed: int = 7, n: int = 4000):
+    rng = np.random.default_rng(seed)
+    X = np.column_stack([np.ones(n), rng.normal(size=n), rng.normal(size=n)])
+    L = 0.2 * rng.normal(size=n)
+    y = 2.0 + 0.5 * X[:, 1] + 1.5 * L + rng.standard_exponential(n)
+    taus = np.linspace(0.1, 0.9, 5)
+    return X, L, y, taus, np.ones(n, dtype=bool)
+
+
+def test_loco_mode_covariate_leaves_the_unconditional_quantiles_alone():
+    X, L, y, taus, mask = _loco_mode_fixture()
+    preds = {"y": {"22": L}}
+
+    _, _, q_none = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, None, None, mask
+    )
+    _, _, q_cov = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, preds, "22", mask, None, loco_mode="covariate"
+    )
+    _, _, q_sub = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, preds, "22", mask, {"y": 1.0}, loco_mode="subtract"
+    )
+
+    np.testing.assert_allclose(q_cov[0], q_none[0])
+    # The historical mode estimates something else: the quantiles themselves move.
+    assert not np.allclose(q_sub[0], q_none[0])
+
+
+def test_loco_mode_covariate_residualises_on_x_and_l():
+    X, L, y, taus, mask = _loco_mode_fixture()
+
+    rif_resid, Q, _ = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, {"y": {"22": L}}, "22", mask,
+        None, loco_mode="covariate"
+    )
+
+    rif, _, _ = core.compute_rif(y, taus)
+    Q_ref, _ = np.linalg.qr(np.column_stack([X, L]))
+    np.testing.assert_allclose(rif_resid[0], rif - Q_ref @ (Q_ref.T @ rif), atol=1e-10)
+    # Q also projects the genotype in the scoring kernel, so the extra column has
+    # to reach it: L is controlled for on both sides of the regression.
+    assert Q.shape[1] == X.shape[1] + 1
+
+
+def test_loco_mode_covariate_ignores_the_loco_scale():
+    X, L, y, taus, mask = _loco_mode_fixture()
+
+    a, _, _ = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, {"y": {"22": L}}, "22", mask,
+        None, loco_mode="covariate"
+    )
+    b, _, _ = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, {"y": {"22": 7.3 * L}}, "22", mask,
+        {"y": 1.088}, loco_mode="covariate"
+    )
+
+    np.testing.assert_allclose(a[0], b[0], atol=1e-8)
+
+
+def test_loco_mode_subtract_is_the_untouched_default():
+    X, L, y, taus, mask = _loco_mode_fixture()
+
+    default, _, _ = compute_chr_rif_residuals(
+        ["y"], {"y": y}, X, taus, {"y": {"22": L}}, "22", mask, {"y": 1.088}
+    )
+    expected, _, _ = build_rif_residuals({"y": y - 1.088 * L}, ["y"], X, taus)
+
+    np.testing.assert_array_equal(default[0], expected[0])
+
+
+def test_covariate_mode_changes_the_sigma0_fingerprint_but_subtract_keeps_it():
+    from fungwas_stage1 import pooled_cov
+
+    kw = dict(phenotype="y", covariates=["age"], taus=[0.1, 0.5, 0.9],
+              n_samples=1000, loco_predictor="/p/y.loco")
+    historical = pooled_cov.analysis_fingerprint(
+        **kw, loco_scale_mode="regression", loco_scale_factor=1.088,
+        density_method="silverman_gaussian")
+
+    assert historical == pooled_cov.analysis_fingerprint(
+        **kw, loco_scale_mode="regression", loco_scale_factor=1.088,
+        density_method="silverman_gaussian", loco_mode=None)
+    assert historical != pooled_cov.analysis_fingerprint(
+        **kw, loco_scale_mode=None, loco_scale_factor=None,
+        density_method="silverman_gaussian", loco_mode="covariate")

@@ -145,7 +145,8 @@ def analysis_fingerprint(phenotype: str,
                          loco_predictor: Optional[str],
                          loco_scale_mode: Optional[str] = None,
                          loco_scale_factor: Optional[float] = None,
-                         density_method: Optional[str] = None) -> str:
+                         density_method: Optional[str] = None,
+                         loco_mode: Optional[str] = None) -> str:
     """Stable hash over everything ``Sigma_0`` depends on but the genotype.
 
     Two Stage 1 artefacts with the same fingerprint were produced from the same
@@ -181,6 +182,13 @@ def analysis_fingerprint(phenotype: str,
         payload["loco_scale_factor"] = round(float(loco_scale_factor), 12)
     if density_method is not None:
         payload["density_method"] = str(density_method)
+    # Added with --loco-mode.  Omitted for the historical subtract-from-Y
+    # handling so every fingerprint minted before this flag existed is
+    # unchanged; a covariate-mode run residualises the RIF on [X, L(chr)] and
+    # leaves Y alone, which is a different analysed variable and a different
+    # Sigma_0, so it must not hash alike.
+    if loco_mode is not None:
+        payload["loco_mode"] = str(loco_mode)
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:32]
 
@@ -194,6 +202,7 @@ def build_sigma0_meta(phenotype: str,
                       loco_scale_mode: Optional[str] = None,
                       loco_scale_factor: Optional[float] = None,
                       covariate_basis_rank: Optional[int] = None,
+                      loco_mode: Optional[str] = None,
                       package_version: Optional[str] = None,
                       matrix_file: Optional[str] = None,
                       density_method: Optional[str] = None) -> dict:
@@ -227,7 +236,15 @@ def build_sigma0_meta(phenotype: str,
         The numeric factor actually multiplied into the prediction.
     covariate_basis_rank : int, optional
         ``K``, the number of columns of the orthonormal basis ``Q`` (covariates
-        plus intercept).  Recorded for diagnosis only.
+        plus intercept, and the per-chromosome LOCO column under
+        ``--loco-mode covariate``).  Recorded for diagnosis only.
+    loco_mode : str, optional
+        ``"covariate"`` when the LOCO prediction entered as an extra column of
+        the residualising basis with ``Y`` left unadjusted; ``None`` for the
+        historical subtract-from-``Y`` handling.  The two estimate different
+        things -- RIF/UQR estimands are defined against the unconditional
+        distribution of ``Y``, so subtracting moves the target while
+        residualising does not -- so the mode enters the fingerprint.
     """
     if package_version is None:
         try:
@@ -254,12 +271,13 @@ def build_sigma0_meta(phenotype: str,
         "loco_scale_mode": None if loco_scale_mode is None else str(loco_scale_mode),
         "loco_scale_factor": (None if loco_scale_factor is None
                               else float(loco_scale_factor)),
+        "loco_mode": None if loco_mode is None else str(loco_mode),
         "density_method": (None if density_method is None else str(density_method)),
         "chromosomes": chromosomes,
         "matrix_file": matrix_file,
         "fingerprint": analysis_fingerprint(
             phenotype, covariates, taus, n_samples, loco_predictor,
-            loco_scale_mode, loco_scale_factor, density_method
+            loco_scale_mode, loco_scale_factor, density_method, loco_mode
         ),
     }
 

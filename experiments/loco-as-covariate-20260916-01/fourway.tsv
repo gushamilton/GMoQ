@@ -1,0 +1,19 @@
+run	param	regenie	n	se_ratio	absb_ratio	cor_all	n_hiz	cor_hiz	slope_hiz	lambda
+(a)  subtract-from-Y, production	beta_left	female	17550	1.1209	1.075	0.8981	139	0.9958	1.037	1.3527
+(a)  subtract-from-Y, production	beta_right	male	17550	1.0677	1.017	0.8165	131	0.9943	0.954	1.3604
+(a)  subtract-from-Y, production	gamma	sex	17550	1.0754	1.090	0.9036	8	0.9999	1.124	1.2671
+(a') subtract-from-Y, same code	beta_left	female	17550	1.1209	1.075	0.8981	139	0.9958	1.037	1.3527
+(a') subtract-from-Y, same code	beta_right	male	17550	1.0677	1.017	0.8165	131	0.9943	0.954	1.3604
+(a') subtract-from-Y, same code	gamma	sex	17550	1.0754	1.090	0.9036	8	0.9999	1.124	1.2671
+(b)  no LOCO at all	beta_left	female	17550	1.0236	1.020	0.9699	139	0.9984	1.073	1.4195
+(b)  no LOCO at all	beta_right	male	17550	0.9311	0.944	0.9188	131	0.9967	0.973	1.4869
+(b)  no LOCO at all	gamma	sex	17550	1.0714	1.096	0.9085	8	0.9999	1.124	1.2650
+(c)  two-pass blind LOCO	beta_left	female	17550	1.0113	1.012	0.9664	139	0.9982	1.074	1.4221
+(c)  two-pass blind LOCO	beta_right	male	17550	0.9134	0.943	0.9140	131	0.9966	0.966	1.4778
+(c)  two-pass blind LOCO	gamma	sex	17550	1.0712	1.095	0.9062	8	0.9999	1.121	1.2560
+(d)  LOCO as RIF-column covariate	beta_left	female	17550	1.0235	1.019	0.9699	139	0.9984	1.073	1.4200
+(d)  LOCO as RIF-column covariate	beta_right	male	17550	0.9309	0.944	0.9187	131	0.9968	0.973	1.4858
+(d)  LOCO as RIF-column covariate	gamma	sex	17550	1.0574	1.070	0.8990	8	0.9999	1.090	1.2239
+(perm) permuted true null	beta_left	NA	NA	NA	NA	NA	NA	NA	NA	0.9045
+(perm) permuted true null	beta_right	NA	NA	NA	NA	NA	NA	NA	NA	0.9928
+(perm) permuted true null	gamma	NA	NA	NA	NA	NA	NA	NA	NA	0.9990
