@@ -12,6 +12,15 @@ lose, and does it lose more than that?
 For testosterone the comparison is exact: REGENIE female N=199,572 plus male
 N=200,138 equals 399,710, which is G-MoQ's N. The same people.
 
+> **Comparator caveat (added 2026-09-16).** Every REGENIE ratio in this document
+> is measured against a step 2 run `--ignore-pred`, i.e. with **no LOCO of its
+> own** — the sample sizes match but the polygenic adjustment does not. The
+> `gamma` comparator below is additionally *not* N-matched (462,869 vs 399,710)
+> and is a different sample, not a superset restriction. A fair comparator with
+> a proper within-stratum LOCO, and the restated ratios against it, are in
+> [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md). The bound and the decomposition
+> are unaffected; the *observed* ratios they are compared with move.
+
 ## The bound
 
 With `Y | g, Z=k ~ N(alpha_k + beta_k g, sigma_k^2)` and

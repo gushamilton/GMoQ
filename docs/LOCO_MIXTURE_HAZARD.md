@@ -40,6 +40,16 @@ every incentive to spend its capacity there.
 
 ## Measured cost
 
+> **Comparator caveat (added 2026-09-16).** The table below is measured against
+> a REGENIE that was run `--ignore-pred`, i.e. with **no polygenic adjustment of
+> its own**. That is a handicapped reference: anyone holding the sex labels
+> would fit a within-stratum step 1. The numbers here remain correct for the
+> question this section asks (*what did G-MoQ's broken LOCO cost?*), because
+> both arms share the same reference. They are **not** the right numbers for
+> *how does G-MoQ compare to a sex-stratified GWAS at its best*. For that, and
+> for the full register of every comparison in this project, see
+> [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md).
+
 chr22 testosterone, pooled + OLS, median SE relative to sex-stratified REGENIE
 (which was itself run `--ignore-pred`, so no-LOCO is the like-for-like
 comparison):
