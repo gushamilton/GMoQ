@@ -23,15 +23,25 @@ The primary workflow is **OLS with pooled covariance** (`cov_source = "pooled"`,
   per-SNP payload, and on real data the two are indistinguishable -- under 1%
   apart on chr22 testosterone, with correlations identical to four decimals in
   all 24 z-strata.
-- **Where they can differ, and it is a narrow place.** Across 780,000 simulated
-  scans (`FINDINGS_covsource_default.md`) pooled was anti-conservative under a
-  TRUE DISPERSION effect at LOW frequency: coverage 0.79 and Type-I at 5e-8
-  inflated 295x at MAF 0.01, against jackknife holding 0.944-0.951. At the null
-  and under pure location the two are identical, which is why null simulations
-  never flag it. That campaign used the 2-column vQTL `W`; the 3-column mixture
-  `W` shipped here has not been measured in that regime (BACKLOG B5). Use
-  `cov_source = "jackknife"` for dispersion parameters at low frequency; for
-  everything else pooled is the better trade.
+- **Where they differ, and it is narrower than it is small.** Across 780,000
+  simulated scans, pooled is anti-conservative under a TRUE DISPERSION effect at
+  LOW frequency. On the 3-column mixture `W` shipped here the defect is
+  CONCENTRATED rather than avoided: `gamma` is protected (SE ratio 1.0136 at
+  MAF 0.005 / Z=30) because it takes 99.96% of its variance on the tau-covariance's
+  leading eigendirection, but `beta_left`/`beta_right` sit at exactly 90 degrees
+  to that direction with zero share and are inflated **3510x at MAF 0.005 / Z=30
+  and 236x at MAF 0.01 / Z=30**. Under the null the two sources agree EXACTLY
+  (provably: the discrepancy term vanishes), which is why null simulations never
+  detect this.
+
+  The onset of a 5% SE shortfall on `beta_left` is `|Z|` = 6.9 at MAF 0.005, 9.8
+  at 0.01, 23.2 at 0.05 and 87.9 at 0.30 -- so common variants are safe at any
+  effect size reachable in practice, and rare variants with strong effects are
+  not. **Use `cov_source = "jackknife"` for rare variants, for component-specific
+  parameters, or when mixture separation is below about 4**; it is nominal in
+  every regime measured and costs nothing in the estimates. See
+  [FINDINGS_covsource_default.md](docs/FINDINGS_covsource_default.md) and
+  `sim/covsource_mixtureW/`.
 
 Stage 1 writes the pooled `Sigma_0` sidecar by default and Stage 2 scales it by
 each SNP's residual genotype variation. The per-SNP jackknife remains available
