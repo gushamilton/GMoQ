@@ -54,6 +54,7 @@ from .core import (
     compute_block_finalize,
     compute_block_scores_panel,
     compute_block_finalize_panel,
+    compute_pooled_panel,
     compute_covariance_from_blocks,
     residual_sum_squares,
     resolve_covar_cols,
@@ -107,9 +108,72 @@ LOCO_MODES = (LOCO_MODE_SUBTRACT, LOCO_MODE_COVARIATE)
 #: jackknife standard errors, computed the same way.  Use it when no downstream
 #: analysis will ask for ``cov_source = "jackknife"``; the payload cannot be
 #: reconstructed from what remains without re-running Stage 1.
+#:
+#: ``pooled-only`` goes further and skips the jackknife *computation*.  The
+#: block accumulator exists only so that leave-one-block-out fits can be
+#: recovered by subtraction; the point estimate ``beta_t = N_t / D``, the scale
+#: ``D = sum_i g_resid_i^2`` and the pooled ``Sigma_0`` need no block structure
+#: at all.  Under this mode ``se_tau_*`` are the pooled standard errors
+#: ``sqrt(Sigma_0[t,t] / d_resid)`` -- the diagonal of exactly the covariance
+#: Stage 2 applies under ``cov_source = "pooled"`` -- and not jackknife
+#: estimates.  That is a different number in the ``se_tau_*`` columns, which is
+#: why it is a separate mode rather than a change to ``pooled``: runs already
+#: accepted under ``--cov-mode pooled`` have jackknife ``se_tau_*`` and must
+#: keep them.
+#:
+#: MEASURED, chr22 testosterone with LOCO (17,550 variants, N = 399,710, T = 45,
+#: ``--blocks 1000 --batch-size 100``) on one BluePebble Xeon Gold 5120 node,
+#: threads 1/2/4 bound one per physical core and 8 using the SMT siblings:
+#:
+#:     threads   full     pooled    pooled-only    SNPs/s (full -> pooled-only)
+#:     1         451.7 s  446.3 s   345.5 s        38.9 -> 50.8
+#:     2         337.1 s  332.7 s   254.2 s        52.1 -> 69.0
+#:     4         234.4 s  229.6 s   172.4 s        74.9 -> 101.8
+#:     8         256.7 s  240.3 s   182.5 s        68.4 -> 96.2
+#:
+#: The kernel itself goes 190.4 s -> 143.5 s at four threads and 190.1 s ->
+#: 128.0 s at eight; the write side goes 22.7 s -> 7.6 s, which is the jackknife
+#: finalisation leaving.  Note that eight threads is SLOWER than four in every
+#: mode: the allocation's "8 cpus" are four physical cores plus their SMT
+#: siblings, and filling all eight starves the decode and write threads the
+#: ``--pipeline`` overlap depends on.  Four threads is the configuration to
+#: quote.
+#:
+#: Output, unchanged from ``pooled``: 72.8 MB -> 6.3 MB.
+#:
+#: WHERE THE TIME GOES NOW.  ``--no-pipeline`` serialises decode, kernel and
+#: write, so the batch loop splits cleanly.  Four threads, one per physical
+#: core, same chromosome and node (17,550 variants):
+#:
+#:                        full        pooled-only
+#:     setup              19.0 s      19.0 s        phenotype, covariates, LOCO,
+#:                                                  RIF, BGEN index
+#:     BGEN decode        74.3 s      71.7 s        unchanged, and the floor
+#:     C++ kernel        117.4 s      82.7 s        -30%
+#:     TSV write          21.0 s       6.9 s        -67%, the jackknife
+#:                                                  finalisation leaving
+#:     Sigma_0             0.05 s      0.05 s
+#:     ------------------------------------------
+#:     wall              231.7 s     180.3 s
+#:
+#: With the default ``--pipeline`` the decode hides behind the kernel and the
+#: same two runs are 238.4 s and 158.0 s (73.6 and 111.1 SNPs/s).  The kernel is
+#: still the critical path; if it went to zero the floor would be setup plus
+#: decode, about 91 s.
+#:
+#: Rebuilding the extension with ``FUNGWAS_STAGE1_ARCH="-march=haswell
+#: -mtune=skylake-avx512"`` takes pooled-only to 142.2 s (123.4 SNPs/s) and full
+#: to 191.4 s, with decompressed output byte-identical to the SSE2 build in both
+#: modes on this chromosome.  ``setup.py`` records that raising the ISA bought
+#: nothing; that measurement predates the panel kernels and no longer holds for
+#: them.  The default is deliberately left alone here.
 COV_MODE_FULL = "full"
 COV_MODE_POOLED = "pooled"
-COV_MODES = (COV_MODE_FULL, COV_MODE_POOLED)
+COV_MODE_POOLED_ONLY = "pooled-only"
+COV_MODES = (COV_MODE_FULL, COV_MODE_POOLED, COV_MODE_POOLED_ONLY)
+
+#: Cov modes that do not write the per-SNP jackknife payload.
+COV_MODES_NO_PAYLOAD = (COV_MODE_POOLED, COV_MODE_POOLED_ONLY)
 
 
 def get_memory_mb() -> float:
@@ -1173,7 +1237,7 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                       f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
     """Write one processed batch to the stage1 outputs."""
     triu = _triu_indices_cached(n_taus)
-    want_cov = args.cov_mode != COV_MODE_POOLED
+    want_cov = args.cov_mode not in COV_MODES_NO_PAYLOAD
     for p_idx, stats in enumerate(stats_list):
         f_tsv = f_tsv_list[p_idx]
         f_cov = f_cov_list[p_idx]
@@ -1239,7 +1303,7 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
     differ only in summation order, which matters nowhere: d_resid feeds the degrees of
     freedom of a t reference, where a last-bit difference is invisible.
     """
-    want_cov = args.cov_mode != COV_MODE_POOLED
+    want_cov = args.cov_mode not in COV_MODES_NO_PAYLOAD
     for p_idx, (betas, se_all, cov_all) in enumerate(fused_list):
         f_tsv = f_tsv_list[p_idx]
         f_cov = f_cov_list[p_idx]
@@ -1280,6 +1344,84 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
 
             if args.output_rtau:
                 all_betas.append(np.asarray(beta))
+
+
+def write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
+                             sigma0_sd_list, all_betas_list):
+    """Write one batch from the pooled-only kernel.
+
+    Same TSV layout, same rows, same row order and the same skip rule as
+    :func:`write_stats_batch` -- a variant is written iff it passed the MAC and
+    variance filters, which the pooled kernel signals with a finite ``d_resid``
+    exactly as the block kernel signals it with non-NaN block statistics.
+
+    Two columns carry different numbers, and both differences are intended:
+
+    ``beta_tau_*`` and ``d_resid`` are the same estimands summed in a different
+    order.  The block path forms the totals as ``sum_b (sum_{i in b} ...)``, the
+    pooled path as ``sum_i ...``; same addends, different association, so they
+    agree to rounding rather than to the bit.  At ``%.6g`` and ``%.9g`` that is
+    invisible except for a value that happens to sit on a formatting boundary.
+
+    ``se_tau_*`` are the **pooled** standard errors ``sqrt(Sigma_0[t,t]/D)``,
+    not jackknife estimates.  There is no cheap jackknife: the delete-one-block
+    standard error is a function of the per-block statistics and nothing else,
+    so a path that does not accumulate blocks cannot produce it.  What it can
+    produce is the diagonal of the covariance Stage 2 actually applies under
+    ``cov_source = "pooled"``, which is the self-consistent choice -- and, on
+    the measurement in ``pooled_cov.py``, the better-behaved one (diagonal ratio
+    against an exact HC0 sandwich, 5th-95th percentile: 0.990-1.010 pooled
+    against 0.725-1.307 jackknife).
+
+    VERIFIED on chr22 testosterone with LOCO, all 17,550 variants, against a
+    full-mode run whose own output is byte-identical (decompressed) to the
+    accepted reference scan:
+
+      * ``.sigma0.tsv.gz``    byte-identical
+      * identity columns      identical, 87,750/87,750
+      * ``d_resid``           identical, 17,550/17,550
+      * ``beta_tau_*``        identical on 789,749 of 789,750; the one that
+                              differs sits on a ``%.6g`` rounding boundary
+                              (relative difference 2.0e-6 in the printed value)
+      * ``se_tau_*``          differ on 99.99%, median relative difference 1.5%,
+                              maximum 25% -- this is the jackknife against the
+                              pooled estimator, not an error
+
+    Through Stage 2 (skew, ``cov_source="pooled"``, ``tau_cov_estimator="ols"``,
+    the accepted gate's own weights) every parameter, standard error, p-value
+    and degrees-of-freedom column matches the gate on 17,549 of 17,550 rows and
+    agrees to 4e-11 on the remaining one; the genome-wide-significant counts are
+    unchanged (20 ``beta_left``, 27 ``beta_right``).  What moves is ``Q`` and
+    its calibration -- ``Q``, ``Q_df_eff``, ``Q_scale`` on every row, ``Q_pval``
+    on 17,251 -- because ``Q = sum_t resid_t^2 / se_tau_t^2`` is the one place
+    Stage 2's pooled path reads ``se_tau_*`` (R/gwas.R, the
+    ``tau_cov_estimator == "ols"`` branch).  Maximum relative change: ``Q``
+    21.7%, ``Q_pval`` 60.0%, ``|dlog10 Q_pval|`` 0.40.  No ``Q_pval`` crosses
+    5e-8 in either run.  Whether the pooled-diagonal ``Q`` is the better
+    calibrated statistic under a pooled covariance is a real question and is
+    NOT settled here; it is only noted that it is the self-consistent one.
+    """
+    for p_idx, (betas, d_resid) in enumerate(pooled_list):
+        f_tsv = f_tsv_list[p_idx]
+        sd0 = sigma0_sd_list[p_idx]
+        all_betas = all_betas_list[p_idx]
+
+        d_resid = np.asarray(d_resid, dtype=np.float64)
+        finite = np.isfinite(d_resid)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            se_all = sd0[None, :] / np.sqrt(d_resid)[:, None]
+
+        for j, info in enumerate(batch_info):
+            if not finite[j]:
+                continue
+            row = list(info)
+            for b, s in zip(betas[j], se_all[j]):
+                row.extend([f'{b:.6g}', f'{s:.6g}'])
+            row.append(f'{float(d_resid[j]):.9g}')
+            f_tsv.write('\t'.join(map(str, row)) + '\n')
+
+            if args.output_rtau:
+                all_betas.append(np.asarray(betas[j]))
 
 
 class _SkipCount:
@@ -1373,8 +1515,23 @@ class _BatchPipeline:
 
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
                    f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
-                   all_betas_list, n_cov_elements, T):
+                   all_betas_list, n_cov_elements, T, sigma0_sd_list=None):
     """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
+    if args.cov_mode == COV_MODE_POOLED_ONLY:
+        # No block_ids, no n_blocks, no (n_blocks, panel, 1+T) accumulator: the
+        # kernel returns the two things the pooled analysis needs.
+        t_compute = time.perf_counter()
+        pooled_list = [
+            compute_pooled_panel(G_view, rif, Q, n_threads=args.threads,
+                                 panel_size=args.panel_size)
+            for rif in RIF_resid_list
+        ]
+        compute_s = time.perf_counter() - t_compute
+        t_write = time.perf_counter()
+        write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
+                                 sigma0_sd_list, all_betas_list)
+        return compute_s, time.perf_counter() - t_write
+
     t_compute = time.perf_counter()
     if use_multi:
         stats_list = compute_block_scores_multi(
@@ -1635,7 +1792,19 @@ def main():
                              "unchanged. The omitted payload cannot be rebuilt "
                              "without re-running Stage 1, so use 'pooled' only when "
                              "no downstream analysis will ask for the jackknife "
-                             "covariance.")
+                             "covariance. "
+                             "'pooled-only' additionally skips the jackknife "
+                             "COMPUTATION: no per-block accumulator is built, so "
+                             "beta_tau_* and d_resid come from single-pass totals "
+                             "and se_tau_* are the pooled standard errors "
+                             "sqrt(Sigma_0[t,t]/d_resid) rather than jackknife "
+                             "estimates. beta_tau_* and d_resid agree with 'full' "
+                             "to rounding (different summation order, same "
+                             "addends); se_tau_* are a different estimator, which "
+                             "changes Stage 2's Q lack-of-fit statistic even "
+                             "though it leaves the parameter estimates and their "
+                             "standard errors untouched. Requires the Sigma_0 "
+                             "sidecar.")
     parser.add_argument('--no-jackknife-cov', dest='cov_mode', action='store_const',
                         const=COV_MODE_POOLED,
                         help='Alias for --cov-mode pooled.')
@@ -1688,6 +1857,18 @@ def main():
     if False:
         raise ValueError("--panel-kernel supports a single phenotype only; "
                          "drop it or use a single --pheno-col.")
+    if args.cov_mode == COV_MODE_POOLED_ONLY and not args.sigma0:
+        parser.error(
+            "--cov-mode pooled-only needs the Sigma_0 sidecar: it is where "
+            "se_tau_* comes from, and it is the only covariance the run emits. "
+            "Drop --no-sigma0, or use --cov-mode pooled."
+        )
+    if args.cov_mode == COV_MODE_POOLED_ONLY and args.fused_finalize:
+        parser.error(
+            "--fused-finalize is a jackknife finalisation; --cov-mode pooled-only "
+            "does not compute the jackknife. Drop one of the two."
+        )
+
     if args.panel_kernel and args.panel_size < 1:
         raise ValueError("--panel-size must be >= 1")
     # --loco-mode defaults to 'covariate' (0.3.0), but only bites when there is a
@@ -1863,10 +2044,18 @@ def main():
     # scored, so it must not be recorded.
     sigma0_by_chr = [dict() for _ in pheno_cols]
     sigma0_seconds = 0.0
+    # sqrt(diag(Sigma_0)) for the RIF currently in force, which is what
+    # --cov-mode pooled-only writes into se_tau_* (divided by sqrt(d_resid)).
+    # Rebound, never mutated, whenever the LOCO adjustment changes the RIF, so
+    # a batch already in flight on the pipeline thread keeps the list it was
+    # handed -- the same discipline RIF_resid_list follows.
+    sigma0_sd_list = None
     if args.sigma0 and loco_predictions is None:
         t_s0 = time.perf_counter()
         for p_idx, rif in enumerate(RIF_resid_list):
             sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM] = compute_sigma0(rif)
+        sigma0_sd_list = [np.sqrt(np.diag(sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM]))
+                          for p_idx in range(len(pheno_cols))]
         sigma0_seconds += time.perf_counter() - t_s0
         log_mem(f"Sigma_0 accumulated for {len(pheno_cols)} phenotype(s) in "
                 f"{sigma0_seconds:.2f}s")
@@ -1924,7 +2113,7 @@ def main():
     total_write = 0.0
     active_chr = None
 
-    write_cov_payload = args.cov_mode != COV_MODE_POOLED
+    write_cov_payload = args.cov_mode not in COV_MODES_NO_PAYLOAD
 
     with ExitStack() as stack:
         f_tsv_list = [stack.enter_context(gzip.open(path, 'wt')) for path in out_tsv_list]
@@ -1961,7 +2150,8 @@ def main():
                         _process_batch,
                         G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                         args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
-                        f_cov_scale_list, all_betas_list, n_cov_elements, T
+                        f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                        sigma0_sd_list
                     )
                     total_compute += compute_s
                     total_write += write_s
@@ -1990,6 +2180,10 @@ def main():
                     t_s0 = time.perf_counter()
                     for p_idx, rif in enumerate(RIF_resid_list):
                         sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
+                    sigma0_sd_list = [
+                        np.sqrt(np.diag(sigma0_by_chr[p_idx][variant_chr]))
+                        for p_idx in range(len(pheno_cols))
+                    ]
                     sigma0_seconds += time.perf_counter() - t_s0
                 active_chr = variant_chr
 
@@ -2004,7 +2198,8 @@ def main():
                     _process_batch,
                     G_batch, RIF_resid_list, Q, block_ids, batch_info,
                     args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
-                    f_cov_scale_list, all_betas_list, n_cov_elements, T
+                    f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                    sigma0_sd_list
                 )
                 total_compute += compute_s
                 total_write += write_s
@@ -2027,7 +2222,8 @@ def main():
                 _process_batch,
                 G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                 args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
-                f_cov_scale_list, all_betas_list, n_cov_elements, T
+                f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                sigma0_sd_list
             )
             total_compute += compute_s
             total_write += write_s
@@ -2107,18 +2303,28 @@ def main():
             seed=args.seed,
             n_blocks_nonempty=n_blocks_nonempty,
             analysis=sigma0_analysis_block(sigma0_meta_list[p_idx]),
+            se_source=("pooled_sigma0" if args.cov_mode == COV_MODE_POOLED_ONLY
+                       else None),
         )
         write_cov_meta(meta_path, cov_meta)
     log_mem(
         f"Batch compute time: {total_compute:.1f}s, write time: {total_write:.1f}s, "
         f"batch total: {time.perf_counter() - t_batches:.1f}s"
     )
-    logger.info(
+    if args.cov_mode == COV_MODE_POOLED_ONLY:
+        logger.info(
+            "Reminder: --cov-mode pooled-only was in force, so se_tau_* in the TSV "
+            "are the POOLED standard errors sqrt(Sigma_0[t,t]/d_resid), not "
+            "jackknife estimates, and no per-SNP jackknife covariance exists for "
+            "this scan. Stage 2 must be run with cov_source = \"pooled\"."
+        )
+    else:
+        logger.info(
         "Reminder: se_tau_* in the TSV are jackknife estimates. A per-tau Wald test is "
         "t with FAR fewer degrees of freedom than --blocks-1 at extreme taus "
         "(~112 at tau=0.02 vs ~835 at tau=0.50, N=50k, B=1000; 38 at tau=0.02 with "
         "MAF 0.01). See docs/KNOWN_ISSUES.md 2.2 before studentising them."
-    )
+        )
     log_mem(f"Dropped {skip_counter.non_biallelic} non-biallelic variants")
     log_mem(f"Done! {total_snps} SNPs in {elapsed:.1f}s ({total_snps/elapsed:.1f} SNPs/s)")
     logger.info(f"Output: {', '.join(out_tsv_list)}")
