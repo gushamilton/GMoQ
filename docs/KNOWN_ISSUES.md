@@ -613,3 +613,23 @@ a general `W` (`beta_mu` is exactly `delta` only because `W[, "beta_mu"] = 1`).
 Both are prerequisites Stage 1 and Stage 2 do not currently supply, so the class
 is closed by refusing unverified designs rather than by generalising. Reasoning
 in `docs/DISPERSION_SKEW_CORRECTION.md` section 2.1.
+
+## Version skew is undetectable below 0.2.0 (as of 2026-09-16)
+
+Every `fungwasStage2` build before 2026-09-16 reports `Version: 0.1.0`,
+including builds whose behaviour differs. Two installs five hours and four
+merges apart were indistinguishable by version string, and the only symptom
+was a refusal at run time.
+
+The concrete failure: Stage 1 now writes `sigma0_meta_version: 2`, and a
+`fungwasStage2` build predating that change caps at 1 and refuses the input
+with "which this version of fungwasStage2 does not support". Current source
+sets `SIGMA0_META_VERSION_MAX <- 2L` and reads both, so the fix is always to
+reinstall -- but nothing in the version string tells you that you must.
+
+This bites hardest when a long-lived analysis tree keeps its own R library
+(for example a paper repository's `.local/Rlib`) and Stage 1 is later
+regenerated from a newer package: Stage 2 then refuses its own Stage 1 output.
+
+The version is now 0.2.0. Bump it whenever the on-disk formats or the
+estimator behaviour change, so a stale install is visible without running it.
