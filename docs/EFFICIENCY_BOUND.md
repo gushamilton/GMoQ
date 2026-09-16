@@ -233,19 +233,46 @@ component SDs equal to the whole-phenotype SD, and NaN standard errors on about 
 third of variants -- flexmix's default `tolerance = 1e-6` is *relative* to a
 log-likelihood of ~-5e5, making the effective threshold ~0.5.
 
-### Unresolved: the OLS projection penalty
+### Resolved: the OLS projection penalty is the membership column
 
-The simulation puts the cost of the unweighted OLS projection at 4-5% (S=2),
-24% (S=3) and **57% (S=4)** -- growing with separation, because the unweighted
-projection keeps loading tau-slopes that carry little signal once the components
-separate. GLS recovers all of it.
+The simulation put the cost of the unweighted OLS projection at 4-5% (S=2),
+24% (S=3) and **57% (S=4)**, growing with separation, while real testosterone at
+S=5.89 showed **0.8%** -- a factor of ~70.
 
-Real testosterone sits at S=5.89 and shows **0.8%**. The theory calculation
-using G-MoQ's actual skew-family W predicts 1.0081 against an observed 1.0080,
-so the real number is right for that model.
+**The cause is neither the distribution family nor the covariance path. It is
+that the simulation's W had two columns and testosterone's has three.** The
+simulation used `make_weights_normal_mixture(include_membership = FALSE)`;
+production's `build_skew_mixture()` always emits `gamma`. At matched separation
+and matched K, the skew and normal families agree:
 
-The discrepancy is therefore the **model**, not the covariance path: the
-simulation used a two-component normal-mixture W, testosterone uses a
-3-parameter skew W. Whether 20-60% of efficiency is unclaimed for
-mixture-family traits, or the simulation's W is unrepresentative, is open. See
-BACKLOG H5.
+| W | K | S=2 | S=3 | S=4 | S=6 |
+|---|---|---|---|---|---|
+| normal mixture, means only | 2 | 1.031 | 1.232 | 1.593 | 3.295 |
+| normal mixture, `+gamma` | 3 | 1.006 | 1.010 | 1.008 | 1.000 |
+| skew mixture, means only | 2 | 1.019/1.086 | 1.213/1.328 | 1.568/1.732 | 3.091/4.404 |
+| skew mixture, `+gamma` | 3 | 1.035/1.023 | 1.033/1.022 | 1.022/1.014 | 1.003/1.005 |
+
+Deleting `gamma` from the *actual* shipped testosterone W moves it from 1.013 to
+**2.132/2.509**.
+
+The mechanism follows from the same `Sigma` algebra as the density-cancellation
+result above. With `Sigma = diag(1/f) B diag(1/f)`, a bimodal `f` has a deep
+trough, so `Sigma` collapses onto a single eigendirection -- 98.5% of the
+spectrum at S=6. The membership weight
+`W_gamma = -(p1(1-p1)/f)(F1-F2)` equals `-p1(1-p1)/f` at the trough, so **the
+gamma column is that eigendirection**, sitting 0.011 deg from the leading
+eigenvector at S=6 and 0.124 deg for real testosterone. Including it makes
+`col(W)` a `Sigma`-invariant subspace, which is exactly the Gauss-Markov
+condition, so OLS is already efficient. Omitting it leaves OLS nowhere to put
+the trough noise, and it leaks into the component means.
+
+The general diagnostic is `rho_max`, the largest canonical correlation between
+the in-subspace and complement noise; `V_gls` is `V_ols` less a Schur
+complement, and `1/sqrt(1-rho_max^2)` bounds the penalty. Across 38
+configurations Spearman is 0.993 and the bound is never violated. Every shipped
+W sits at `rho_max` 0.03-0.29 (penalty < 4%); the means-only W reaches 0.67-0.99.
+
+**Default unchanged: OLS.** Full evidence, the mixture-family prediction and
+the `Sigma`-misspecification fragility result are in
+`sim/projeff/src`, with aggregate tables in `sim/projeff/tables`, register
+`projection-efficiency-20260916-01`.
