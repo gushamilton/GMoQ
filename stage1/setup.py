@@ -43,11 +43,26 @@ def get_armadillo_lib():
 
 # Vectorisation flags for the C++ kernel.
 #
-# The kernel was historically built at the x86-64 SSE2 baseline - two-wide
-# double-precision, no FMA - even on AVX-512 hardware.  Raising the baseline is a
-# build-time choice, not a run-time one, and it has to be made conservatively: a
-# BluePebble `short` allocation can land on Skylake-SP, Cascade Lake *or* an AMD node,
-# and a binary built with -march=native on one of those can SIGILL on another.
+# The default is EMPTY, i.e. the x86-64 SSE2 baseline, and that is now a
+# deliberate correctness choice rather than a performance one.  Two kernels live
+# in this extension and they want different things:
+#
+#   * The exact kernel (stage1_pybind.cpp) must stay bit-identical to the
+#     historical output that `--exact-kernel` exists to reproduce.  Raising the
+#     baseline lets GCC contract a*b+c into an FMA, which changes float64 results
+#     in the last bits (measured max absolute difference 2.2e-16, max
+#     |delta beta|/SE 4.6e-15).  So its ISA is pinned here.
+#
+#   * The fast kernel (stage1_fast.hpp) needs AVX2 + FMA to be worth anything -
+#     measured 4x on its streaming sweep - so it carries its own ISA: the hot
+#     leaves are compiled twice, once at this baseline and once under
+#     `#pragma GCC target("avx,avx2,fma")`, and dispatched at run time on
+#     __builtin_cpu_supports.  That keeps the binary portable across the mix of
+#     Skylake-SP, Cascade Lake and AMD nodes a BluePebble `short` allocation can
+#     land on, without a -march=native build that could SIGILL on the next one.
+#
+# What raising the baseline is worth FOR THE EXACT KERNEL, measured rather than
+# assumed:
 #
 # An older revision of this comment said raising the ISA "bought nothing", on a
 # microbenchmark of a 500-SNP batch against the then-current kernel.  That measurement no
@@ -95,6 +110,12 @@ def get_armadillo_lib():
 #   FUNGWAS_STAGE1_ARCH="-march=native"                         # NOT portable, see above
 # Setting the variable to the empty string is an explicit request for the baseline.
 #
+# The fast kernel does not need any of that, because it dispatches its own ISA at
+# run time; the paragraphs above are what the override buys the exact kernel, and
+# the reason the default stays at the portable baseline for both.  Setting the
+# override changes the exact kernel's arithmetic, so a run that must reproduce
+# historical output byte for byte should leave it alone.
+#
 # -ffast-math is deliberately never used.  It is the one flag that WOULD change the
 # artefacts, because it licenses reassociating the reductions rather than contracting them.
 _DEFAULT_ARCH_FLAGS = ''
@@ -119,6 +140,7 @@ ext_modules = [
     Extension(
         'fungwas_stage1._stage1_cpp',
         sources=['src/stage1_pybind.cpp'],
+        depends=['src/stage1_fast.hpp', 'src/stage1_fast_hot.inc'],
         include_dirs=[
             get_pybind_include(),
             get_armadillo_include(),
