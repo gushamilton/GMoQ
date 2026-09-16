@@ -49,25 +49,33 @@ def get_armadillo_lib():
 # BluePebble `short` allocation can land on Skylake-SP, Cascade Lake *or* an AMD node,
 # and a binary built with -march=native on one of those can SIGILL on another.
 #
-# The default is nevertheless left EMPTY, i.e. the SSE2 baseline is kept, because raising
-# it was measured on BluePebble and bought nothing: interleaved on one node, 15 timings per
-# build of a production-shaped 500-SNP batch, the median kernel time with
-# -march=haswell was 0.9997 of the SSE2 baseline against a 9-22% run-to-run IQR.  The
-# kernel is memory-bound (0.38 flop/byte, IPC 0.7) and its inner loops stride down the
-# wrong axis, so GCC can contract FMAs - 131 of the 136 it emits are *scalar* - but cannot
-# widen anything.  -march=skylake-avx512 is no better: GCC 8 emits zero zmm registers for
-# it and produces bitwise identical results to -march=haswell.
+# The default is left EMPTY, i.e. the SSE2 baseline is kept, for PORTABILITY -- not
+# because the ISA is worthless. That second claim was true of the pre-2026-09-16 kernel
+# and is now stale; it is kept here only as history.
 #
-# Enabling it is not free: FMA contraction changes float64 results in the last bits
-# (measured max absolute difference 2.2e-16, max |delta beta|/SE 4.6e-15).  That is far
-# below the %.6g and int8 resolution of the Stage 1 outputs, which are byte-identical
-# either way - but changing results for no measured gain is a bad default.
+#   HISTORICAL (old kernel, superseded): interleaved on one node, 15 timings per build of
+#   a production-shaped 500-SNP batch, the median kernel time with -march=haswell was
+#   0.9997 of the SSE2 baseline against a 9-22% run-to-run IQR. The kernel was
+#   memory-bound (0.38 flop/byte, IPC 0.7) with inner loops striding down the wrong axis,
+#   so GCC contracted FMAs -- 131 of the 136 it emitted were *scalar* -- but could not
+#   widen anything.
 #
-# The mechanism is kept so the ISA is a deliberate, documented choice rather than an
-# accident, and so a future kernel with a better access pattern can turn it on:
-#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512"  # AVX2+FMA, portable
-#   FUNGWAS_STAGE1_ARCH="-march=skylake-avx512"                 # Intel-only, no gain here
-#   FUNGWAS_STAGE1_ARCH="-march=native"                         # NOT portable, see above
+#   CURRENT (2026-09-16, after the panel kernels were reworked): -march=haswell is worth
+#   about 13% of wall clock. Full chr22 testosterone with LOCO on 4 physical cores,
+#   --cov-mode pooled-only: 172.4s -> 142.2s, i.e. 101.8 -> 123.4 SNPs/s. Decompressed
+#   output is BYTE-IDENTICAL to the SSE2 build in both full and pooled-only modes, so
+#   unlike the historical note there is now measured gain at no measured cost.
+#
+# It is still not the default because this is a build-time choice for a package other
+# people install. -march=haswell needs AVX2, i.e. Intel 2013+ or AMD Zen+; that covers
+# every current BluePebble node, but a stale binary shipped to older hardware SIGILLs.
+# Sites that control their own hardware should turn it on:
+#
+#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512" pip install -e stage1
+#
+# -march=skylake-avx512 is no better: GCC 8 emits zero zmm registers for it and produces
+# bitwise identical results to -march=haswell. -march=native is NOT portable -- a
+# BluePebble `short` allocation can land on Skylake-SP, Cascade Lake or an AMD node.
 #
 # -ffast-math is deliberately never used.
 _DEFAULT_ARCH_FLAGS = ''

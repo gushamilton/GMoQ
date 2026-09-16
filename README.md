@@ -145,6 +145,25 @@ devtools::install("stage2")
 
 ### Build Stage 1 (Python/C++)
 
+**Worth 13% for one environment variable.** The C++ kernels benefit from AVX2,
+and the output is byte-identical to the default SSE2 build:
+
+```bash
+FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512" pip install -e stage1
+```
+
+Measured on full chr22 testosterone with LOCO, 4 physical cores, `--cov-mode
+pooled-only`: 172.4s to 142.2s, i.e. 101.8 to 123.4 SNPs/s. It is not the
+default only because `-march=haswell` requires AVX2 (Intel 2013+ / AMD Zen+) and
+a binary built with it will crash on older hardware. Turn it on if you control
+the machines you run on.
+
+Note also that **more threads is not always faster**: on a node whose "8 CPUs"
+are 4 physical cores plus SMT siblings, 8 threads is slower than 4 in every
+mode, because filling the siblings starves the decode and write threads the
+pipeline overlaps. Match `--threads` to PHYSICAL cores.
+
+
 ```bash
 conda activate fungwas-stage1
 cd stage1
