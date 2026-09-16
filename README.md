@@ -147,18 +147,46 @@ devtools::install("stage2")
 
 ### Build Stage 1 (Python/C++)
 
-**Worth 13% for one environment variable.** The C++ kernels benefit from AVX2,
-and the output is byte-identical to the default SSE2 build:
+**You probably do not need a build flag.** Since the restructured kernel landed,
+Stage 1's hot loops are compiled twice -- once at the portable SSE2 baseline and
+once under AVX2+FMA -- and the right one is chosen at run time from
+`__builtin_cpu_supports`. A single build is therefore both portable and fast,
+and it is the default.
+
+`FUNGWAS_STAGE1_ARCH` still exists, but it now buys 10-14% on the **exact**
+kernel only (the `--exact-kernel` path), which is not run-time dispatched:
 
 ```bash
 FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512" pip install -e stage1
 ```
 
 Measured on full chr22 testosterone with LOCO, 4 physical cores, `--cov-mode
-pooled-only`: 172.4s to 142.2s, i.e. 101.8 to 123.4 SNPs/s. It is not the
-default only because `-march=haswell` requires AVX2 (Intel 2013+ / AMD Zen+) and
-a binary built with it will crash on older hardware. Turn it on if you control
-the machines you run on.
+pooled-only`: 172.4s to 142.2s, i.e. 101.8 to 123.4 SNPs/s, with the outputs
+byte-identical to the SSE2 build. It is not the default because
+`-march=haswell` requires AVX2 (Intel 2013+ / AMD Zen+) and a binary built with
+it will SIGILL on older hardware, with no graceful diagnostic -- and the binary
+outlives the build host when the package sits on a shared filesystem. Setting it
+also changes the exact kernel's arithmetic in the last bits, so a run that must
+reproduce historical output byte for byte should leave it alone.
+
+### Which Stage 1 kernel runs
+
+The **restructured (fast) kernel is the default** and is what the timings in
+this README refer to. On full chr22 at 4 threads it takes the kernel from 138.7s
+to 33.0s (4.2x) and the wall clock from 190s to 104s; the gap widens with cores,
+to 8.8x at 16, because the old kernel stops scaling past 8 and this one does
+not.
+
+It is **not bit-identical** to the old path -- the summation is reassociated --
+but it is not meaningfully different either: across all 176 real chr22 batches
+the largest disagreement is 5.4e-14 in |dbeta|/SE and 8.7e-13 relative in the
+SE, no variant changes accept/reject, `stage1.tsv.gz` is byte-identical at the
+`%.6g` resolution Stage 1 writes, and Stage 2 output is byte-identical to the
+accepted chr22 gate.
+
+Pass `--exact-kernel` when a run must reproduce historical output byte for byte
+including `cov.gz`. See [docs/STAGE1_FAST_KERNEL.md](docs/STAGE1_FAST_KERNEL.md)
+for the derivation, the numerics and the per-change timings.
 
 Note also that **more threads is not always faster**: on a node whose "8 CPUs"
 are 4 physical cores plus SMT siblings, 8 threads is slower than 4 in every
@@ -207,11 +235,15 @@ cd stage1 && python setup.py build_ext --inplace && cd ..
 PYTHONPATH=stage1 python -m pytest stage1/tests/ -q
 ```
 
+193 tests, ~29s on 8 CPUs.
+
 **Rebuild the extension after pulling anything that touches `stage1/src/`.**
 A stale `_stage1_cpp` produces a wall of failures that look like broken code but
 are only a missing symbol -- pulling the `--cov-mode pooled-only` work without
 rebuilding fails 13 tests, because it added `panel_pooled_stats` to the pybind
-layer. The `build_ext --inplace` line above is not optional after such a pull.
+layer, and pulling the restructured kernel without rebuilding fails on a missing
+`BlockPlan`. The `build_ext --inplace` line above is not optional after such a
+pull.
 
 ### Stage 2 (R proof scripts)
 
