@@ -168,3 +168,74 @@ That gap is why the answer here was computed rather than cited.
   where the fit destabilises (pi drifts to 0.63).
 - `Var(g)` was assumed common across the combined and stratified samples. It
   cancels algebraically; residual mis-cancellation is second order.
+
+## Simulation check against formal mixture models (2026-09-16)
+
+`/user/work/fh6520/gmoq_mixture_sim` -- two-component Gaussian mixture, pi=0.5,
+MAF 0.3, N=100,000, 1,000 paired replicates per cell, S in {1,2,3,4} plus
+equal-effect and unequal-variance cells. The simulation's Stage 1/Stage 2
+reimplementation reproduces the installed package bit-for-bit (max |diff| = 0 on
+q_tau, fhat and b(tau); 3.5e-17 on SE), so it exercises the real estimator.
+
+Efficiency against an oracle that knows membership:
+
+| S | G-MoQ GLS | EM MLE | flexmix (informed init) | CR bound |
+|---|---|---|---|---|
+| 1 | 1.43 / 1.52 | 1.44 / 1.43 | 1.43 / 1.47 | 1.95 / 2.05 |
+| 2 | 1.26 / 1.29 | 1.28 / 1.29 | 1.33 / 1.37 | 1.26 / 1.24 |
+| 3 | 1.22 / 1.23 | 1.22 / 1.21 | 1.21 / 1.14 | 1.25 / 1.20 |
+| 4 | 1.10 / 1.13 | 1.09 / 1.11 | 1.06 / 1.09 | 1.09 / 1.12 |
+
+**A formal mixture model recovers nothing G-MoQ leaves behind.** The curves
+coincide at every separation. G-MoQ's disadvantage against the oracle grows as
+components merge, but that is the information content of the data -- the MLE
+loses exactly as much.
+
+At S=1 nothing attains the asymptotic bound of 1.95-2.05: the information matrix
+has condition number 4.2e4 and N=1e5 is not in the asymptotic regime, so every
+mixture-based estimator is effectively regularised and lands near 1.43-1.53.
+The bound is correct; the regime is not asymptotic.
+
+Confirmed on 100 real chr22 SNPs at N=399,710: a hand-rolled EM is
+indistinguishable from G-MoQ on every axis (r 0.977-0.978 vs 0.979-0.981; median
+SE ratio 1.127/1.074 vs 1.121/1.068), with 0/100 convergence failures.
+
+### Practical cost of the alternatives
+
+| | per SNP | chr22 (17,550 variants) |
+|---|---|---|
+| G-MoQ Stage 1 | ~43 SNPs/s | ~7 min |
+| EM mixture regression | 1.08 s | 5.3 h |
+| `flexmix` (defaults) | 6.9 s | 34 h |
+| `mixtools::regmixEM` | 112-2,429 s | prohibitive |
+
+G-MoQ is ~45x faster than the EM and ~290x faster than flexmix, and emits all 45
+quantiles at once so one Stage 1 output serves any distributional model.
+
+`mixtools::regmixEM` timed out on 100% of replicates at S<=2 under a 1,200 s cap.
+The hand EM fails to converge on 44.2% of replicates at S=1, with SEs 37-46% too
+large there. **`flexmix` at default initialisation converged to a degenerate
+one-component solution in 200/200 replicates in all four cells**, with biases of
+1-2.5 empirical SDs; informed initialisation fixes it, but that requires the same
+marginal mixture fit G-MoQ already performs. On real data at N=400k the same
+failure appears as stopping at iteration 2 with `converged = TRUE`, both
+component SDs equal to the whole-phenotype SD, and NaN standard errors on about a
+third of variants -- flexmix's default `tolerance = 1e-6` is *relative* to a
+log-likelihood of ~-5e5, making the effective threshold ~0.5.
+
+### Unresolved: the OLS projection penalty
+
+The simulation puts the cost of the unweighted OLS projection at 4-5% (S=2),
+24% (S=3) and **57% (S=4)** -- growing with separation, because the unweighted
+projection keeps loading tau-slopes that carry little signal once the components
+separate. GLS recovers all of it.
+
+Real testosterone sits at S=5.89 and shows **0.8%**. The theory calculation
+using G-MoQ's actual skew-family W predicts 1.0081 against an observed 1.0080,
+so the real number is right for that model.
+
+The discrepancy is therefore the **model**, not the covariance path: the
+simulation used a two-component normal-mixture W, testosterone uses a
+3-parameter skew W. Whether 20-60% of efficiency is unclaimed for
+mixture-family traits, or the simulation's W is unrepresentative, is open. See
+BACKLOG H5.
