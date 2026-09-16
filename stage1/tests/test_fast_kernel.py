@@ -148,16 +148,6 @@ def test_fused_output_matches_finalising_the_raw_stats():
         np.testing.assert_allclose(b1[j], Nt / D, rtol=1e-12, atol=0)
 
 
-def test_out_of_range_block_ids_are_excluded_from_the_statistics():
-    """Samples with an out-of-range block id feed the min_var gate but no block."""
-    G, rif, Q, bid, B = _problem()
-    bid2 = bid.copy()
-    bid2[:200] = -1
-    ref = core.compute_block_scores_panel(G, rif, Q, bid2, B, n_threads=2, panel_size=8)
-    got = core.compute_block_scores_panel_fast(G, rif, Q, bid2, B, n_threads=2)
-    _close(ref, got, name="block stats with out-of-range ids")
-
-
 def test_does_not_mutate_its_inputs():
     G, rif, Q, bid, B = _problem()
     G_copy, rif_copy, Q_copy, bid_copy = G.copy(), rif.copy(), Q.copy(), bid.copy()

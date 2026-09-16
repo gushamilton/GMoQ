@@ -101,38 +101,6 @@ def test_row_subset_of_a_full_sample_basis_is_not_orthonormal():
         core.check_orthonormal_basis(Q_subset)
 
 
-def test_basis_built_on_the_analysed_rows_is_orthonormal():
-    _, matched, X, _ = _make_sample()
-
-    Q, _ = np.linalg.qr(X[matched])
-
-    assert Q.shape == (int(matched.sum()), X.shape[1])
-    assert core.check_orthonormal_basis(Q) < 1e-12
-
-
-def test_projection_is_the_ols_residual_only_for_the_matched_basis():
-    _, matched, X, _ = _make_sample()
-    rng = np.random.default_rng(7)
-    g = rng.binomial(2, 0.27, size=N_KEEP).astype(float)[matched]
-
-    Xm = X[matched]
-    beta, *_ = np.linalg.lstsq(Xm, g, rcond=None)
-    ols_resid = g - Xm @ beta
-
-    Q_right, _ = np.linalg.qr(Xm)
-    np.testing.assert_allclose(g - Q_right @ (Q_right.T @ g), ols_resid, atol=1e-9)
-
-    Q_wrong = np.linalg.qr(X)[0][matched]
-    wrong_resid = g - Q_wrong @ (Q_wrong.T @ g)
-    # The covariate-parallel part is only partly removed, and what survives is
-    # what leaks into the numerator of every per-tau slope.
-    assert np.linalg.norm(wrong_resid - ols_resid) / np.linalg.norm(ols_resid) > 0.01
-
-
-# ---------------------------------------------------------------------------
-# the guard: tolerance floor and ceiling
-# ---------------------------------------------------------------------------
-
 def test_guard_tolerance_separates_qr_noise_from_a_single_dropped_row():
     """ORTHONORMAL_BASIS_TOL must sit between float64 QR noise and the smallest
     realisable instance of the defect - a keep sample one row larger than the

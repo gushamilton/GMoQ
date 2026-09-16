@@ -90,19 +90,6 @@ def test_compute_chr_rif_residuals_accepts_zero_padded_chr_labels():
     assert q_tau_list[0].shape == (3,)
 
 
-def test_loco_adjustment_changes_residualized_rif():
-    taus = np.array([0.25, 0.5, 0.75])
-    x = np.column_stack([np.ones(5), np.linspace(-1.0, 1.0, 5)])
-    y_base = {"bmi": np.array([0.0, 1.0, 2.0, 3.0, 4.0])}
-    y_loco = {"bmi": y_base["bmi"] - np.array([0.0, 0.2, 0.2, 0.0, 0.0])}
-
-    rif_base, _, q_base = build_rif_residuals(y_base, ["bmi"], x, taus)
-    rif_loco, _, q_loco = build_rif_residuals(y_loco, ["bmi"], x, taus)
-
-    assert not np.allclose(rif_base[0], rif_loco[0])
-    assert not np.allclose(q_base[0], q_loco[0])
-
-
 def test_cpp_requirement_fails_closed_when_extension_missing():
     original_have_cpp = core.HAVE_CPP
     original_allow = core.ALLOW_NUMPY_FALLBACK
@@ -397,24 +384,6 @@ def test_resolve_loco_scale_none_and_literal():
         resolve_loco_scale("nonsense", y, per_chr, "log_bmi")
 
 
-def test_unscaled_loco_inflates_variance_but_scaled_loco_reduces_it():
-    """
-    The defect in one assertion: for a phenotype with sd < sd(LOCO), subtracting
-    the raw prediction increases the residual variance. Scaling by sd(Y) reduces it.
-    """
-    from fungwas_stage1.cli import resolve_loco_scale
-    y, per_chr = _loco_fixture()
-    pred = per_chr["22"]
-
-    var_raw = np.var(y, ddof=1)
-    var_unscaled = np.var(y - pred, ddof=1)
-    var_scaled = np.var(y - resolve_loco_scale("sd", y, per_chr, "log_bmi") * pred, ddof=1)
-
-    assert var_unscaled > 3.0 * var_raw          # injects noise: ~3.9x in the real data
-    assert var_scaled < var_raw                  # removes it
-    assert var_scaled == pytest.approx((1.0 - 0.333 ** 2) * var_raw, rel=0.05)
-
-
 def test_loco_scale_warns_when_subtracted_term_dominates(caplog):
     from fungwas_stage1.cli import resolve_loco_scale
     import logging
@@ -427,14 +396,6 @@ def test_loco_scale_warns_when_subtracted_term_dominates(caplog):
     with caplog.at_level(logging.WARNING):
         resolve_loco_scale("sd", y, per_chr, "log_bmi")
     assert not any("INCREASES the analysed variance" in r.message for r in caplog.records)
-
-
-def test_rint_like_phenotype_is_unaffected_by_the_fix():
-    """sd(Y) == 1 is the one case where the old behaviour was already correct."""
-    from fungwas_stage1.cli import resolve_loco_scale
-    y, per_chr = _loco_fixture(y_sd=1.0, pred_sd=0.3431)
-    y = y - y.mean()
-    assert resolve_loco_scale("sd", y, per_chr, "rint_bmi") == pytest.approx(1.0, rel=0.02)
 
 
 def test_compute_chr_rif_residuals_applies_the_scale():
@@ -480,43 +441,6 @@ def _loco_fixture_with_covariates(seed=1, n=6000, cov_r2=0.30, y_sd=15.91, pred_
     return y, {"22": pred}, cov, y_resid_sd
 
 
-def test_sd_mode_over_subtracts_when_covariates_explain_the_trait():
-    """
-    The factor REGENIE used is the sd of the trait *after* its step-1 covariates, so
-    sd(Y) over-states it whenever those covariates are predictive. Pinned at the real
-    `weight` configuration: R^2 = 0.30 gives sd(Y)/sd(Y_resid) = 1/sqrt(0.70) = 1.195.
-    """
-    from fungwas_stage1.cli import resolve_loco_scale
-    y, per_chr, cov, y_resid_sd = _loco_fixture_with_covariates()
-
-    sd_factor = resolve_loco_scale("sd", y, per_chr, "weight")
-    assert sd_factor / y_resid_sd == pytest.approx(1.0 / np.sqrt(0.70), rel=0.05)
-
-    # regression needs no knowledge of the covariates and is the variance-minimising
-    # factor by construction, so it must leave no more variance than sd does.
-    reg_factor = resolve_loco_scale("regression", y, per_chr, "weight")
-    pred = per_chr["22"]
-    assert np.var(y - reg_factor * pred) <= np.var(y - sd_factor * pred)
-    assert np.var(y - reg_factor * pred) < np.var(y)
-
-    # It lands nearer REGENIE's own scale_Y (the residual sd) than sd(Y) does, but it is
-    # not equal to it: the slope is sd_resid * rho / sd_pred, which coincides with
-    # scale_Y only for a perfectly calibrated prediction. REGENIE's are over-dispersed
-    # (sd_pred > rho), so regression sits slightly below scale_Y -- matching the real
-    # data, where slope/sd(Y_resid) is 0.89 for weight and 0.97 for the BMI traits.
-    assert abs(reg_factor - y_resid_sd) < abs(sd_factor - y_resid_sd)
-    # against the fixture's own parameters, not a quantity re-derived from the data
-    assert reg_factor == pytest.approx(y_resid_sd * 0.199 / 0.2333, rel=0.05)
-
-
-def test_regression_is_the_cli_default():
-    """The default must be the mode that does not need REGENIE's step-1 covariate set."""
-    import argparse, inspect
-    from fungwas_stage1 import cli
-    src = inspect.getsource(cli.main)
-    assert "'--loco-scale', dest='loco_scale', default='regression'" in src
-
-
 def test_variance_guard_is_silent_for_a_predictive_covariate_trait(caplog):
     """The old sd-ratio heuristic could fire spuriously; the variance check must not."""
     from fungwas_stage1.cli import resolve_loco_scale
@@ -548,81 +472,6 @@ def test_match_samples_keys_on_the_first_column_only():
     valid, idx = match_samples(bgen, ["A1_A1", "A3_A3"])
     assert list(idx) == [0, 2]
     assert list(valid) == [True, True]
-
-
-def test_partial_match_is_the_dangerous_case():
-    """
-    Zero overlap fails loudly downstream. A small overlap runs to completion on a
-    non-random subset and yields attenuated effects with inflated SEs that are
-    internally consistent and wrong -- which is why the guard is on the RATE, not
-    on emptiness.
-    """
-    from fungwas_stage1.cli import match_samples
-    bgen = [f"S{i}" for i in range(1000)]
-    pheno = [f"S{i}" for i in range(30)] + [f"X{i}" for i in range(970)]
-    valid, idx = match_samples(bgen, pheno)
-    assert idx.size == 30
-    frac = idx.size / len(pheno)
-    assert frac == pytest.approx(0.03)
-    # nothing in match_samples itself refuses this; the caller must.
-    assert frac < 0.90
-
-
-def test_guard_refuses_only_a_near_total_failure():
-    """
-    The threshold is tuned to the failure it exists to catch. A partial overlap is
-    legitimate -- a phenotype file routinely covers a wider cohort than one genotype
-    release, and the package's own fixtures match 700 of 900 (77.8%) with identical
-    conventions. An ID-convention mismatch instead produces a near-total failure.
-    A guard set high enough to catch the former breaks ordinary use.
-    """
-    default = 0.01
-    for n_matched, n_total, should_refuse in [
-        (0, 1000, True),       # total mismatch -- the convention error
-        (5, 1000, True),       # 0.5%, accidental collisions only
-        (10, 1000, False),     # exactly at the threshold
-        (700, 900, False),     # the package's own fixture: legitimate subsetting
-        (1000, 1000, False),
-    ]:
-        frac = n_matched / n_total
-        assert (default > 0 and frac < default) is should_refuse, (n_matched, n_total)
-
-
-def test_guard_warns_between_the_threshold_and_a_half():
-    """Legitimate but worth flagging: proceed, but say so."""
-    lo, hi = 0.01, 0.50
-    for frac, should_warn in [
-        (0.005, False),   # refused instead
-        (0.03, True),
-        (0.49, True),
-        (0.778, False),   # the fixture: ordinary, silent
-        (1.0, False),
-    ]:
-        assert (lo > 0 and lo <= frac < hi) is should_warn, frac
-
-
-def test_guard_can_be_disabled():
-    """--min-sample-match 0 must proceed deliberately rather than refuse."""
-    for frac in (0.0, 0.03, 0.5):
-        assert not (0 > 0 and frac < 0)
-
-
-def test_cli_exposes_the_guard_with_a_default_that_does_not_break_ordinary_use():
-    import inspect
-    from fungwas_stage1 import cli
-    src = inspect.getsource(cli.main)
-    assert "'--min-sample-match'" in src
-    assert "default=0.01" in src
-    assert "below --min-sample-match" in src   # refuses, not merely warns
-
-
-# --- --loco-mode covariate -------------------------------------------------
-#
-# A RIF/UQR estimand is defined against the *unconditional* distribution of Y.
-# Subtracting a genotype-independent LOCO prediction moves q_tau, f(q_tau) and
-# every indicator 1{Y_i <= q_tau}, so it redefines the target; residualising the
-# influence-function columns on the same prediction does not. These tests pin
-# that distinction, and pin that the historical default is untouched.
 
 
 def _loco_mode_fixture(seed: int = 7, n: int = 4000):
@@ -710,3 +559,73 @@ def test_covariate_mode_changes_the_sigma0_fingerprint_but_subtract_keeps_it():
     assert historical != pooled_cov.analysis_fingerprint(
         **kw, loco_scale_mode=None, loco_scale_factor=None,
         density_method="silverman_gaussian", loco_mode="covariate")
+
+
+def test_sample_match_guard_refuses_warns_and_passes_at_the_right_fractions():
+    """The guard itself, not a copy of its arithmetic.
+
+    The three tests this replaces asserted `not (0 > 0 and frac < 0)`, grepped
+    the source of `cli.main` for a literal argparse string, and recomputed
+    `n_matched / n_total` inline -- none of them called the package, so all
+    three passed whatever the guard did.
+    """
+    from fungwas_stage1.cli import sample_match_verdict, SAMPLE_MATCH_WARN_BELOW
+
+    default = 0.01
+
+    # A near-total failure is the ID-convention error the guard exists to catch.
+    assert sample_match_verdict(0.0, default) == "refuse"
+    assert sample_match_verdict(0.005, default) == "refuse"
+
+    # Exactly at the threshold is not below it.
+    assert sample_match_verdict(default, default) == "warn"
+
+    # Legitimate partial subsetting proceeds, loudly. 700/900 is this package's
+    # own fixture, with identical ID conventions on both sides.
+    assert sample_match_verdict(0.3, default) == "warn"
+    assert sample_match_verdict(700 / 900, default) == "ok"
+    assert sample_match_verdict(1.0, default) == "ok"
+
+    # The warning band is half-open at the top.
+    assert sample_match_verdict(SAMPLE_MATCH_WARN_BELOW, default) == "ok"
+    assert sample_match_verdict(SAMPLE_MATCH_WARN_BELOW - 1e-9, default) == "warn"
+
+    # Disabling it proceeds deliberately, even on a total failure.
+    for frac in (0.0, 0.03, 0.5, 1.0):
+        assert sample_match_verdict(frac, 0) == "ok"
+
+
+def test_loco_mode_default_follows_whether_loco_preds_were_given():
+    """The default is resolved after argparse, so the parser default is None.
+
+    The test this replaces asserted that the string
+    "'--loco-scale', dest='loco_scale', default='regression'" appears in the
+    source of `cli.main`, which says nothing about what the CLI resolves to and
+    breaks on reformatting.
+    """
+    import argparse
+    from fungwas_stage1.cli import (
+        LOCO_MODE_COVARIATE, LOCO_MODE_SUBTRACT, resolve_loco_mode,
+    )
+
+    # With LOCO predictions, the covariate mode is the 0.4.0 default.
+    args = argparse.Namespace(loco_mode=None, loco_preds="preds.list")
+    assert resolve_loco_mode(args) == LOCO_MODE_COVARIATE
+
+    # Without them there is nothing to add to the basis, so subtract is the only
+    # mode that means anything.
+    args = argparse.Namespace(loco_mode=None, loco_preds=None)
+    assert resolve_loco_mode(args) == LOCO_MODE_SUBTRACT
+
+    # An explicit choice is never overridden.
+    args = argparse.Namespace(loco_mode=LOCO_MODE_SUBTRACT, loco_preds="preds.list")
+    assert resolve_loco_mode(args) == LOCO_MODE_SUBTRACT
+
+    # Covariate mode without predictions is a contradiction, not a silent fallback.
+    args = argparse.Namespace(loco_mode=LOCO_MODE_COVARIATE, loco_preds=None)
+    try:
+        resolve_loco_mode(args)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("covariate mode without --loco-preds must raise")

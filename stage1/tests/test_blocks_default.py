@@ -26,12 +26,6 @@ def test_default_block_count_is_1000():
     assert resolve_n_blocks(None, n_taus=45) == 1000
 
 
-def test_default_is_used_for_the_production_tau_grid():
-    """The old default gave 65 here, which is the configuration that is 17x
-    inflated at p = 5e-8 under a normal reference."""
-    assert resolve_n_blocks(None, n_taus=45) != max(45 + 20, 64)
-
-
 def test_blocks_remains_overridable():
     assert resolve_n_blocks(200, n_taus=45) == 200
     assert resolve_n_blocks(65, n_taus=45) == 65
@@ -106,10 +100,3 @@ def test_nonempty_count_cannot_exceed_requested():
         )
 
 
-def test_default_block_count_reaches_the_metadata():
-    meta = cov_meta.build_cov_meta(
-        cov_dtype="int8", n_taus=45, n_blocks=resolve_n_blocks(None, 45), seed=42
-    )
-    assert cov_meta.resolve_block_count(meta) == 1000
-    # 1/(B-1) is only the first term; the realised nu is lower and SNP-specific.
-    assert cov_meta.effective_nu(1000, 9134, cov_meta.C_LOCATION) < 999

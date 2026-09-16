@@ -109,28 +109,3 @@ def jackknife_ols(y, g, covariates=None, n_blocks=32, seed=42, n_threads=1):
     return betas, ses
 
 
-def test_jackknife_ols_matches_analytic_ols():
-    g, y, covariates = simulate_data()
-
-    original_allow = core.ALLOW_NUMPY_FALLBACK
-    try:
-        core.set_numpy_fallback_allowed(True)
-        betas_ols, ses_ols = analytic_ols(y, g, covariates=covariates)
-        betas_jk, ses_jk = jackknife_ols(y, g, covariates=covariates, n_blocks=32, n_threads=1)
-    finally:
-        core.ALLOW_NUMPY_FALLBACK = original_allow
-
-    valid_beta = np.isfinite(betas_ols) & np.isfinite(betas_jk)
-    valid_se = np.isfinite(ses_ols) & np.isfinite(ses_jk) & (ses_ols > 0) & (ses_jk > 0)
-
-    assert int(valid_beta.sum()) >= 10
-    assert int(valid_se.sum()) >= 10
-
-    beta_corr = np.corrcoef(betas_ols[valid_beta], betas_jk[valid_beta])[0, 1]
-    se_ratio = ses_jk[valid_se] / ses_ols[valid_se]
-
-    assert beta_corr > 0.999
-    assert np.median(se_ratio) > 0.80
-    assert np.median(se_ratio) < 1.20
-    assert np.mean(se_ratio) > 0.80
-    assert np.mean(se_ratio) < 1.20

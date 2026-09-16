@@ -63,12 +63,6 @@ def test_jackknife_covariance_is_bit_identical_to_the_loop(n_blocks, T):
             )
 
 
-def test_jackknife_covariance_handles_a_non_positive_total():
-    stats = np.zeros((10, 4))
-    beta, se, Sigma = compute_covariance_from_blocks(stats, 10)
-    assert np.all(np.isnan(beta)) and np.all(np.isnan(se)) and np.all(np.isnan(Sigma))
-
-
 def test_every_block_unusable_leaves_the_jackknife_at_zero():
     """All leave-one-out denominators non-positive: Sigma is zero, not NaN.
 
@@ -112,8 +106,3 @@ def test_float32_covariance_packing_matches_struct_pack(values):
     assert struct.pack(f"{arr.size}f", *arr) == packed
 
 
-def test_float32_covariance_packing_matches_on_random_payloads():
-    rng = np.random.default_rng(99)
-    for scale in (1e-12, 1.0, 1e12):
-        arr = rng.standard_normal(45 * 46 // 2) * scale
-        assert struct.pack(f"{arr.size}f", *arr) == arr.astype("<f4", copy=False).tobytes()

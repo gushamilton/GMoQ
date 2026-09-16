@@ -1514,6 +1514,62 @@ def _get_block_plan(kernel_state, RIF_resid, Q, block_ids, args):
     return plan
 
 
+def resolve_loco_mode(args):
+    """The LOCO mode this run should use, given what was asked for.
+
+    `--loco-mode` carries a sentinel default of None rather than a real one,
+    because the right default depends on `--loco-preds`.  With a prediction the
+    covariate mode is the default (since 0.4.0); with none the mode is moot --
+    nothing is subtracted and nothing is added to the basis -- so subtract is
+    the only mode that means anything, and defaulting to covariate there would
+    refuse every run that does not use LOCO at all.
+
+    An explicit `--loco-mode covariate` with no prediction is a contradiction
+    rather than a moot setting, and raises.
+    """
+    if args.loco_mode is None:
+        return LOCO_MODE_COVARIATE if args.loco_preds else LOCO_MODE_SUBTRACT
+    if args.loco_mode == LOCO_MODE_COVARIATE and not args.loco_preds:
+        raise ValueError("--loco-mode covariate needs --loco-preds; without a "
+                         "prediction there is no column to add to the basis.")
+    return args.loco_mode
+
+
+SAMPLE_MATCH_WARN_BELOW = 0.50
+
+
+def sample_match_verdict(match_frac, min_sample_match):
+    """What to do about `match_frac` of the phenotype samples matching the BGEN.
+
+    Returns ``"refuse"``, ``"warn"`` or ``"ok"``.
+
+    A PARTIAL match is the dangerous case, not a total one.  Zero overlap fails
+    loudly downstream; a 3% overlap runs to completion on a small, non-random
+    subset and produces attenuated effects with inflated SEs that are internally
+    consistent and wrong.  ``match_samples`` keys on the phenotype file's FID
+    alone, while the LOCO reader resolves five aliases (fid, iid, fid_iid,
+    "fid iid", fid:iid), so a cohort whose BGEN IDs are FID_IID matches LOCO and
+    then silently drops every sample here.
+
+    The refusal threshold is therefore set at the near-total failure that an
+    ID-convention error produces, not at the partial overlap that legitimate
+    subsetting produces -- a phenotype file routinely covers a wider cohort than
+    one genotype release, and this package's own fixtures match 700 of 900
+    (77.8%) with identical conventions.  Between the threshold and
+    ``SAMPLE_MATCH_WARN_BELOW`` the run proceeds with a warning.
+
+    ``min_sample_match <= 0`` disables both, which is how a caller proceeds
+    deliberately.
+    """
+    if min_sample_match <= 0:
+        return "ok"
+    if match_frac < min_sample_match:
+        return "refuse"
+    if 0.0 < match_frac < SAMPLE_MATCH_WARN_BELOW:
+        return "warn"
+    return "ok"
+
+
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
                    f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
                    all_betas_list, n_cov_elements, T, sigma0_sd_list=None,
@@ -1912,15 +1968,7 @@ def main():
         raise ValueError("--panel-size must be >= 1")
     if args.panel_width < 0:
         raise ValueError("--panel-width must be >= 0 (0 means the whole batch)")
-    # --loco-mode defaults to 'covariate' (0.3.0), but only bites when there is a
-    # prediction to place. With no --loco-preds the mode is moot: nothing is
-    # subtracted and nothing is added to the basis. Only refuse when the user
-    # explicitly asked for covariate mode and gave nothing to put in it.
-    if args.loco_mode is None:
-        args.loco_mode = LOCO_MODE_COVARIATE if args.loco_preds else LOCO_MODE_SUBTRACT
-    elif args.loco_mode == LOCO_MODE_COVARIATE and not args.loco_preds:
-        raise ValueError("--loco-mode covariate needs --loco-preds; without a "
-                         "prediction there is no column to add to the basis.")
+    args.loco_mode = resolve_loco_mode(args)
     if args.fused_finalize and len(pheno_cols) > 1:
         raise ValueError("--fused-finalize supports a single phenotype only; "
                          "drop it or use one --pheno-col.")
@@ -2018,15 +2066,14 @@ def main():
     # "fid iid", fid:iid), so a cohort whose BGEN IDs are FID_IID matches LOCO and
     # then silently drops every sample here.
     match_frac = (N_matched / N) if N else 0.0
-    if args.min_sample_match > 0 and 0.0 < match_frac < 0.50 \
-            and match_frac >= args.min_sample_match:
+    if sample_match_verdict(match_frac, args.min_sample_match) == "warn":
         logger.warning(
             "Only %d of %d phenotype samples (%.1f%%) matched the BGEN. That is "
             "legitimate when the phenotype file covers a wider cohort than this "
             "genotype release, but it is also what a partial ID-convention "
             "collision looks like. Check that the analysed subset is the one you "
             "intended.", N_matched, N, 100 * match_frac)
-    if args.min_sample_match > 0 and match_frac < args.min_sample_match:
+    if sample_match_verdict(match_frac, args.min_sample_match) == "refuse":
         preview = ", ".join(str(s) for s in sample_ids[:3])
         bgen_preview = ", ".join(str(s) for s in bgen_samples[:3])
         raise ValueError(

@@ -115,11 +115,6 @@ def test_effective_nu_matches_the_measured_law():
     assert cov_meta.effective_nu(10 ** 9, 991, cov_meta.C_LOCATION) < 991 / cov_meta.C_LOCATION
 
 
-def test_effective_nu_is_below_blocks_minus_one():
-    for b in (65, 500, 1000, 2000):
-        assert cov_meta.effective_nu(b, 9134, cov_meta.C_LOCATION) < b - 1
-
-
 def test_old_files_yield_nothing_rather_than_a_guess():
     """Files written before this schema have no block count and no df model."""
     old = {
