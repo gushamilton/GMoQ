@@ -49,38 +49,71 @@ def get_armadillo_lib():
 # BluePebble `short` allocation can land on Skylake-SP, Cascade Lake *or* an AMD node,
 # and a binary built with -march=native on one of those can SIGILL on another.
 #
-# The default is left EMPTY, i.e. the SSE2 baseline is kept, for PORTABILITY -- not
-# because the ISA is worthless. That second claim was true of the pre-2026-09-16 kernel
-# and is now stale; it is kept here only as history.
+# An older revision of this comment said raising the ISA "bought nothing", on a
+# microbenchmark of a 500-SNP batch against the then-current kernel.  That measurement no
+# longer holds.  Re-measured end to end on BluePebble (2026-09-16, Xeon Gold 5120, one
+# chr22 testosterone scan = 17,550 variants, N=399,710, T=45, --blocks 1000), building the
+# SAME sources three ways and interleaving the builds in rotating order so that a drift in
+# node load cannot land preferentially on one of them:
 #
-#   HISTORICAL (old kernel, superseded): interleaved on one node, 15 timings per build of
-#   a production-shaped 500-SNP batch, the median kernel time with -march=haswell was
-#   0.9997 of the SSE2 baseline against a 9-22% run-to-run IQR. The kernel was
-#   memory-bound (0.38 flop/byte, IPC 0.7) with inner loops striding down the wrong axis,
-#   so GCC contracted FMAs -- 131 of the 136 it emitted were *scalar* -- but could not
-#   widen anything.
+#   kernel seconds, 4 threads (one per physical core), all three builds on one node:
+#     --cov-mode full          SSE2 215.4   AVX2 193.0 (1.12x)   AVX2 -ffp-contract=off 198.5 (1.09x)
+#     --cov-mode pooled-only   SSE2 160.6   AVX2 141.2 (1.14x)   AVX2 -ffp-contract=off 147.9 (1.09x)
+#   wall clock, 4 threads:
+#     --cov-mode full          SSE2 258.9   AVX2 235.2 (1.10x)
+#     --cov-mode pooled-only   SSE2 187.5   AVX2 167.5 (1.12x)
+#   kernel seconds, 8 threads (4 physical cores + SMT siblings), two independent passes:
+#     --cov-mode pooled-only   SSE2 128.2/128.1   AVX2 102.5/105.1 (1.23x)
 #
-#   CURRENT (2026-09-16, after the panel kernels were reworked): -march=haswell is worth
-#   about 13% of wall clock. Full chr22 testosterone with LOCO on 4 physical cores,
-#   --cov-mode pooled-only: 172.4s -> 142.2s, i.e. 101.8 -> 123.4 SNPs/s. Decompressed
-#   output is BYTE-IDENTICAL to the SSE2 build in both full and pooled-only modes, so
-#   unlike the historical note there is now measured gain at no measured cost.
+# So the gain is real but modest, and it is larger for the pooled-only kernel - which has
+# no block accumulator and is therefore compute-bound rather than L3-bound - than for the
+# block kernel.  GCC 8 still emits mostly SCALAR FMAs (158 of 167) and no zmm registers at
+# all, so the win is the wider ymm loads and the contraction, not vectorised reductions.
 #
-# It is still not the default because this is a build-time choice for a package other
-# people install. -march=haswell needs AVX2, i.e. Intel 2013+ or AMD Zen+; that covers
-# every current BluePebble node, but a stale binary shipped to older hardware SIGILLs.
-# Sites that control their own hardware should turn it on:
+# The old comment's *other* claim was that FMA contraction changes float64 results in the
+# last bits.  That is true of the arithmetic and false of the artefacts: measured on the
+# full chr22 scan above, the AVX2 build's .stage1.tsv.gz, .sigma0.tsv.gz, .cov.ids.tsv.gz
+# and the whole 72,657,000-byte .cov.gz payload (18,164,250 float32 values) are byte-for-byte
+# IDENTICAL to the SSE2 build's once decompressed.  The last-bit float64 differences are
+# some nine orders of magnitude below the %.6g text and float32 binary resolution the
+# outputs are written at, so they cannot survive serialisation.  -ffp-contract=off removes
+# every FMA (objdump: 167 -> 0) while keeping the AVX2 width, and is likewise byte-identical;
+# it is not needed to preserve the outputs, and it gives up about a third of the speedup.
 #
-#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512" pip install -e stage1
+# The default is nevertheless still EMPTY, i.e. the portable SSE2 baseline, and the reason
+# is now PORTABILITY ALONE rather than results or verification.  Raising the baseline is a
+# build-time choice but the binary outlives the build host: the extension is built once into
+# a package directory on a shared filesystem and then imported by whatever node an
+# allocation lands on.  A -march=haswell binary SIGILLs, with no graceful diagnostic, on any
+# host without AVX2.  Every current BluePebble node has it, but "every current node" is not
+# a property setup.py can check at import time on the machine that will run the code, and a
+# 10-14% saving does not pay for a hard crash on the one node that does not.
 #
-# -march=skylake-avx512 is no better: GCC 8 emits zero zmm registers for it and produces
-# bitwise identical results to -march=haswell. -march=native is NOT portable -- a
-# BluePebble `short` allocation can land on Skylake-SP, Cascade Lake or an AMD node.
+# Turn it on deliberately, per site, when the run hosts are known:
+#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512"  # AVX2+FMA; measured above
+#   FUNGWAS_STAGE1_ARCH="-march=skylake-avx512"                 # Intel-only; GCC 8 emits no zmm
+#   FUNGWAS_STAGE1_ARCH="-march=native"                         # NOT portable, see above
+# Setting the variable to the empty string is an explicit request for the baseline.
 #
-# -ffast-math is deliberately never used.
+# -ffast-math is deliberately never used.  It is the one flag that WOULD change the
+# artefacts, because it licenses reassociating the reductions rather than contracting them.
 _DEFAULT_ARCH_FLAGS = ''
-_arch_env = os.environ.get('FUNGWAS_STAGE1_ARCH')
-_arch_flags = (_DEFAULT_ARCH_FLAGS if _arch_env is None else _arch_env).split()
+
+
+def resolve_arch_flags(env=None):
+    """Resolve the ISA flags for the kernel build from the environment.
+
+    Unset means the portable baseline.  Set means exactly what the caller asked for,
+    split on whitespace, including the empty string as an explicit request for the
+    baseline.  Kept as a function so the policy is testable without a compiler.
+    """
+    if env is None:
+        env = os.environ
+    arch_env = env.get('FUNGWAS_STAGE1_ARCH')
+    return (_DEFAULT_ARCH_FLAGS if arch_env is None else arch_env).split()
+
+
+_arch_flags = resolve_arch_flags()
 
 ext_modules = [
     Extension(
@@ -107,23 +140,28 @@ class BuildExt(build_ext):
             self.compiler.compiler_so.remove('-Wstrict-prototypes')
         super().build_extensions()
 
-setup(
-    name='fungwas-stage1',
-    version='0.1.0',
-    ext_modules=ext_modules,
-    cmdclass={'build_ext': BuildExt},
-    packages=['fungwas_stage1'],
-    python_requires='>=3.8',
-    install_requires=[
-        'numpy>=1.20',
-        'scipy',
-    ],
-    extras_require={
-        'bgen': ['bgen>=1.9.7'],
-    },
-    entry_points={
-        'console_scripts': [
-            'fungwas-stage1=fungwas_stage1.cli:main',
+# Guarded so that a test can import this file and check the ISA policy without a
+# compiler and without running a build.  Both `python setup.py build_ext --inplace`
+# and pip's PEP 517 backend execute setup.py with __name__ == "__main__", so the
+# guard changes nothing about how the extension is actually built.
+if __name__ == '__main__':
+    setup(
+        name='fungwas-stage1',
+        version='0.1.0',
+        ext_modules=ext_modules,
+        cmdclass={'build_ext': BuildExt},
+        packages=['fungwas_stage1'],
+        python_requires='>=3.8',
+        install_requires=[
+            'numpy>=1.20',
+            'scipy',
         ],
-    },
-)
+        extras_require={
+            'bgen': ['bgen>=1.9.7'],
+        },
+        entry_points={
+            'console_scripts': [
+                'fungwas-stage1=fungwas_stage1.cli:main',
+            ],
+        },
+    )
