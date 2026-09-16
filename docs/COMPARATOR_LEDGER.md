@@ -160,7 +160,43 @@ phenotypes' `.regenie` files are byte-identical in the `--ignore-pred` arm
 
 ## 5. The ledger
 
+`R1` is the N-matched **no-LOCO** reference (identical to the archived `R0` for
+the stratified components; the N-matched replacement `R1s` for `gamma`). `R2` is
+the **fair comparator** with a within-stratum LOCO. "move" is the change in the
+SE ratio caused by un-handicapping the comparator; positive means G-MoQ lost
+ground. Effective N is `N_regenie / ratio^2`.
+
 <!--LEDGER-TABLE-->
+
+### 5.3 How much the fair comparator moved, and why
+
+Giving REGENIE a within-stratum LOCO tightened **its own** standard errors by
+**2.01% female** and **4.08% male** (section 8). That is the whole of the
+movement in the ratios -- G-MoQ's numerator never changed. The size is in the
+range anticipated from a ridge explaining a few percent of within-component
+variance.
+
+### 5.4 The `gamma` comparator is a special case
+
+The sex LOCO **inflates** REGENIE's standard errors rather than shrinking them.
+The mechanism is that the step-1 ridge is fit on autosomes only
+(`chr1-22_merged`), and autosomal genotypes carry essentially no information
+about sex, so the ridge has nothing to learn and the prediction is noise.
+Adding a noisy offset spreads the logistic linear predictor, which reduces the
+per-person information `p(1-p)` and widens the interval, with no compensating
+gain in signal.
+
+The principle of this ledger is that **each method gets its best configuration
+given what it is allowed to know**. For `gamma` that means REGENIE's best
+comparator is the **no-LOCO, N-matched sex GWAS (R1s)**, not R2s. The LOCO
+column is reported for completeness but should not be read as the fair
+reference for this component.
+
+Note also that the earlier `gamma` comparison was wrong in a way that
+`sqrt(N)` rescaling could not fix: the archived sex GWAS ran on 462,869 people
+while G-MoQ ran on 399,710, and those 63,159 extra people are a **different
+sample**, not a superset restriction of the same one. R1s removes that by
+restricting the sex GWAS to exactly the 399,710.
 
 ---
 
@@ -226,13 +262,15 @@ Scratch tree (participant-level inputs, never committed):
 ```
 scripts/step1_{female,male,sex}.sh     # REGENIE step 1, within stratum
 scripts/step2_{repro,noloco,loco}_*.sh # REGENIE step 2, chr22
+scripts/loco4.sh                       # --pred step 2 over all four phenotypes
 scripts/shift.R                        # constant-shift verification (S4.2)
+scripts/ident.R                        # cross-phenotype identity check (S4.2)
 scripts/compare.R                      # harmonisation + all ledger statistics
 scripts/report.R                       # renders the ledger table
 analysis/comparison_table.tsv          # full machine-readable results
 ```
 
-## Main testosterone chr22, against the FAIR comparator
+## 8. Main testosterone chr22, against the FAIR comparator
 
 Sex-stratified REGENIE **with** its own within-stratum LOCO (F N=199,572,
 M N=200,138, sum 399,710 = G-MoQ's N, the same people). Median SE ratio;
