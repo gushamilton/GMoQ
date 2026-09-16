@@ -109,6 +109,53 @@ logger = logging.getLogger(__name__)
 #: why it is a separate mode rather than a change to ``pooled``: runs already
 #: accepted under ``--cov-mode pooled`` have jackknife ``se_tau_*`` and must
 #: keep them.
+#:
+#: MEASURED, chr22 testosterone with LOCO (17,550 variants, N = 399,710, T = 45,
+#: ``--blocks 1000 --batch-size 100``) on one BluePebble Xeon Gold 5120 node,
+#: threads 1/2/4 bound one per physical core and 8 using the SMT siblings:
+#:
+#:     threads   full     pooled    pooled-only    SNPs/s (full -> pooled-only)
+#:     1         451.7 s  446.3 s   345.5 s        38.9 -> 50.8
+#:     2         337.1 s  332.7 s   254.2 s        52.1 -> 69.0
+#:     4         234.4 s  229.6 s   172.4 s        74.9 -> 101.8
+#:     8         256.7 s  240.3 s   182.5 s        68.4 -> 96.2
+#:
+#: The kernel itself goes 190.4 s -> 143.5 s at four threads and 190.1 s ->
+#: 128.0 s at eight; the write side goes 22.7 s -> 7.6 s, which is the jackknife
+#: finalisation leaving.  Note that eight threads is SLOWER than four in every
+#: mode: the allocation's "8 cpus" are four physical cores plus their SMT
+#: siblings, and filling all eight starves the decode and write threads the
+#: ``--pipeline`` overlap depends on.  Four threads is the configuration to
+#: quote.
+#:
+#: Output, unchanged from ``pooled``: 72.8 MB -> 6.3 MB.
+#:
+#: WHERE THE TIME GOES NOW.  ``--no-pipeline`` serialises decode, kernel and
+#: write, so the batch loop splits cleanly.  Four threads, one per physical
+#: core, same chromosome and node (17,550 variants):
+#:
+#:                        full        pooled-only
+#:     setup              19.0 s      19.0 s        phenotype, covariates, LOCO,
+#:                                                  RIF, BGEN index
+#:     BGEN decode        74.3 s      71.7 s        unchanged, and the floor
+#:     C++ kernel        117.4 s      82.7 s        -30%
+#:     TSV write          21.0 s       6.9 s        -67%, the jackknife
+#:                                                  finalisation leaving
+#:     Sigma_0             0.05 s      0.05 s
+#:     ------------------------------------------
+#:     wall              231.7 s     180.3 s
+#:
+#: With the default ``--pipeline`` the decode hides behind the kernel and the
+#: same two runs are 238.4 s and 158.0 s (73.6 and 111.1 SNPs/s).  The kernel is
+#: still the critical path; if it went to zero the floor would be setup plus
+#: decode, about 91 s.
+#:
+#: Rebuilding the extension with ``FUNGWAS_STAGE1_ARCH="-march=haswell
+#: -mtune=skylake-avx512"`` takes pooled-only to 142.2 s (123.4 SNPs/s) and full
+#: to 191.4 s, with decompressed output byte-identical to the SSE2 build in both
+#: modes on this chromosome.  ``setup.py`` records that raising the ISA bought
+#: nothing; that measurement predates the panel kernels and no longer holds for
+#: them.  The default is deliberately left alone here.
 COV_MODE_FULL = "full"
 COV_MODE_POOLED = "pooled"
 COV_MODE_POOLED_ONLY = "pooled-only"
@@ -1314,6 +1361,34 @@ def write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
     the measurement in ``pooled_cov.py``, the better-behaved one (diagonal ratio
     against an exact HC0 sandwich, 5th-95th percentile: 0.990-1.010 pooled
     against 0.725-1.307 jackknife).
+
+    VERIFIED on chr22 testosterone with LOCO, all 17,550 variants, against a
+    full-mode run whose own output is byte-identical (decompressed) to the
+    accepted reference scan:
+
+      * ``.sigma0.tsv.gz``    byte-identical
+      * identity columns      identical, 87,750/87,750
+      * ``d_resid``           identical, 17,550/17,550
+      * ``beta_tau_*``        identical on 789,749 of 789,750; the one that
+                              differs sits on a ``%.6g`` rounding boundary
+                              (relative difference 2.0e-6 in the printed value)
+      * ``se_tau_*``          differ on 99.99%, median relative difference 1.5%,
+                              maximum 25% -- this is the jackknife against the
+                              pooled estimator, not an error
+
+    Through Stage 2 (skew, ``cov_source="pooled"``, ``tau_cov_estimator="ols"``,
+    the accepted gate's own weights) every parameter, standard error, p-value
+    and degrees-of-freedom column matches the gate on 17,549 of 17,550 rows and
+    agrees to 4e-11 on the remaining one; the genome-wide-significant counts are
+    unchanged (20 ``beta_left``, 27 ``beta_right``).  What moves is ``Q`` and
+    its calibration -- ``Q``, ``Q_df_eff``, ``Q_scale`` on every row, ``Q_pval``
+    on 17,251 -- because ``Q = sum_t resid_t^2 / se_tau_t^2`` is the one place
+    Stage 2's pooled path reads ``se_tau_*`` (R/gwas.R, the
+    ``tau_cov_estimator == "ols"`` branch).  Maximum relative change: ``Q``
+    21.7%, ``Q_pval`` 60.0%, ``|dlog10 Q_pval|`` 0.40.  No ``Q_pval`` crosses
+    5e-8 in either run.  Whether the pooled-diagonal ``Q`` is the better
+    calibrated statistic under a pooled covariance is a real question and is
+    NOT settled here; it is only noted that it is the self-consistent one.
     """
     for p_idx, (betas, d_resid) in enumerate(pooled_list):
         f_tsv = f_tsv_list[p_idx]
