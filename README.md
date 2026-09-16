@@ -235,7 +235,7 @@ cd stage1 && python setup.py build_ext --inplace && cd ..
 PYTHONPATH=stage1 python -m pytest stage1/tests/ -q
 ```
 
-193 tests, ~29s on 8 CPUs.
+164 tests, ~8s on 8 CPUs.
 
 **Rebuild the extension after pulling anything that touches `stage1/src/`.**
 A stale `_stage1_cpp` produces a wall of failures that look like broken code but
