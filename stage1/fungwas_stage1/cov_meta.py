@@ -160,6 +160,7 @@ def build_cov_meta(
     nu_source: Optional[str] = None,
     n_blocks_nonempty: Optional[int] = None,
     analysis: Optional[dict] = None,
+    se_source: Optional[str] = None,
 ) -> dict:
     """Build the ``.cov.meta.json`` payload.
 
@@ -191,6 +192,14 @@ def build_cov_meta(
         Provenance of the scan, from ``pooled_cov.sigma0_analysis_block``.
         Recorded verbatim so Stage 2 can compare it with the matching field
         of a ``.sigma0.meta.json`` sidecar and refuse a mismatch.
+    se_source : str, optional
+        What the ``se_tau_*`` columns of the Stage 1 TSV actually contain, when
+        it is not the jackknife.  ``"pooled_sigma0"`` means
+        ``sqrt(Sigma_0[t,t] / d_resid)``, written by ``--cov-mode pooled-only``,
+        which does not accumulate the per-block statistics a jackknife standard
+        error is a function of.  Omitted entirely when the jackknife ran, so
+        every file written before this field existed is unchanged and a reader
+        may treat "absent" as "jackknife".
     """
     if cov_dtype not in ("int8", "float32"):
         raise ValueError(f"cov_dtype must be int8 or float32, got {cov_dtype!r}")
@@ -231,6 +240,8 @@ def build_cov_meta(
     }
     if analysis is not None:
         payload["analysis"] = dict(analysis)
+    if se_source is not None:
+        payload["se_source"] = str(se_source)
     return payload
 
 

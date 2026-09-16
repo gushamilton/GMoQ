@@ -509,6 +509,43 @@ def compute_block_finalize_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarr
     )
 
 
+def compute_pooled_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
+                         min_mac: float = 5.0, min_var: float = 1e-8,
+                         n_threads: int = 1, panel_size: int = 16):
+    """Point estimates and the per-variant scale, with no jackknife blocks.
+
+    Returns ``(betas, d_resid)`` with ``betas`` of shape (M, T) and ``d_resid`` of
+    shape (M,), NaN for variants that fail the MAC or variance filter -- the same
+    variants the block kernel leaves NaN, decided by the same two tests on the same
+    inputs.
+
+    This is the whole Stage 1 computation that ``cov_source = "pooled"`` needs:
+    ``beta_t = (sum_i g_resid_i psi_r_i_t) / D`` and ``D = sum_i g_resid_i^2``, with
+    ``Sigma_v = Sigma_0 / D`` supplying the covariance from a matrix that contains no
+    genotype.  The ``(n_blocks, panel_size, 1+T)`` accumulator the jackknife needs is
+    never allocated.
+
+    Not bit-identical to the block path, and cannot be: the block path forms the
+    totals as ``sum_b (sum_{i in b} ...)`` over blocks, this one as ``sum_i ...``
+    over samples.  Same addends, different association.  Everything upstream of the
+    totals -- the MAC filter, the imputed mean, ``Qtg``, and hence ``g_resid``
+    itself -- is bit-for-bit what the block path computes.
+    """
+    check_orthonormal_basis(Q, context="compute_pooled_panel")
+    require_cpp_extension("Pooled-only panel computation")
+    if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_pooled_panel_static'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_pooled_panel_static; "
+            "rebuild the extension (python setup.py build_ext --inplace)."
+        )
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    Y_c = np.ascontiguousarray(Y_resid, dtype=np.float64)
+    Q_c = np.ascontiguousarray(Q, dtype=np.float64)
+    return cpp_ext.stage1_pooled_panel_static(
+        G_f, Y_c, Q_c, min_mac, min_var, n_threads, panel_size,
+    )
+
+
 def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
                            block_ids: np.ndarray, n_blocks: int,
                            min_mac: float = 5.0, min_var: float = 1e-8,

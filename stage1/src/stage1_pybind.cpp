@@ -708,6 +708,242 @@ py::tuple stage1_finalize_block_scores_panel_impl(
     return py::make_tuple(betas_arr, se_arr, cov_arr);
 }
 
+// ---------------------------------------------------------------------------
+// Pooled-only panel kernel.
+//
+// WHAT IT DROPS.  The block kernel above exists for one reason: the delete-one-
+// block jackknife needs, per SNP, the pair (D_b, N_b) for every block b, so that
+// the leave-one-block-out fit is recovered by subtraction.  Nothing else in
+// Stage 1 wants block structure.  The point estimate and the per-variant scale
+// are plain totals,
+//
+//     beta_t = (sum_i g_resid,i psi_r,i,t) / D ,    D = sum_i g_resid,i^2
+//
+// and the pooled covariance Sigma_0 = (1/n) Psi_r' Psi_r has no genotype in it
+// at all.  So when the caller wants only the pooled analysis, the whole
+// (n_blocks, P, 1+T) accumulator can go.
+//
+// WHY THAT IS FAST.  The arithmetic is unchanged - the same N*P*(K + T + 2)
+// multiply-adds - but the accumulator the innermost loop writes into shrinks
+// from n_blocks * P * (1+T) doubles to P * T.  At the production shape
+// (n_blocks = 1000, P = 16, T = 45) that is 5.9 MB per thread against 5.8 kB.
+// Block ids are drawn i.i.d. uniform over the blocks (cli.py: np.random.randint),
+// so consecutive samples write into unrelated 5.8 kB tiles of that 5.9 MB
+// region; with four to eight OpenMP threads the aggregate write-hot set is
+// 24-48 MB against a 19.25 MB L3, and the accumulate misses to DRAM.  The
+// pooled accumulator is L1-resident and never misses.
+//
+// WHAT STAYS BIT-IDENTICAL.  Passes 1 and 2 are the same code as
+// panel_block_stats, so the MAC filter, the imputed mean and Qtg - and hence
+// g_resid itself - are bit-for-bit what the block path computes.  Pass 3
+// accumulates over i ascending exactly as before.  What is NOT bit-identical is
+// the summation ORDER of the totals: the block path forms D as
+// sum_b (sum_{i in b} r_i^2) with b ascending, this one as sum_i r_i^2 with i
+// ascending.  Same addends, different association, so the two agree to rounding
+// (relative difference of order 1e-16), not to the bit.
+// ---------------------------------------------------------------------------
+
+inline void panel_pooled_stats(
+    const double* G_ptr,       // (N, M) column-major
+    const double* RIF_ptr,     // (N, T) row-major
+    const double* Q_ptr,       // (N, K) row-major
+    size_t N,
+    size_t T,
+    size_t K,
+    double min_mac,
+    size_t j0,
+    size_t j1,
+    std::vector<size_t>& cols,
+    std::vector<double>& gmean,
+    std::vector<double>& g2,
+    std::vector<double>& Qtg,
+    std::vector<double>& num      // P * T, the numerators sum_i r_i psi_i,t
+) {
+    cols.clear();
+    gmean.clear();
+
+    // Pass 1: identical to panel_block_stats.
+    for (size_t j = j0; j < j1; j++) {
+        const double* g_col = G_ptr + j * N;
+        size_t n_valid = 0;
+        double g_sum = 0.0;
+        for (size_t i = 0; i < N; i++) {
+            double val = g_col[i];
+            if (std::isfinite(val)) {
+                g_sum += val;
+                n_valid++;
+            }
+        }
+        if (n_valid < 100) {
+            continue;
+        }
+        double mac = std::min(g_sum, 2.0 * static_cast<double>(n_valid) - g_sum);
+        if (mac < min_mac) {
+            continue;
+        }
+        cols.push_back(j);
+        gmean.push_back(g_sum / static_cast<double>(n_valid));
+    }
+
+    const size_t P = cols.size();
+    if (P == 0) {
+        return;
+    }
+
+    // Pass 2: identical to panel_block_stats, so Qtg is bit-for-bit the same.
+    Qtg.assign(P * K, 0.0);
+    for (size_t i = 0; i < N; i++) {
+        const double* qrow = Q_ptr + i * K;
+        for (size_t p = 0; p < P; p++) {
+            double val = G_ptr[i + cols[p] * N];
+            if (!std::isfinite(val)) {
+                val = gmean[p];
+            }
+            double* qt = &Qtg[p * K];
+            for (size_t k = 0; k < K; k++) {
+                qt[k] += qrow[k] * val;
+            }
+        }
+    }
+
+    // Pass 3: residualise and accumulate the pooled totals.  Same loop nest as
+    // the block version with the block indirection and the (n_blocks, ...)
+    // accumulator removed; `num` is P * T doubles and stays in L1.
+    g2.assign(P, 0.0);
+    num.assign(P * T, 0.0);
+
+    for (size_t i = 0; i < N; i++) {
+        const double* qrow = Q_ptr + i * K;
+        const double* rrow = RIF_ptr + i * T;
+
+        for (size_t p = 0; p < P; p++) {
+            double val = G_ptr[i + cols[p] * N];
+            if (!std::isfinite(val)) {
+                val = gmean[p];
+            }
+            const double* qt = &Qtg[p * K];
+            double proj = 0.0;
+            for (size_t k = 0; k < K; k++) {
+                proj += qrow[k] * qt[k];
+            }
+            double resid = val - proj;
+            g2[p] += resid * resid;
+            double* s = &num[p * T];
+            for (size_t t = 0; t < T; t++) {
+                s[t] += resid * rrow[t];
+            }
+        }
+    }
+}
+
+// Returns (betas (M, T), d_resid (M,)).  Rows for SNPs that fail the MAC or
+// variance filter are NaN, exactly as the block path leaves them.
+template <bool UseStaticSchedule>
+py::tuple stage1_pooled_panel_impl(
+    py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> RIF_resid_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> Q_arr,
+    double min_mac,
+    double min_var,
+    int n_threads,
+    int panel_size
+) {
+    auto G_buf = G_arr.request();
+    auto RIF_buf = RIF_resid_arr.request();
+    auto Q_buf = Q_arr.request();
+
+    size_t N = G_buf.shape[0];
+    size_t M = G_buf.shape[1];
+    size_t T = RIF_buf.shape[1];
+    size_t K = Q_buf.shape[1];
+
+    if (static_cast<size_t>(RIF_buf.shape[0]) != N || static_cast<size_t>(Q_buf.shape[0]) != N) {
+        throw std::runtime_error("RIF_resid and Q must have the same number of rows as G.");
+    }
+    if (panel_size < 1) {
+        panel_size = 1;
+    }
+
+    const double* G_ptr = static_cast<const double*>(G_buf.ptr);
+    const double* RIF_ptr = static_cast<const double*>(RIF_buf.ptr);
+    const double* Q_ptr = static_cast<const double*>(Q_buf.ptr);
+
+    py::array_t<double, py::array::f_style> betas_arr({M, T});
+    py::array_t<double> d_resid_arr(std::vector<size_t>{M});
+
+    double* betas_ptr = static_cast<double*>(betas_arr.request().ptr);
+    double* d_ptr = static_cast<double*>(d_resid_arr.request().ptr);
+
+    const double nan_val = std::numeric_limits<double>::quiet_NaN();
+    std::fill(betas_ptr, betas_ptr + M * T, nan_val);
+    std::fill(d_ptr, d_ptr + M, nan_val);
+
+    const size_t P = static_cast<size_t>(panel_size);
+    const size_t n_panels = (M + P - 1) / P;
+
+    #ifdef _OPENMP
+    omp_set_num_threads(n_threads);
+    #endif
+
+    {
+    py::gil_scoped_release gil_release;
+
+    #pragma omp parallel
+    {
+        std::vector<size_t> cols;
+        std::vector<double> gmean;
+        std::vector<double> g2;
+        std::vector<double> Qtg;
+        std::vector<double> num;
+
+        if (UseStaticSchedule) {
+            #pragma omp for schedule(static)
+            for (size_t ip = 0; ip < n_panels; ip++) {
+                size_t j0 = ip * P;
+                size_t j1 = std::min(M, j0 + P);
+                panel_pooled_stats(G_ptr, RIF_ptr, Q_ptr, N, T, K, min_mac,
+                                   j0, j1, cols, gmean, g2, Qtg, num);
+                for (size_t p = 0; p < cols.size(); p++) {
+                    if (!(g2[p] >= min_var)) {
+                        continue;
+                    }
+                    size_t j = cols[p];
+                    const double D = g2[p];
+                    const double* s = &num[p * T];
+                    for (size_t t = 0; t < T; t++) {
+                        betas_ptr[j + M * t] = s[t] / D;
+                    }
+                    d_ptr[j] = D;
+                }
+            }
+        } else {
+            #pragma omp for schedule(dynamic, 1)
+            for (size_t ip = 0; ip < n_panels; ip++) {
+                size_t j0 = ip * P;
+                size_t j1 = std::min(M, j0 + P);
+                panel_pooled_stats(G_ptr, RIF_ptr, Q_ptr, N, T, K, min_mac,
+                                   j0, j1, cols, gmean, g2, Qtg, num);
+                for (size_t p = 0; p < cols.size(); p++) {
+                    if (!(g2[p] >= min_var)) {
+                        continue;
+                    }
+                    size_t j = cols[p];
+                    const double D = g2[p];
+                    const double* s = &num[p * T];
+                    for (size_t t = 0; t < T; t++) {
+                        betas_ptr[j + M * t] = s[t] / D;
+                    }
+                    d_ptr[j] = D;
+                }
+            }
+        }
+    }
+
+    }  // gil_release
+
+    return py::make_tuple(betas_arr, d_resid_arr);
+}
+
 template <bool UseStaticSchedule>
 py::list stage1_block_scores_multi_raw_impl(
     py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
@@ -1337,6 +1573,18 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           "Panel block scores fused with the jackknife finalisation",
           py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
           py::arg("block_ids"), py::arg("n_blocks"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    m.def("stage1_pooled_panel_static", &stage1_pooled_panel_impl<true>,
+          "Pooled-only panel kernel: beta and d_resid with no block accumulation",
+          py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    m.def("stage1_pooled_panel_dynamic", &stage1_pooled_panel_impl<false>,
+          "Pooled-only panel kernel with a dynamic OpenMP schedule",
+          py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1, py::arg("panel_size") = 16);
 
