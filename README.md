@@ -197,6 +197,12 @@ cd stage1 && python setup.py build_ext --inplace && cd ..
 PYTHONPATH=stage1 python -m pytest stage1/tests/ -q
 ```
 
+**Rebuild the extension after pulling anything that touches `stage1/src/`.**
+A stale `_stage1_cpp` produces a wall of failures that look like broken code but
+are only a missing symbol -- pulling the `--cov-mode pooled-only` work without
+rebuilding fails 13 tests, because it added `panel_pooled_stats` to the pybind
+layer. The `build_ext --inplace` line above is not optional after such a pull.
+
 ### Stage 2 (R proof scripts)
 
 `stage2/tests/` holds standalone R proof scripts (not `testthat` files); each is run with
