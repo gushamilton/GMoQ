@@ -231,3 +231,27 @@ scripts/compare.R                      # harmonisation + all ledger statistics
 scripts/report.R                       # renders the ledger table
 analysis/comparison_table.tsv          # full machine-readable results
 ```
+
+## Main testosterone chr22, against the FAIR comparator
+
+Sex-stratified REGENIE **with** its own within-stratum LOCO (F N=199,572,
+M N=200,138, sum 399,710 = G-MoQ's N, the same people). Median SE ratio;
+lower is better; 1.0 means matching a GWAS that is told everyone's sex.
+
+| G-MoQ arm | Female | Male | Sex (gamma) |
+|---|---|---|---|
+| subtract-from-Y LOCO (pre-0.3.0 default) | 1.1439 | 1.1132 | 0.9819 |
+| no LOCO | 1.0446 | 0.9708 | 0.9782 |
+| two-pass blind LOCO | 1.0320 | 0.9523 | 0.9780 |
+
+Against the handicapped `--ignore-pred` comparator the same arms give 1.1209 /
+1.0677, 1.0236 / 0.9311 and 1.0113 / 0.9134. The fair comparator moved every
+cell by the amount its own LOCO tightened REGENIE: **+2.01% female, +4.08% male**.
+
+Effective N (`1/ratio^2`) relative to the stratified GWAS: female 76% -> 92%,
+male 81% -> 106%. The male figure above 100% is not an error: G-MoQ uses all
+399,710 people for both components where stratification discards half.
+
+`--loco-mode covariate` was measured against the handicapped comparator at
+1.0235 / 0.9309, statistically indistinguishable from the no-LOCO arm
+(1.0236 / 0.9311), so its fair-comparator figures are the no-LOCO row.

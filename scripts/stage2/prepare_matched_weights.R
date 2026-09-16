@@ -24,7 +24,8 @@ stop_usage <- function() {
   stop(paste(
     "Usage: Rscript prepare_matched_weights.R",
     "--trait <trait> --chr <1..22> --stage1 <file>",
-    "--pheno <file> --covar <file> --keep <file> --loco <file>",
+    "--pheno <file> --covar <file> --keep <file> [--loco <file>]",
+    "[--loco-mode <subtract|covariate>]  (default: matches Stage 1)",
     "--bgen-sample <file> --family <shifted_lognormal|skew|mixture>",
     "--out-dir <directory> [--loco-scale regression] [--seed 20260915]",
     "[--expected-n N --expected-mean M --expected-sd S --expected-scale A]",
@@ -39,6 +40,13 @@ pheno_file <- get_arg("--pheno")
 covar_file <- get_arg("--covar")
 keep_file <- get_arg("--keep")
 loco_file <- get_arg("--loco")
+## Mirrors Stage 1's --loco-mode. Under 'covariate' Stage 1 leaves Y unadjusted
+## and puts L(chr) in the residualising basis, so the matched W baseline MUST be
+## raw Y. Under 'subtract' it is Y - scale*L(chr), the historical behaviour.
+loco_mode <- get_arg("--loco-mode", if (is.null(loco_file)) "covariate" else "subtract")
+if (!loco_mode %in% c("subtract", "covariate")) {
+  stop("--loco-mode must be subtract or covariate.", call. = FALSE)
+}
 bgen_sample_file <- get_arg("--bgen-sample")
 family <- get_arg("--family")
 out_dir <- get_arg("--out-dir")
@@ -55,7 +63,7 @@ expected_sd <- optional_num("--expected-sd")
 expected_scale <- optional_num("--expected-scale")
 
 if (any(vapply(list(trait, chr_raw, stage1_file, pheno_file, covar_file,
-                    keep_file, loco_file, bgen_sample_file, family, out_dir),
+                    keep_file, bgen_sample_file, family, out_dir),
                is.null, logical(1)))) stop_usage()
 if (!trait %in% c(
   "bmi", "log_bmi", "weight",
@@ -85,7 +93,11 @@ if (!identical(family, expected_family)) {
 }
 if (!is.finite(seed)) seed <- 20260915L
 
-required <- c(stage1_file, pheno_file, covar_file, keep_file, loco_file,
+if (identical(loco_mode, "subtract") && is.null(loco_file)) {
+  stop("--loco-mode subtract requires --loco.", call. = FALSE)
+}
+required <- c(stage1_file, pheno_file, covar_file, keep_file,
+              if (!is.null(loco_file)) loco_file else NULL,
               bgen_sample_file)
 missing <- required[!file.exists(required)]
 if (length(missing)) stop("Missing required input(s): ", paste(missing, collapse = ", "),
@@ -290,12 +302,21 @@ read_loco <- function(path, sample_ids, sample_iid, target_chr) {
   list(pred_by_chr = pred_by_chr, target = target, loco_valid = !is.na(pos))
 }
 
+use_subtract <- identical(loco_mode, "subtract")
+if (!use_subtract) {
+  message("--loco-mode covariate: W baseline is the UNADJUSTED phenotype, ",
+          "matching Stage 1, which puts L(chr) in the basis rather than in Y.")
+  loco <- list(loco_valid = rep(TRUE, nrow(ph)),
+               target = rep(0, nrow(ph)),
+               pred_by_chr = list(rep(0, nrow(ph))))
+} else {
 loco_path <- resolve_loco_file(loco_file, trait)
 loco <- read_loco(loco_path, ph$FID, ph$IID, chr)
 if (!any(loco$loco_valid)) stop("No phenotype rows match LOCO samples.", call. = FALSE)
 ph <- ph[loco$loco_valid]
 pred_target <- loco$target[loco$loco_valid]
 pred_by_chr <- lapply(loco$pred_by_chr, function(x) x[loco$loco_valid])
+}
 
 ## Match Stage 1's regression LOCO scale: pooled OLS of the original phenotype
 ## on all chromosome predictions, before the BGEN mask is applied.
@@ -322,7 +343,7 @@ resolve_scale <- function(mode, y, pred_by_chr) {
   num / den
 }
 
-scale_factor <- resolve_scale(loco_scale_mode, as.numeric(ph$y), pred_by_chr)
+scale_factor <- if (use_subtract) resolve_scale(loco_scale_mode, as.numeric(ph$y), pred_by_chr) else 0
 if (!is.finite(scale_factor)) stop("Non-finite LOCO scale factor.", call. = FALSE)
 
 ## The BGEN mask is applied after the LOCO scale, exactly as Stage 1 does.
@@ -612,6 +633,7 @@ provenance <- list(
     "serialized_three_decimal_labels"
   },
   covariates = covar_cols,
+  loco_mode = loco_mode,
   loco_scale_mode = loco_scale_mode,
   loco_scale_factor = unname(scale_factor),
   baseline = "LOCO-adjusted phenotype, BGEN-matched (Stage 1 RIF then residualizes X)",
@@ -641,7 +663,7 @@ for (nm in names(outputs)) {
 
 summary <- data.table(
   trait = trait, chromosome = chr, family = family, n_samples = nrow(ph),
-  n_taus = length(taus), loco_scale_mode = loco_scale_mode,
+  n_taus = length(taus), loco_mode = loco_mode, loco_scale_mode = loco_scale_mode,
   loco_scale_factor = scale_factor,
   baseline_mean = mean(y_base), baseline_sd = stats::sd(y_base),
   stage1_file = normalizePath(stage1_file, mustWork = TRUE),

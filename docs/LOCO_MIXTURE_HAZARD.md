@@ -107,8 +107,15 @@ too small.
 > the two it had inflated. See [TWO_PASS_LOCO.md](TWO_PASS_LOCO.md#what-the-lambda-actually-was).
 > The original paragraph is kept below for the record.
 
-~~**Therefore the 5-9% lambda rise on removing LOCO is real lost
-relatedness/structure control.** The machinery is calibrated and the signal is
+~~**RETRACTED 2026-09-16 (later the same day).** This section previously argued
+that the 5-9% lambda rise on removing LOCO was real lost relatedness control.
+That is wrong, and lambda could not have shown it either way. Masking the signal
+-- dropping 1 Mb around every REGENIE |z|>=5 hit, 5,114 variants including SHBG
+-- leaves lambda unchanged or higher in every arm, so at N=400,000 this lambda is
+polygenicity, not confounding. Two further lines agree: lambda moved only for the
+two parameters whose SEs the subtraction inflated, and gamma, whose SE ratio
+between arms was 1.0037, had lambda 1.2650 against 1.2671. The rise was the
+arithmetic consequence of inflated standard errors. The machinery is calibrated and the signal is
 held constant, so the change is attributable to LOCO. The offset was failing at
 polygenic prediction (within-sex R^2 = 0.0003) while genuinely doing structure
 control -- two different jobs, one of them working.~~
