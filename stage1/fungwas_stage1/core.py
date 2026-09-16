@@ -509,6 +509,98 @@ def compute_block_finalize_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarr
     )
 
 
+def make_block_plan(Y_resid: np.ndarray, Q: np.ndarray, block_ids: np.ndarray,
+                    n_blocks: int, n_threads: int = 1):
+    """Build the genotype-independent plan the fast panel kernel runs against.
+
+    The plan holds the block-sorted sample order, ``Y_resid`` and ``Q`` permuted
+    into it, and the per-block cross-products ``Q_b^T Y_b`` and ``Q_b^T Q_b``.
+    None of that depends on the genotypes, so it is built once per Stage 1 run and
+    reused for every batch; rebuilding it per batch would cost roughly as much as
+    a batch of the kernel itself.
+    """
+    check_orthonormal_basis(Q, context="make_block_plan")
+    require_cpp_extension("Fast panel block-score kernel")
+    if not hasattr(cpp_ext, 'BlockPlan'):
+        raise RuntimeError(
+            "The C++ extension does not export BlockPlan; rebuild the extension "
+            "or run with --exact-kernel."
+        )
+    Y_c = np.ascontiguousarray(Y_resid, dtype=np.float64)
+    if Y_c.ndim == 1:
+        Y_c = Y_c.reshape(-1, 1)
+    Q_c = np.ascontiguousarray(Q, dtype=np.float64)
+    return cpp_ext.BlockPlan(Y_c, Q_c, block_ids.astype(np.int32), int(n_blocks),
+                             int(n_threads))
+
+
+def compute_block_finalize_panel_fast(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
+                                      block_ids: np.ndarray, n_blocks: int,
+                                      min_mac: float = 5.0, min_var: float = 1e-8,
+                                      n_threads: int = 1, panel_width: int = 0,
+                                      plan=None):
+    """Restructured panel kernel fused with the jackknife finalisation.
+
+    Computes exactly what :func:`compute_block_finalize_panel` computes, but forms
+    the block statistics from an algebraically equivalent expansion that lets the
+    inner loops stream contiguous memory and hoists the covariate projection out of
+    the per-(sample, SNP) loop.  See ``src/stage1_fast.hpp`` for the derivation.
+
+    **Not bit-identical** to :func:`compute_block_finalize_panel`: the summation is
+    reassociated.  Measured against it on production-shaped data the betas agree to
+    ~1e-16 absolute and the SEs to ~2e-15 relative.  ``--exact-kernel`` selects the
+    bit-identical path for runs that must reproduce historical output byte for byte.
+
+    The result does not depend on the thread count, the panel width or the batch
+    size; that is pinned by the tests in ``tests/test_fast_kernel.py``.
+
+    Parameters
+    ----------
+    plan : BlockPlan, optional
+        Prebuilt plan from :func:`make_block_plan`.  Pass one when calling this
+        repeatedly with the same ``Y_resid``/``Q``/``block_ids`` - the CLI does.
+    panel_width : int
+        SNPs carried through one sweep.  0 (default) means the whole batch, which
+        streams ``Y_resid`` once per batch instead of once per panel.
+    """
+    require_cpp_extension("Fast panel block-score kernel")
+    if not hasattr(cpp_ext, 'stage1_finalize_block_scores_panel_fast'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_finalize_block_scores_panel_fast; "
+            "rebuild the extension or run with --exact-kernel."
+        )
+    if plan is None:
+        plan = make_block_plan(Y_resid, Q, block_ids, n_blocks, n_threads=n_threads)
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    return cpp_ext.stage1_finalize_block_scores_panel_fast(
+        G_f, plan, min_mac, min_var, n_threads, panel_width,
+    )
+
+
+def compute_block_scores_panel_fast(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
+                                    block_ids: np.ndarray, n_blocks: int,
+                                    min_mac: float = 5.0, min_var: float = 1e-8,
+                                    n_threads: int = 1, panel_width: int = 0,
+                                    plan=None) -> np.ndarray:
+    """Raw ``(M, n_blocks, 1+T)`` block statistics from the fast kernel.
+
+    Same arithmetic as :func:`compute_block_finalize_panel_fast`, stopping before
+    the jackknife.  Used by the tests; the CLI uses the fused form.
+    """
+    require_cpp_extension("Fast panel block-score kernel")
+    if not hasattr(cpp_ext, 'stage1_block_scores_panel_fast'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_block_scores_panel_fast; "
+            "rebuild the extension or run with --exact-kernel."
+        )
+    if plan is None:
+        plan = make_block_plan(Y_resid, Q, block_ids, n_blocks, n_threads=n_threads)
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    return cpp_ext.stage1_block_scores_panel_fast(
+        G_f, plan, min_mac, min_var, n_threads, panel_width,
+    )
+
+
 def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
                            block_ids: np.ndarray, n_blocks: int,
                            min_mac: float = 5.0, min_var: float = 1e-8,

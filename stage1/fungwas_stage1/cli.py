@@ -54,6 +54,9 @@ from .core import (
     compute_block_finalize,
     compute_block_scores_panel,
     compute_block_finalize_panel,
+    compute_block_finalize_panel_fast,
+    compute_block_scores_panel_fast,
+    make_block_plan,
     compute_covariance_from_blocks,
     residual_sum_squares,
     resolve_covar_cols,
@@ -1371,9 +1374,28 @@ class _BatchPipeline:
             self._pool = None
 
 
+def _get_block_plan(kernel_state, RIF_resid, Q, block_ids, args):
+    """The fast kernel's genotype-independent plan, rebuilt only when it must be.
+
+    ``RIF_resid`` and ``Q`` are replaced when the active chromosome changes under
+    LOCO, so the plan is keyed on their object identity; the references kept here
+    also keep those arrays alive, which is what makes the identity test sound.
+    Building it costs about as much as one batch of the kernel, so rebuilding it
+    per batch would give back most of the speedup.
+    """
+    if (kernel_state.get('rif') is RIF_resid and kernel_state.get('q') is Q
+            and kernel_state.get('plan') is not None):
+        return kernel_state['plan']
+    plan = make_block_plan(RIF_resid, Q, block_ids, args.blocks, n_threads=args.threads)
+    kernel_state['rif'] = RIF_resid
+    kernel_state['q'] = Q
+    kernel_state['plan'] = plan
+    return plan
+
+
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
                    f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
-                   all_betas_list, n_cov_elements, T):
+                   all_betas_list, n_cov_elements, T, kernel_state=None):
     """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
     t_compute = time.perf_counter()
     if use_multi:
@@ -1382,15 +1404,37 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
         )
         fused_list = None
     elif args.fused_finalize:
-        finalize = compute_block_finalize_panel if args.panel_kernel else compute_block_finalize
-        kw = {'panel_size': args.panel_size} if args.panel_kernel else {}
-        fused_list = [
-            finalize(
+        if args.panel_kernel and not args.exact_kernel:
+            if kernel_state is None:
+                kernel_state = {}
+            plan = _get_block_plan(kernel_state, RIF_resid_list[0], Q, block_ids, args)
+            fused_list = [
+                compute_block_finalize_panel_fast(
+                    G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
+                    n_threads=args.threads, panel_width=args.panel_width, plan=plan,
+                )
+            ]
+        else:
+            finalize = compute_block_finalize_panel if args.panel_kernel else compute_block_finalize
+            kw = {'panel_size': args.panel_size} if args.panel_kernel else {}
+            fused_list = [
+                finalize(
+                    G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
+                    n_threads=args.threads, **kw
+                )
+            ]
+        stats_list = None
+    elif args.panel_kernel and not args.exact_kernel:
+        if kernel_state is None:
+            kernel_state = {}
+        plan = _get_block_plan(kernel_state, RIF_resid_list[0], Q, block_ids, args)
+        stats_list = [
+            compute_block_scores_panel_fast(
                 G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
-                n_threads=args.threads, **kw
+                n_threads=args.threads, panel_width=args.panel_width, plan=plan,
             )
         ]
-        stats_list = None
+        fused_list = None
     else:
         scores = compute_block_scores_panel if args.panel_kernel else compute_block_scores
         kw = {'panel_size': args.panel_size} if args.panel_kernel else {}
@@ -1573,7 +1617,22 @@ def main():
                              'Bit-identical output; single phenotype only.')
     parser.set_defaults(panel_kernel=True)
     parser.add_argument('--panel-size', dest='panel_size', type=int, default=16,
-                        help='Number of SNPs per panel for --panel-kernel (default: 16).')
+                        help='Number of SNPs per panel for the exact panel kernel '
+                             '(--exact-kernel; default: 16). Ignored by the default fast '
+                             'kernel, which uses --panel-width.')
+    parser.add_argument('--exact-kernel', dest='exact_kernel', action='store_true',
+                        help='Use the bit-identical panel kernel instead of the default fast '
+                             'one. The fast kernel forms the same block statistics from an '
+                             'algebraically equivalent expansion, so it reassociates the '
+                             'summation and differs in the last bits (measured: betas ~1e-16 '
+                             'absolute, SEs ~2e-15 relative). Use this to reproduce historical '
+                             'output byte for byte; it is about 5x slower.')
+    parser.set_defaults(exact_kernel=False)
+    parser.add_argument('--panel-width', dest='panel_width', type=int, default=0,
+                        help='SNPs carried through one sweep of the fast kernel. 0 (default) '
+                             'means the whole batch, which streams the residualised RIF matrix '
+                             'once per batch. Lower it only to cap the packed genotype tile, '
+                             'which is N * panel_width * 8 bytes.')
     parser.add_argument('--fused-finalize', dest='fused_finalize', action='store_true',
                         help='Compute beta/SE/covariance inside the C++ OpenMP loop instead of '
                              'returning per-block statistics and redoing the work per SNP in NumPy. '
@@ -1690,6 +1749,8 @@ def main():
                          "drop it or use a single --pheno-col.")
     if args.panel_kernel and args.panel_size < 1:
         raise ValueError("--panel-size must be >= 1")
+    if args.panel_width < 0:
+        raise ValueError("--panel-width must be >= 0 (0 means the whole batch)")
     # --loco-mode defaults to 'covariate' (0.3.0), but only bites when there is a
     # prediction to place. With no --loco-preds the mode is moot: nothing is
     # subtracted and nothing is added to the basis. Only refuse when the user
@@ -1878,6 +1939,9 @@ def main():
     np.random.seed(args.seed)
     block_ids = np.random.randint(0, args.blocks, N_matched).astype(np.int32)
     n_blocks_nonempty = count_nonempty_blocks(block_ids, args.blocks, flag="--blocks")
+
+    # Carries the fast kernel's BlockPlan across batches (see _get_block_plan).
+    kernel_state = {}
     
     # Output setup
     _sanitize_name = sanitize_pheno_name
@@ -1961,7 +2025,8 @@ def main():
                         _process_batch,
                         G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                         args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
-                        f_cov_scale_list, all_betas_list, n_cov_elements, T
+                        f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                        kernel_state
                     )
                     total_compute += compute_s
                     total_write += write_s
@@ -2004,7 +2069,8 @@ def main():
                     _process_batch,
                     G_batch, RIF_resid_list, Q, block_ids, batch_info,
                     args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
-                    f_cov_scale_list, all_betas_list, n_cov_elements, T
+                    f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                    kernel_state
                 )
                 total_compute += compute_s
                 total_write += write_s
@@ -2027,7 +2093,8 @@ def main():
                 _process_batch,
                 G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                 args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
-                f_cov_scale_list, all_betas_list, n_cov_elements, T
+                f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                kernel_state
             )
             total_compute += compute_s
             total_write += write_s

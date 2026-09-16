@@ -16,6 +16,8 @@
 
 namespace py = pybind11;
 
+#include "stage1_fast.hpp"
+
 namespace {
 
 inline bool prepare_genotype_raw(
@@ -1360,4 +1362,39 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("n_threads") = 1);
     
     m.def("openmp_info", &openmp_info, "Get OpenMP configuration");
+
+    // --- fast (restructured) panel kernel -------------------------------------
+    py::class_<fungwas_fast::BlockPlan>(m, "BlockPlan",
+          "Precomputed, genotype-independent plan for the fast panel kernel: the\n"
+          "block-sorted sample order, RIF and Q in that order, and the per-block\n"
+          "cross-products Q_b^T RIF_b and Q_b^T Q_b.  Build once per Stage 1 run\n"
+          "and reuse for every genotype batch.")
+        .def(py::init<py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<int32_t>, int, int>(),
+             py::arg("RIF_resid"), py::arg("Q"), py::arg("block_ids"),
+             py::arg("n_blocks"), py::arg("n_threads") = 1)
+        .def_readonly("N", &fungwas_fast::BlockPlan::N)
+        .def_readonly("T", &fungwas_fast::BlockPlan::T)
+        .def_readonly("K", &fungwas_fast::BlockPlan::K)
+        .def_readonly("n_blocks", &fungwas_fast::BlockPlan::n_blocks);
+
+    m.def("stage1_finalize_block_scores_panel_fast", &fungwas_fast::finalize_block_scores_fast,
+          "Fast panel kernel fused with the jackknife finalisation",
+          py::arg("G"), py::arg("plan"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_width") = 0);
+
+    m.def("stage1_fast_last_timings", []() {
+              const double* t = fungwas_fast::fast_timings();
+              return py::make_tuple(t[0], t[1], t[2], t[3], t[4], t[5]);
+          },
+          "Per-pass wall clock of the last fast-kernel call: "
+          "(mac_filter, alloc, pack_tile, sweep, qtg, correct_finalize). Profiling only.");
+
+    m.def("stage1_block_scores_panel_fast", &fungwas_fast::block_scores_fast,
+          "Fast panel kernel returning raw (M, n_blocks, 1+T) block statistics",
+          py::arg("G"), py::arg("plan"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_width") = 0);
 }
