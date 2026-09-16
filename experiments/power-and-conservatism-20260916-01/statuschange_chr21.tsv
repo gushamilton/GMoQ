@@ -1,0 +1,7 @@
+chr	param	thr	n_sub	n_cov	gained	lost	changed	mcnemar_p	n_se_only	n_beta_only	gained_true_pos	lost_true_pos
+21	beta_left	5e-8	0	1	1	0	1	1	0	0	1	0
+21	beta_left	1e-5	4	19	15	0	15	6.10351562500001e-05	29	10	14	0
+21	beta_right	5e-8	0	0	0	0	0		0	0	0	0
+21	beta_right	1e-5	0	0	0	0	0		0	0	0	0
+21	gamma	5e-8	0	0	0	0	0		0	0	0	0
+21	gamma	1e-5	1	1	0	0	0		1	1	0	0
