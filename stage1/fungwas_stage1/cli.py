@@ -30,6 +30,7 @@ freedom Stage 2 reports for a fitted parameter. See docs/KNOWN_ISSUES.md 2.2.
 """
 
 import argparse
+import functools
 import gzip
 import logging
 import os
@@ -80,6 +81,24 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+#: ``--cov-mode`` values.
+#:
+#: ``full`` (the default, and the only historical behaviour) writes the per-SNP
+#: jackknife covariance payload: ``<prefix>.cov.gz``, ``<prefix>.cov.ids.tsv.gz``
+#: and, for int8 storage, ``<prefix>.cov.scale.gz``.  Stage 2 reads that payload
+#: only under ``cov_source = "jackknife"``.
+#:
+#: ``pooled`` writes everything else unchanged -- the same ``.stage1.tsv.gz``,
+#: byte for byte, and the same ``Sigma_0`` sidecar -- but omits the per-SNP
+#: payload, which Stage 2's production path (``cov_source = "pooled"``) never
+#: opens.  The jackknife itself still runs: ``se_tau_*`` in the TSV are the same
+#: jackknife standard errors, computed the same way.  Use it when no downstream
+#: analysis will ask for ``cov_source = "jackknife"``; the payload cannot be
+#: reconstructed from what remains without re-running Stage 1.
+COV_MODE_FULL = "full"
+COV_MODE_POOLED = "pooled"
+COV_MODES = (COV_MODE_FULL, COV_MODE_POOLED)
 
 
 def get_memory_mb() -> float:
@@ -887,12 +906,51 @@ def match_samples(bgen_samples: list, sample_ids: list):
     return valid_mask, bgen_indices
 
 
-def _variant_bit_depth(variant) -> int:
+class _NeedMoreRecordBytes(Exception):
+    """The record window read from the BGEN was too small to reach the bit depth."""
+
+
+#: Read-only file descriptors for BGENs we take preamble windows from, keyed by
+#: path.  One per process; closed when the process exits.
+_BGEN_RAW_FDS: dict = {}
+
+#: First window size tried when reading a variant record's preamble directly.
+#: The bit-depth byte sits just past the per-sample ploidy array, which in a
+#: layout-2 record is a constant byte repeated n_samples times and so deflates to
+#: a few hundred bytes; 64 KiB covers production records with room to spare, and
+#: the window doubles on demand when it does not.
+_BGEN_WINDOW_BYTES = 1 << 16
+
+
+def _bgen_record_window(bgen_path: str, offset: int, size: int) -> bytes:
+    """Read ``size`` bytes of a BGEN starting at ``offset``.
+
+    A short read means end-of-file, which the caller uses to tell "my window was
+    too small" apart from "this record really is truncated".
+    """
+    fd = _BGEN_RAW_FDS.get(bgen_path)
+    if fd is None:
+        fd = os.open(bgen_path, os.O_RDONLY)
+        _BGEN_RAW_FDS[bgen_path] = fd
+    return os.pread(fd, size, offset)
+
+
+def _variant_bit_depth(variant, bgen_path: Optional[str] = None) -> int:
     """Read a BGEN variant's probability bit depth.
 
     ``bgen`` stores the depth in each layout-2 record but does not currently expose it
-    on its Python variant object.  Read the layout-2 preamble from ``copy_data`` when
-    needed so callers can retain the native 8-bit dosage fast path.
+    on its Python variant object, so the layout-2 preamble is parsed directly.
+
+    The depth is read for **every** variant, not inferred once and reused: the BGEN
+    spec allows it to vary from record to record, and getting it wrong silently
+    selects the wrong dosage decode path.
+
+    Where the record's file offset is known, the preamble is read straight from the
+    BGEN with ``pread``.  The fallback, ``variant.copy_data()``, returns the whole
+    record as a Python ``list`` of per-byte ``int`` objects -- 799,454 of them for a
+    production 400k-sample record -- and materialising that list cost 8.9 ms per
+    variant, 2.4x the cost of actually decoding the dosages (3.8 ms) and about 70%
+    of all per-variant BGEN time.  The bytes parsed are the same either way.
     """
     advertised = getattr(variant, "bit_depth", None)
     if advertised is not None:
@@ -906,13 +964,39 @@ def _variant_bit_depth(variant) -> int:
     if layout != 2:
         raise ValueError(f"Unsupported BGEN layout: {layout}")
 
-    raw = bytes(variant.copy_data())
+    fileoffset = getattr(variant, "fileoffset", None)
+    if bgen_path is not None and fileoffset is not None:
+        window = _BGEN_WINDOW_BYTES
+        while True:
+            raw = _bgen_record_window(bgen_path, int(fileoffset), window)
+            at_eof = len(raw) < window
+            try:
+                return _parse_layout2_bit_depth(raw, truncated=not at_eof,
+                                                variant=variant)
+            except _NeedMoreRecordBytes:
+                if at_eof:
+                    raise ValueError(
+                        "BGEN variant is truncated while reading its genotype header"
+                    ) from None
+                window *= 2
+    return _parse_layout2_bit_depth(bytes(variant.copy_data()), truncated=False,
+                                    variant=variant)
+
+
+def _parse_layout2_bit_depth(raw: bytes, truncated: bool = False, variant=None) -> int:
+    """Parse a layout-2 record preamble for its probability bit depth.
+
+    ``truncated`` says ``raw`` is a prefix of the record rather than the whole of
+    it, so running off the end means "read a bigger window", not "corrupt file".
+    """
     offset = 0
 
     def take(width: int) -> bytes:
         nonlocal offset
         end = offset + width
         if end > len(raw):
+            if truncated:
+                raise _NeedMoreRecordBytes
             raise ValueError("BGEN variant is truncated while reading its genotype header")
         value = raw[offset:end]
         offset = end
@@ -936,7 +1020,16 @@ def _variant_bit_depth(variant) -> int:
     for _ in range(n_alleles):
         take_prefixed(4)
     block_length = int.from_bytes(take(4), "little")
-    block = take(block_length)
+    if truncated and offset + block_length > len(raw):
+        # Only a prefix of the genotype block is in this window. That is enough
+        # for the bounded inflate below, which never needs the whole block; if it
+        # turns out not to be, the parse asks for a bigger window.
+        block = raw[offset:]
+        offset = len(raw)
+        block_truncated = True
+    else:
+        block = take(block_length)
+        block_truncated = False
 
     compression = getattr(variant, "compression", None)
     if compression in ("zlib", 1) or compression is None:
@@ -965,6 +1058,9 @@ def _variant_bit_depth(variant) -> int:
             import zstandard as zstd
         except ImportError as exc:
             raise ValueError("Cannot inspect zstd-compressed BGEN bit depth without zstandard") from exc
+        if block_truncated:
+            # zstd here is decompressed in one shot, so a prefix will not do.
+            raise _NeedMoreRecordBytes
         if len(block) < 4:
             raise ValueError("BGEN zstd genotype block is missing its uncompressed length")
         expected_length = int.from_bytes(block[:4], "little")
@@ -973,6 +1069,8 @@ def _variant_bit_depth(variant) -> int:
         raise ValueError(f"Unsupported BGEN compression: {compression}")
 
     if len(block) < 8:
+        if block_truncated:
+            raise _NeedMoreRecordBytes
         raise ValueError("BGEN genotype block is missing its layout-2 preamble")
     n_samples = int.from_bytes(block[:4], "little")
     expected_samples = getattr(variant, "n_samples", None)
@@ -992,6 +1090,10 @@ def _variant_bit_depth(variant) -> int:
     elif compression == "zstd" and len(block) < header_offset + 2:
         raise ValueError("Cannot bounded-read variable-ploidy zstd BGEN preamble")
     if header_offset + 2 > len(block):
+        if block_truncated:
+            # The compressed prefix in this window ran out before the bit-depth
+            # byte; retry against a larger slice of the record.
+            raise _NeedMoreRecordBytes
         raise ValueError("BGEN genotype block is missing phased/bit-depth fields")
     phased = block[header_offset]
     bit_depth = int(block[header_offset + 1])
@@ -1045,9 +1147,22 @@ def extract_dosage(
     return dosages
 
 
+@functools.lru_cache(maxsize=8)
+def _triu_indices_cached(n_taus: int):
+    """``np.triu_indices(n_taus)``, built once instead of once per SNP.
+
+    The uncached call allocated and filled two length-T(T+1)/2 index arrays for
+    every variant (17550 times per chromosome) to produce an index that depends
+    only on the tau count.
+    """
+    return np.triu_indices(n_taus)
+
+
 def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
                       f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
     """Write one processed batch to the stage1 outputs."""
+    triu = _triu_indices_cached(n_taus)
+    want_cov = args.cov_mode != COV_MODE_POOLED
     for p_idx, stats in enumerate(stats_list):
         f_tsv = f_tsv_list[p_idx]
         f_cov = f_cov_list[p_idx]
@@ -1069,7 +1184,13 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
             row.append(f'{d_resid:.9g}')
             f_tsv.write('\t'.join(map(str, row)) + '\n')
 
-            cov_upper = Sigma[np.triu_indices(n_taus)]
+            if not want_cov:
+                # --cov-mode pooled: Stage 2's production path reads only the
+                # pooled Sigma_0 sidecar, so the per-SNP jackknife covariance
+                # payload is computed but never written.
+                continue
+
+            cov_upper = Sigma[triu]
             if args.cov_dtype == 'int8':
                 scale = np.max(np.abs(cov_upper)) / 127.0
                 if not np.isfinite(scale) or scale <= 0:
@@ -1078,7 +1199,11 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 f_cov.write(cov_q.tobytes(order='C'))
                 f_cov_scale.write(struct.pack('f', float(scale)))
             else:
-                f_cov.write(struct.pack(f'{n_cov_elements}f', *cov_upper))
+                # Byte-for-byte what ``struct.pack(f'{n}f', *cov_upper)`` wrote:
+                # both are little-endian IEEE-754 binary32 with round-to-nearest,
+                # but this one does not build an n-element argument tuple and
+                # make n individual float conversions per variant.
+                f_cov.write(cov_upper.astype('<f4', copy=False).tobytes())
             f_cov_ids.write('\t'.join(map(str, info)) + '\n')
 
             if args.output_rtau:
@@ -1103,6 +1228,7 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
     differ only in summation order, which matters nowhere: d_resid feeds the degrees of
     freedom of a t reference, where a last-bit difference is invisible.
     """
+    want_cov = args.cov_mode != COV_MODE_POOLED
     for p_idx, (betas, se_all, cov_all) in enumerate(fused_list):
         f_tsv = f_tsv_list[p_idx]
         f_cov = f_cov_list[p_idx]
@@ -1125,6 +1251,9 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
             row.append(f'{d_resid:.9g}')
             f_tsv.write('\t'.join(map(str, row)) + '\n')
 
+            if not want_cov:
+                continue
+
             if args.cov_dtype == 'int8':
                 scale = np.max(np.abs(cov_upper)) / 127.0
                 if not np.isfinite(scale) or scale <= 0:
@@ -1133,11 +1262,102 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
                 f_cov.write(cov_q.tobytes(order='C'))
                 f_cov_scale.write(struct.pack('f', float(scale)))
             else:
-                f_cov.write(struct.pack(f'{n_cov_elements}f', *cov_upper))
+                # Same bytes as struct.pack(f'{n}f', *cov_upper); see
+                # write_stats_batch.
+                f_cov.write(np.asarray(cov_upper).astype('<f4', copy=False).tobytes())
             f_cov_ids.write('\t'.join(map(str, info)) + '\n')
 
             if args.output_rtau:
                 all_betas.append(np.asarray(beta))
+
+
+class _SkipCount:
+    """Mutable counter so a generator can report variants it dropped."""
+
+    __slots__ = ("non_biallelic",)
+
+    def __init__(self):
+        self.non_biallelic = 0
+
+
+def _decode_variants(variants, bgen_path, bgen_indices, skipped: _SkipCount):
+    """Yield ``(info, variant_chr, dosages)`` for each biallelic variant, in file order.
+
+    This is exactly the per-variant work the batch loop used to do inline; it is
+    split out so it can be run ahead of the kernel on another thread.
+    """
+    for variant in variants:
+        alleles = variant.alleles
+        if len(alleles) != 2:
+            skipped.non_biallelic += 1
+            continue
+        bit_depth = _variant_bit_depth(variant, bgen_path=bgen_path)
+        dosages = extract_dosage(variant, probability_bit_depth=bit_depth)[bgen_indices]
+        info = (variant.rsid, variant.chrom, variant.pos, alleles[0], alleles[1])
+        yield info, normalize_chr_label(variant.chrom), dosages
+
+
+class _BatchPipeline:
+    """Overlap BGEN decoding with the kernel by running batches on a worker thread.
+
+    Decoding a BGEN record is single-threaded Python that the OpenMP kernel
+    cannot help with, and it was a large share of Stage 1's wall time while the
+    worker threads sat idle (a full chr22 run averaged 2.4 of 8 allocated cores).
+    The kernel releases the GIL, so the main thread can decode batch k+1 while
+    batch k is being scored and written.
+
+    Ordering and arithmetic are unchanged.  A single worker runs one batch at a
+    time, in submission order, so the output files are written in exactly the
+    order the serial loop wrote them; genotypes are double-buffered so the batch
+    in flight is never the one being filled.
+
+    The reader stays on the calling thread throughout: ``bgen``'s .bgi index is a
+    sqlite connection, and sqlite objects may only be used by the thread that
+    created them.
+    """
+
+    def __init__(self, enabled: bool, n_samples: int, batch_size: int):
+        self.enabled = enabled
+        self._pending = None
+        self._pool = None
+        self.buffers = [np.zeros((n_samples, batch_size), dtype=np.float64, order='F')]
+        if enabled:
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stage1-batch")
+            # Second genotype buffer so the worker can read one while the reader
+            # fills the other.
+            self.buffers.append(
+                np.zeros((n_samples, batch_size), dtype=np.float64, order='F')
+            )
+        self._buf_idx = 0
+
+    @property
+    def batch_buffer(self):
+        return self.buffers[self._buf_idx]
+
+    def submit(self, fn, *args, **kwargs):
+        """Run one batch, returning ``(compute_s, write_s)`` of a *previous* batch.
+
+        Returns ``(0.0, 0.0)`` when nothing had completed yet.
+        """
+        if not self.enabled:
+            return fn(*args, **kwargs)
+        timings = self.drain()
+        self._pending = self._pool.submit(fn, *args, **kwargs)
+        self._buf_idx ^= 1
+        return timings
+
+    def drain(self):
+        """Wait for the in-flight batch, if any, and return its timings."""
+        if self._pending is None:
+            return 0.0, 0.0
+        pending, self._pending = self._pending, None
+        return pending.result()
+
+    def close(self):
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
 
 
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
@@ -1330,6 +1550,37 @@ def main():
                         default='int8',
                         help='Covariance storage dtype: int8 (with .cov.scale.gz sidecar) '
                              'or float32 (legacy). Default: int8')
+    parser.add_argument('--cov-mode', dest='cov_mode', choices=list(COV_MODES),
+                        default=COV_MODE_FULL,
+                        help="Which covariance artefacts to write. 'full' (default) "
+                             "writes the per-SNP jackknife payload (.cov.gz, "
+                             ".cov.ids.tsv.gz, and .cov.scale.gz for int8), which "
+                             "Stage 2 reads only under cov_source='jackknife'. "
+                             "'pooled' omits that payload and writes only what "
+                             "Stage 2's production path (cov_source='pooled', "
+                             "tau_cov_estimator='ols') actually reads: the same "
+                             ".stage1.tsv.gz, byte for byte, and the same Sigma_0 "
+                             "sidecar. The jackknife still runs and se_tau_* are "
+                             "unchanged. The omitted payload cannot be rebuilt "
+                             "without re-running Stage 1, so use 'pooled' only when "
+                             "no downstream analysis will ask for the jackknife "
+                             "covariance.")
+    parser.add_argument('--no-jackknife-cov', dest='cov_mode', action='store_const',
+                        const=COV_MODE_POOLED,
+                        help='Alias for --cov-mode pooled.')
+    parser.add_argument('--no-pipeline', dest='pipeline', action='store_false',
+                        help='Score and write each batch inline instead of on a '
+                             'background thread. Output is identical either way; '
+                             'the pipeline just stops the OpenMP threads idling '
+                             'while the next batch of BGEN records is decoded.')
+    parser.add_argument('--pipeline', dest='pipeline', action='store_true',
+                        help='Overlap BGEN decoding with the kernel by scoring and '
+                             'writing each batch on a background thread while the '
+                             'next batch is read (default). Batches are processed '
+                             'one at a time in order, so output order is unchanged; '
+                             'the cost is one extra genotype buffer '
+                             '(batch_size * n_samples * 8 bytes).')
+    parser.set_defaults(pipeline=True)
     
     args = parser.parse_args()
     set_numpy_fallback_allowed(args.allow_numpy_fallback)
@@ -1566,8 +1817,9 @@ def main():
     
     # Process in batches
     total_snps = 0
-    skipped_non_biallelic = 0
-    G_batch = np.zeros((N_matched, args.batch_size), dtype=np.float64, order='F')
+    skip_counter = _SkipCount()
+    pipeline = _BatchPipeline(bool(args.pipeline), N_matched, args.batch_size)
+    G_batch = pipeline.batch_buffer
     batch_info = []
     
     from contextlib import ExitStack
@@ -1576,30 +1828,41 @@ def main():
     total_write = 0.0
     active_chr = None
 
+    write_cov_payload = args.cov_mode != COV_MODE_POOLED
+
     with ExitStack() as stack:
         f_tsv_list = [stack.enter_context(gzip.open(path, 'wt')) for path in out_tsv_list]
-        f_cov_list = [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_list]
+        # Under --cov-mode pooled the per-SNP payload is not produced at all, so
+        # its files are never created rather than created empty: an empty
+        # .cov.gz would look to Stage 2 like a truncated jackknife payload.
+        f_cov_list = (
+            [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_list]
+            if write_cov_payload else [None for _ in out_cov_list]
+        )
         f_cov_scale_list = (
             [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_scale_list]
-            if args.cov_dtype == 'int8' else [None for _ in out_cov_scale_list]
+            if (write_cov_payload and args.cov_dtype == 'int8')
+            else [None for _ in out_cov_scale_list]
         )
-        f_cov_ids_list = [stack.enter_context(gzip.open(path, 'wt')) for path in out_cov_ids_list]
+        f_cov_ids_list = (
+            [stack.enter_context(gzip.open(path, 'wt')) for path in out_cov_ids_list]
+            if write_cov_payload else [None for _ in out_cov_ids_list]
+        )
         for f_tsv in f_tsv_list:
             f_tsv.write('\t'.join(cols) + '\n')
         for f_ids in f_cov_ids_list:
-            f_ids.write('snp_id\tchr\tbp\teffect_allele\tother_allele\n')
+            if f_ids is not None:
+                f_ids.write('snp_id\tchr\tbp\teffect_allele\tother_allele\n')
         
         idx_in_batch = 0
-        
-        for variant in variants:
-            if len(variant.alleles) != 2:
-                skipped_non_biallelic += 1
-                continue
 
-            variant_chr = normalize_chr_label(variant.chrom)
+        decoded = _decode_variants(variants, args.bgen, bgen_indices, skip_counter)
+
+        for info, variant_chr, dosages in decoded:
             if loco_predictions is not None and variant_chr != active_chr:
                 if idx_in_batch > 0:
-                    compute_s, write_s = _process_batch(
+                    compute_s, write_s = pipeline.submit(
+                        _process_batch,
                         G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                         args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                         f_cov_scale_list, all_betas_list, n_cov_elements, T
@@ -1609,6 +1872,13 @@ def main():
                     total_snps += idx_in_batch
                     idx_in_batch = 0
                     batch_info = []
+                    G_batch = pipeline.batch_buffer
+
+                # The RIF/Q the worker reads are about to be replaced, so the
+                # in-flight batch has to finish before they are.
+                compute_s, write_s = pipeline.drain()
+                total_compute += compute_s
+                total_write += write_s
 
                 log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
                 RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
@@ -1622,51 +1892,53 @@ def main():
                     sigma0_seconds += time.perf_counter() - t_s0
                 active_chr = variant_chr
 
-            # Extract dosage
-            probability_bit_depth = _variant_bit_depth(variant)
-            all_dosages = extract_dosage(variant, probability_bit_depth=probability_bit_depth)
-            dosages = all_dosages[bgen_indices]
-            
             G_batch[:, idx_in_batch] = dosages
+            batch_info.append(info)
 
-            batch_info.append((
-                variant.rsid, variant.chrom, variant.pos,
-                variant.alleles[0], variant.alleles[1]
-            ))
-            
             idx_in_batch += 1
             
             # Process batch
             if idx_in_batch >= args.batch_size:
-                t_batch = time.time()
-                
-                compute_s, write_s = _process_batch(
+                compute_s, write_s = pipeline.submit(
+                    _process_batch,
                     G_batch, RIF_resid_list, Q, block_ids, batch_info,
                     args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                     f_cov_scale_list, all_betas_list, n_cov_elements, T
                 )
                 total_compute += compute_s
                 total_write += write_s
-                
+
                 total_snps += args.batch_size
-                elapsed = time.time() - t_batch
-                log_mem(f"Processed {total_snps} SNPs ({args.batch_size/elapsed:.1f} SNPs/s)")
-                
+                # Running throughput over the whole batch loop. The per-batch
+                # figure this replaces timed one call to _process_batch, which
+                # under --pipeline returns as soon as the previous batch is done
+                # and so reported the submit latency rather than the rate.
+                elapsed = time.perf_counter() - t_batches
+                log_mem(f"Processed {total_snps} SNPs ({total_snps/elapsed:.1f} SNPs/s)")
+
                 idx_in_batch = 0
                 batch_info = []
-        
+                G_batch = pipeline.batch_buffer
+
         # Final partial batch
         if idx_in_batch > 0:
-            compute_s, write_s = _process_batch(
+            compute_s, write_s = pipeline.submit(
+                _process_batch,
                 G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                 args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                 f_cov_scale_list, all_betas_list, n_cov_elements, T
             )
             total_compute += compute_s
             total_write += write_s
-            
+
             total_snps += idx_in_batch
-    
+
+        # Nothing may be in flight when the output files are closed.
+        compute_s, write_s = pipeline.drain()
+        total_compute += compute_s
+        total_write += write_s
+        pipeline.close()
+
     # Output R_tau if requested
     if args.output_rtau:
         for prefix, all_betas in zip(out_prefixes, all_betas_list):
@@ -1740,7 +2012,7 @@ def main():
         "(~112 at tau=0.02 vs ~835 at tau=0.50, N=50k, B=1000; 38 at tau=0.02 with "
         "MAF 0.01). See docs/KNOWN_ISSUES.md 2.2 before studentising them."
     )
-    log_mem(f"Dropped {skipped_non_biallelic} non-biallelic variants")
+    log_mem(f"Dropped {skip_counter.non_biallelic} non-biallelic variants")
     log_mem(f"Done! {total_snps} SNPs in {elapsed:.1f}s ({total_snps/elapsed:.1f} SNPs/s)")
     logger.info(f"Output: {', '.join(out_tsv_list)}")
 

@@ -700,13 +700,27 @@ def compute_covariance_from_blocks(stats: np.ndarray, n_blocks: int) -> Tuple[np
     if D_total <= 0:
         return np.full(T, np.nan), np.full(T, np.nan), np.full((T, T), np.nan)
     
-    # Leave-one-out betas
+    # Leave-one-out betas.
+    #
+    # This is the delete-one-block jackknife in its O(B) subtraction form: the
+    # per-block sufficient statistics are accumulated once by the C++ kernel and
+    # each leave-one-out fit is recovered as (N_total - N_k) / (D_total - D_k).
+    # No block-deleted fit is ever recomputed from the sample level.
+    #
+    # The loop this replaces ran a Python iteration per block, i.e. B * M
+    # iterations per chromosome (17.5 million at B = 1000, M = 17550), each one
+    # doing three NumPy calls on a length-T vector.  The vectorised form below
+    # feeds every accumulator exactly the same addends: each output element is
+    # the same scalar subtraction followed by the same scalar division, so it is
+    # bit-for-bit identical to the loop, not merely equal to rounding.  Blocks
+    # with a non-positive (or NaN) denominator are left at zero exactly as the
+    # `if denom > 0` guard left them.
+    denom = D_total - D_k
+    usable = denom > 0
     jk_betas = np.zeros((n_blocks, T))
-    for k in range(n_blocks):
-        denom = D_total - D_k[k]
-        if denom > 0:
-            jk_betas[k] = (N_total - N_k[k]) / denom
-    
+    np.divide(N_total - N_k, denom[:, None], out=jk_betas,
+              where=usable[:, None])
+
     # Point estimate
     beta = N_total / D_total
     

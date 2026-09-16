@@ -533,6 +533,12 @@ py::array_t<double> stage1_block_scores_panel_impl(
     omp_set_num_threads(n_threads);
     #endif
 
+    // See the note in stage1_finalize_block_scores_panel_impl: the parallel
+    // region touches only raw buffers, so the GIL is released for it and the
+    // caller can decode the next BGEN batch concurrently.  No arithmetic changes.
+    {
+    py::gil_scoped_release gil_release;
+
     #pragma omp parallel
     {
         std::vector<size_t> cols;
@@ -581,6 +587,8 @@ py::array_t<double> stage1_block_scores_panel_impl(
             }
         }
     }
+
+    }  // gil_release
 
     return result;
 }
@@ -642,6 +650,14 @@ py::tuple stage1_finalize_block_scores_panel_impl(
     omp_set_num_threads(n_threads);
     #endif
 
+    // Everything below works on raw pointers into buffers that are already
+    // allocated and kept alive by the arguments, so the interpreter lock is not
+    // needed for the duration of the parallel region.  Dropping it lets the
+    // caller decode the next batch of BGEN records - single-threaded Python the
+    // kernel cannot help with - while these threads run.  No arithmetic changes.
+    {
+    py::gil_scoped_release gil_release;
+
     #pragma omp parallel
     {
         std::vector<size_t> cols;
@@ -685,6 +701,8 @@ py::tuple stage1_finalize_block_scores_panel_impl(
             }
         }
     }
+
+    }  // gil_release
 
     (void)UseStaticSchedule;
     return py::make_tuple(betas_arr, se_arr, cov_arr);
