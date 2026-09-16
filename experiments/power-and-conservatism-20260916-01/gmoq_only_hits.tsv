@@ -1,0 +1,9 @@
+chr	param	thr	n_gmoq_only	regenie_p_median	frac_regenie_p_lt_1e3	frac_regenie_p_lt_0.05	expected_frac_lt_0.05_if_null
+22	beta_left	5e-08	1	3.87730531061564e-07	1	1	0.05
+22	beta_left	1e-05	31	2.99074923280044e-05	1	1	0.05
+22	beta_right	5e-08	7	5.09213606791151e-07	1	1	0.05
+22	beta_right	1e-05	50	4.18629683624154e-05	1	1	0.05
+21	beta_left	5e-08	0				0.05
+21	beta_left	1e-05	1	1.52103777535703e-05	1	1	0.05
+21	beta_right	5e-08	0				0.05
+21	beta_right	1e-05	0				0.05
