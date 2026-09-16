@@ -646,3 +646,8 @@ this project are at risk.
 Related: [EFFICIENCY_BOUND.md](EFFICIENCY_BOUND.md) shows the mixture
 information cost itself is only ~2% at testosterone's separation, so the LOCO
 offset was the larger term by far.
+
+Both of those measurements use a REGENIE comparator run `--ignore-pred`, with no
+LOCO of its own. [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md) rebuilds the
+comparator with a proper within-stratum step 1 and registers every
+G-MoQ-vs-REGENIE estimate in this project, marking which are like-for-like.
