@@ -10,7 +10,7 @@ param_gwas_multi_from_file(
   N,
   se_mode = c("tau_cov", "dwls", "diagonal"),
   cov_file = NULL,
-  cov_source = c("jackknife", "pooled"),
+  cov_source = c("pooled", "jackknife"),
   sigma0_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
@@ -30,7 +30,7 @@ param_gwas_multi_from_file(
 .cov.scale.gz is present, the covariance payload is read as int8 and
 dequantized using per-SNP scales.}
 
-\item{cov_source}{\code{"jackknife"} (default) or \code{"pooled"}; see
+\item{cov_source}{\code{"pooled"} (default) or \code{"jackknife"}; see
 \code{param_gwas_from_file}. Set it explicitly to \code{"jackknife"} when
 supplying a per-SNP covariance file.}
 

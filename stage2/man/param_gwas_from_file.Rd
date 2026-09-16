@@ -9,7 +9,7 @@ param_gwas_from_file(
   W,
   se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   cov_file = NULL,
-  cov_source = c("jackknife", "pooled"),
+  cov_source = c("pooled", "jackknife"),
   sigma0_file = NULL,
   require_covariates = NULL,
   require_n_samples = NULL,

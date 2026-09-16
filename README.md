@@ -12,34 +12,26 @@ Stage 2 (R/C++) maps that quantile profile onto the parameters of a distribution
 choose, with standard errors that respect the Stage 1 covariance. The two stages are separate
 packages in one repository and are installed separately.
 
-The primary workflow is **OLS with the per-SNP jackknife covariance**
-(`cov_source = "jackknife"`, `tau_cov_estimator = "ols"`). Both defaults are
-measured, not assumed:
+The primary workflow is **OLS with pooled covariance** (`cov_source = "pooled"`,
+`tau_cov_estimator = "ols"`). Both defaults are measured, not assumed:
 
 - Under OLS the point estimate does not touch the covariance, so `pooled` and
   `jackknife` give **bit-identical** estimates and differ only in the reported
   SE, by under 1% on real chr22 testosterone. The choice is therefore purely
   about which SE is better calibrated.
-- `jackknife` is the default because it is the robust one. Across 780,000
-  simulated scans at N = 461,320 it held 0.944-0.951 coverage everywhere,
-  while `pooled` fell to 0.79 and inflated Type-I at 5e-8 by **295x at MAF 0.01
-  and 2086x at MAF 0.005** under a true dispersion effect. At the null and under
-  pure location the two are indistinguishable, which is why null simulations do
-  not detect this. See [FINDINGS_covsource_default.md](docs/FINDINGS_covsource_default.md).
-- `pooled` remains a supported, much cheaper option: it reads only the `Sigma_0`
-  sidecar rather than the per-SNP payload. Prefer it when the parameters of
-  interest are location-like, or when the variants of interest are common. Note
-  that the divergence needs BOTH low frequency and a strong dispersion effect;
-  on chr22 testosterone, where max |z| is about 11, the two arms are
-  indistinguishable.
-- The OLS projection penalty against GLS is 0-6% for every shipped weight
-  matrix, because the membership column makes the column space of `W` invariant
-  under the tau-covariance. GLS is not worth its fragility: under density
-  misspecification it is anti-conservative while OLS is not, since OLS's point
-  estimate never touches `Sigma`.
-- `jackknife` + `gls` is **unsafe** and should not be used. Measured on 85,000+
-  null variants it is 1.4-5x more liberal than the other three arms and is the
-  only arm that produced a false positive at genome-wide significance.
+- `pooled` is the default: it reads only the `Sigma_0` sidecar rather than the
+  per-SNP payload, and on real data the two are indistinguishable -- under 1%
+  apart on chr22 testosterone, with correlations identical to four decimals in
+  all 24 z-strata.
+- **Where they can differ, and it is a narrow place.** Across 780,000 simulated
+  scans (`FINDINGS_covsource_default.md`) pooled was anti-conservative under a
+  TRUE DISPERSION effect at LOW frequency: coverage 0.79 and Type-I at 5e-8
+  inflated 295x at MAF 0.01, against jackknife holding 0.944-0.951. At the null
+  and under pure location the two are identical, which is why null simulations
+  never flag it. That campaign used the 2-column vQTL `W`; the 3-column mixture
+  `W` shipped here has not been measured in that regime (BACKLOG B5). Use
+  `cov_source = "jackknife"` for dispersion parameters at low frequency; for
+  everything else pooled is the better trade.
 
 Stage 1 writes the pooled `Sigma_0` sidecar by default and Stage 2 scales it by
 each SNP's residual genotype variation. The per-SNP jackknife remains available

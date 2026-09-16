@@ -848,7 +848,7 @@ param_gwas_from_file <- function(
   W,
   se_mode = c("tau_cov", "diagonal", "plugin_cor", "dwls"),
   cov_file = NULL,
-  cov_source = c("jackknife", "pooled"),
+  cov_source = c("pooled", "jackknife"),
   sigma0_file = NULL,
   require_covariates = NULL,
   require_n_samples = NULL,
@@ -1139,7 +1139,7 @@ param_gwas_from_file <- function(
 #' @param cov_file Path to covariance file (.cov.gz) for tau_cov mode. If
 #'   .cov.scale.gz is present, the covariance payload is read as int8 and
 #'   dequantized using per-SNP scales.
-#' @param cov_source \code{"jackknife"} (default) or \code{"pooled"}; see
+#' @param cov_source \code{"pooled"} (default) or \code{"jackknife"}; see
 #'   \code{param_gwas_from_file}. Set it explicitly to \code{"jackknife"}
 #'   when supplying a per-SNP covariance file.
 #' @param sigma0_file Path to the Stage 1 \code{.sigma0.tsv.gz}, required when
@@ -1160,7 +1160,7 @@ param_gwas_multi_from_file <- function(
   N,
   se_mode = c("tau_cov", "dwls", "diagonal"),
   cov_file = NULL,
-  cov_source = c("jackknife", "pooled"),
+  cov_source = c("pooled", "jackknife"),
   sigma0_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
