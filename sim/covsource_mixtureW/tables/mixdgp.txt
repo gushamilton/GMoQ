@@ -1,0 +1,78 @@
+CONTROL: pop_truth_mix2 == pop_truth(mix5.89)  rel err Sigma_true = 1.198e-14, beta = 3.815e-14
+
+########## D1. component-specific and membership effects, S=5.89 ##########
+EXACT.  'NULL?' marks parameters whose true value is zero: those are the
+ones on which se_ratio < 1 becomes a FALSE-POSITIVE rate.
+
+dgp       MAF  Ztg | param        NULL?    Z_true  se_ratio     cov95    infl@5e-8
+loc      0.01   16 | gamma          YES      -0.0    1.0002    0.9501       0.9929
+loc      0.01   16 | beta_1                  16.1    0.9875    0.9471        1.462
+loc      0.01   16 | beta_2                  15.8    0.9670    0.9419        2.707
+loc      0.01   30 | gamma          YES      -0.2    1.0010    0.9502       0.9707
+loc      0.01   30 | beta_1                  30.3    0.9442    0.9358        5.292
+loc      0.01   30 | beta_2                  28.8    0.8953    0.9207        21.15
+loc       0.3   16 | gamma          YES       0.0    1.0000    0.9500       0.9998
+loc       0.3   16 | beta_1                  16.0    1.0003    0.9501       0.9918
+loc       0.3   16 | beta_2                  16.0    0.9985    0.9496        1.048
+loc       0.3   30 | gamma          YES       0.0    1.0000    0.9500       0.9993
+loc       0.3   30 | beta_1                  30.1    0.9999    0.9500        1.004
+loc       0.3   30 | beta_2                  30.0    0.9957    0.9490        1.142
+disp     0.01   16 | gamma          YES      -0.0    1.0035    0.9508       0.8977
+disp     0.01   16 | beta_1                 -16.0    0.9111    0.9259         13.6
+disp     0.01   16 | beta_2                  16.0    0.9111    0.9259         13.6
+disp     0.01   30 | gamma          YES      -0.0    1.0078    0.9518       0.7864
+disp     0.01   30 | beta_1                 -30.0    0.8038    0.8848        235.6
+disp     0.01   30 | beta_2                  30.0    0.8038    0.8848        235.6
+disp      0.3   16 | gamma          YES       0.0    1.0003    0.9501       0.9916
+disp      0.3   16 | beta_1                 -16.0    0.9933    0.9485        1.226
+disp      0.3   16 | beta_2                  16.0    0.9933    0.9485        1.226
+disp      0.3   30 | gamma          YES      -0.0    1.0005    0.9501        0.984
+disp      0.3   30 | beta_1                 -30.0    0.9865    0.9468        1.507
+disp      0.3   30 | beta_2                  30.0    0.9865    0.9468        1.507
+comp     0.01   16 | gamma          YES       0.0    1.0014    0.9503       0.9593
+comp     0.01   16 | beta_1         YES       0.1    1.0018    0.9504       0.9472
+comp     0.01   16 | beta_2                  16.0    0.9721    0.9433        2.323
+comp     0.01   30 | gamma          YES       0.2    1.0029    0.9507       0.9154
+comp     0.01   30 | beta_1         YES       0.3    1.0026    0.9506       0.9238
+comp     0.01   30 | beta_2                  30.0    0.9105    0.9257        13.87
+comp      0.3   16 | gamma          YES       0.0    1.0001    0.9500       0.9967
+comp      0.3   16 | beta_1         YES       0.0    1.0002    0.9500       0.9939
+comp      0.3   16 | beta_2                  16.0    0.9996    0.9499        1.013
+comp      0.3   30 | gamma          YES       0.0    1.0002    0.9500        0.994
+comp      0.3   30 | beta_1         YES       0.0    1.0003    0.9501       0.9894
+comp      0.3   30 | beta_2                  30.0    0.9994    0.9499        1.019
+memb     0.01   16 | gamma                   16.0    1.0000    0.9500       0.9999
+memb     0.01   16 | beta_1         YES      -0.0    0.9272    0.9308        8.633
+memb     0.01   16 | beta_2                  -0.9    1.0909    0.9675      0.05474
+memb     0.01   30 | gamma                   30.0    1.0001    0.9500       0.9967
+memb     0.01   30 | beta_1         YES      -0.3    0.8753    0.9138        36.53
+memb     0.01   30 | beta_2                  -3.7    1.1889    0.9802     0.001821
+memb      0.3   16 | gamma                   16.0    1.0003    0.9501       0.9919
+memb      0.3   16 | beta_1                   2.3    0.9935    0.9485        1.218
+memb      0.3   16 | beta_2                  -3.8    1.0066    0.9515       0.8165
+memb      0.3   30 | gamma                   30.0    1.0012    0.9503       0.9644
+memb      0.3   30 | beta_1                  17.8    0.9926    0.9483        1.254
+memb      0.3   30 | beta_2         YES       0.4    1.0143    0.9532       0.6422
+
+########## D2. the worst false-positive rate the production W can carry ##########
+For each DGP, the largest 5e-8 inflation among the NULL parameters only.
+
+dgp       MAF  Ztg | worst null par  se_ratio    infl@5e-8 | (K=2 W)       se_ratio    infl@5e-8
+loc     0.005   30 | gamma           1.0024       0.9281 | -                    -            -
+loc      0.01   30 | gamma           1.0010       0.9707 | -                    -            -
+loc      0.05   30 | gamma           1.0002       0.9951 | -                    -            -
+loc       0.3   30 | gamma           1.0000       0.9993 | -                    -            -
+disp    0.005   30 | gamma           1.0136       0.6581 | -                    -            -
+disp     0.01   30 | gamma           1.0078       0.7864 | -                    -            -
+disp     0.05   30 | gamma           1.0027       0.9209 | -                    -            -
+disp      0.3   30 | gamma           1.0005        0.984 | -                    -            -
+comp    0.005   30 | beta_1          1.0029       0.9135 | beta_1          1.0015       0.9551
+comp     0.01   30 | beta_1          1.0026       0.9238 | beta_1          1.0009       0.9738
+comp     0.05   30 | gamma           1.0010       0.9693 | beta_1          1.0003       0.9913
+comp      0.3   30 | gamma           1.0002        0.994 | beta_1          1.0001       0.9983
+memb    0.005   30 | beta_1          0.8346        107.4 | -                    -            -
+memb     0.01   30 | beta_1          0.8753        36.53 | -                    -            -
+memb     0.05   30 | beta_1          0.9430        5.472 | -                    -            -
+memb      0.3   30 | beta_2          1.0143       0.6422 | -                    -            -
+
+DONE
