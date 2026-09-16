@@ -202,15 +202,25 @@ SE ratio 1.127/1.074 vs 1.121/1.068), with 0/100 convergence failures.
 
 ### Practical cost of the alternatives
 
-| | per SNP | chr22 (17,550 variants) |
-|---|---|---|
-| G-MoQ Stage 1 | ~43 SNPs/s | ~7 min |
-| EM mixture regression | 1.08 s | 5.3 h |
-| `flexmix` (defaults) | 6.9 s | 34 h |
-| `mixtools::regmixEM` | 112-2,429 s | prohibitive |
+| | per SNP | chr22 (17,550 variants) | cores |
+|---|---|---|---|
+| G-MoQ Stage 1 | ~43 SNPs/s | ~7 min | **8 threads** |
+| G-MoQ Stage 1, single-core equivalent | ~5.4 SNPs/s | ~54 min | 1 |
+| EM mixture regression | 1.08 s | 5.3 h | 1 |
+| `flexmix` (defaults) | 6.9 s | 34 h | 1 |
+| `mixtools::regmixEM` | 112-2,429 s | prohibitive | 1 |
 
-G-MoQ is ~45x faster than the EM and ~290x faster than flexmix, and emits all 45
-quantiles at once so one Stage 1 output serves any distributional model.
+**Compare like with like.** The measured G-MoQ run used `--threads 8`; every
+mixture fit was single-core. Against the EM the honest figure is therefore about
+**6x**, not the ~45x a naive reading of the wall-clock gives. The durable
+advantage is not raw speed: Stage 1 emits all 45 quantiles once, and that single
+output serves any distributional model, where each mixture fit answers one
+question for one SNP.
+
+The G-MoQ timing also *includes* the per-SNP block jackknife (`--blocks 1000`)
+and writing a 66 MB covariance payload, neither of which the production
+`pooled` + `ols` path reads. An unprofiled but plausible share of that 7 minutes
+is therefore work the default analysis discards. See BACKLOG H8.
 
 `mixtools::regmixEM` timed out on 100% of replicates at S<=2 under a 1,200 s cap.
 The hand EM fails to converge on 44.2% of replicates at S=1, with SEs 37-46% too
