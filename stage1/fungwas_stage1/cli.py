@@ -1325,6 +1325,33 @@ def write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
     the measurement in ``pooled_cov.py``, the better-behaved one (diagonal ratio
     against an exact HC0 sandwich, 5th-95th percentile: 0.990-1.010 pooled
     against 0.725-1.307 jackknife).
+
+    That last point is about the standard errors themselves.  Do NOT read it as a
+    claim that the Q it produces is better, because that was measured separately
+    and it is not.  On the full chr22 testosterone scan the two se_tau_* agree in
+    the middle and differ in the spread: the pooled/jackknife ratio has median
+    1.000 at every tau, with 1st-99th percentiles 0.949-1.056.  Downstream that
+    leaves Stage 2's gamma, beta_left, beta_right, their standard errors, their
+    p-values and their dfs identical to the accepted gate's, and moves only Q,
+    Q_pval, Q_df_eff and Q_scale -- Q by at most 22% for one variant and by
+    0.940-1.062 across the 1st-99th percentiles, with no change to any
+    genome-wide-significant call.
+
+    Whether the moved Q is *better* was checked against a permuted null (one
+    permutation of the same phenotype, chr22, 17,550 variants), where Q_pval
+    should be uniform.  It is a wash.  KS distance from U(0,1) was 0.13704 with
+    jackknife se_tau_* and 0.13726 with pooled -- the same number to three
+    figures, and the same ~1.6x excess below p = 1e-3 in both arms.  The reason
+    is structural: ``.q_pvalue_calibrated`` feeds ``Dvar = SE_tau^2`` into the
+    reference moments as well as into the statistic, so rescaling se_tau_* very
+    largely cancels.  The one systematic effect is the Jensen bias of averaging
+    1/var_hat over a noisy var_hat, which makes the jackknife Q about 0.12%
+    larger in the mean (13.1624 vs 13.1469 on the real scan, 23.4674 vs 23.4359
+    on the permuted one) -- the right direction, and far too small to matter.
+
+    So the honest summary is: pooled se_tau_* is the self-consistent choice and
+    is no worse, not a fix for anything.  The case for this mode is speed and
+    output size, not Q.
     """
     for p_idx, (betas, d_resid) in enumerate(pooled_list):
         f_tsv = f_tsv_list[p_idx]
