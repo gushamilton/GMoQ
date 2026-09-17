@@ -20,6 +20,12 @@ no sampling error — confirmed by Monte Carlo through the shipped Stage 1 and
 Stage 2. The exact engine reproduces Table 1 of `FINDINGS_pooled_dispersion.md`
 to every published digit, which is how it is validated.
 
+The campaign was `sim_skewcorr/` and is frozen at tag
+`archive/sim-campaigns-20260917` — `git show
+archive/sim-campaigns-20260917:sim_skewcorr/tables/mc_summary.txt`. The
+`FINDINGS_pooled_dispersion.md` engine it validates against is archived at the
+same ref. See [SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) §8.
+
 ---
 
 ## 1. The result

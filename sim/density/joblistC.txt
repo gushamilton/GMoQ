@@ -1,5 +1,0 @@
---cell normal_smooth --s0 0.06 --N 80000 --reps 500 --rep0 0 --n-null 50 --seed 13 --out /user/work/fh6520/kde_lumpy/runC/N80000__normal_smooth
---cell bimodal_smooth --s0 0.06 --N 80000 --reps 500 --rep0 0 --n-null 50 --seed 13 --out /user/work/fh6520/kde_lumpy/runC/N80000__bimodal_smooth
---cell round_0p50 --s0 0.06 --N 80000 --reps 500 --rep0 0 --n-null 50 --seed 13 --out /user/work/fh6520/kde_lumpy/runC/N80000__round_0p50
---cell floor_20 --s0 0.06 --N 80000 --reps 500 --rep0 0 --n-null 50 --seed 13 --out /user/work/fh6520/kde_lumpy/runC/N80000__floor_20
---cell count_8 --s0 0.06 --N 80000 --reps 500 --rep0 0 --n-null 50 --seed 13 --out /user/work/fh6520/kde_lumpy/runC/N80000__count_8

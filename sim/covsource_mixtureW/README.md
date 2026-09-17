@@ -1,5 +1,12 @@
 # `sim/covsource_mixtureW` — does the pooled-covariance defect transfer to the W the paper ships?
 
+> `sim/covsource`, referred to throughout below, was archived off `main` on
+> 2026-09-17 and is frozen at tag `archive/sim-campaigns-20260917`. Its
+> aggregates also live in `Gmoq_paper/outputs/simulations/biobank_covariance/full_audit/`.
+> The `patch_*.py` scripts here read their anchors from the BluePebble run root
+> `/user/work/fh6520/covsource_run/src/`, not from the git tree, so nothing here
+> stopped working.
+
 `sim/covsource` decided `cov_source` using the **2-column** `make_weights_vqtl`
 W (`beta_mu`, `beta_sigma2`). The paper ships a **3-column** mixture/skew W from
 `build_skew_mixture()` (`gamma`, `beta_left`, `beta_right`). `docs/EFFICIENCY_BOUND.md`

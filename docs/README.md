@@ -34,6 +34,7 @@ Read these four, in order:
 |---|---|
 | [BACKLOG.md](BACKLOG.md) | Open defects and decisions, with status. |
 | [TEST_SUITE.md](TEST_SUITE.md) | What the tiered simulation suite covers. |
+| [SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) | Every simulation campaign: what it asked, what it concluded, whether that still holds under the 0.4.0 defaults, and where the archived ones went. Read this before reusing a number from `sim/`. |
 | [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md) | Every G-MoQ-vs-REGENIE number, and what a fair comparator is. |
 | [POWER_AND_CONSERVATISM.md](POWER_AND_CONSERVATISM.md) | What the LOCO change bought; null calibration at 5e-8. |
 | [EMPIRICAL_W.md](EMPIRICAL_W.md) | Where the shipped weight matrices come from. |
