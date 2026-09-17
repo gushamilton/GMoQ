@@ -140,8 +140,10 @@ explicitly: `ridge repair attempted 2020 (100.0000%), rescued 2020`.
 (`stage2/R/tail-reference.R:433`): the contrast `(W'W)^-1 W'` does not depend on the estimated
 covariance, and `Sigma` enters only through the sandwich `W' Sigma W`. It is never inverted, so a
 rank-deficient `Sigma` costs nothing. GLS uses `Sigma^-1` as the weight matrix, which is precisely the
-operation that fails. **`tau_cov_estimator = "gls"` is the package default**
-(`stage2/R/gwas.R:223`), so the broken path is the one a user gets without asking.
+operation that fails. When this was written `tau_cov_estimator` defaulted to `"gls"`, so the failing
+path was the one a user got without asking. **That is no longer true: the default is now `"ols"`**
+(`stage2/R/gwas.R:253`), so a default run takes the path that escapes. The failure below is what
+`tau_cov_estimator = "gls"` still does on a lumpy phenotype, and is the reason the default moved.
 
 **This is a power failure, not a false-positive failure — with one exception.** Rejection in the far tail
 as a multiple of nominal (scale parameter, n = 200,000):

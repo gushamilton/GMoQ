@@ -297,4 +297,7 @@ Full Stage 1 pipeline on arrays.
 Important:
 - Stage 1 now enforces `n_blocks > n_taus` for covariance stability.
 - Recommended for robust Stage 2 `tau_cov`: `n_blocks >= n_taus + 20`.
-- A practical default is 45 taus in `[0.02, 0.98]` with auto blocks `max(T + 20, 64)` (i.e., 65 for 45 taus).
+- The default is 45 taus in `[0.02, 0.98]` and `--blocks 1000` (`DEFAULT_N_BLOCKS`,
+  `core.py:26`). An earlier revision auto-sized blocks as `max(T + 20, 64)`, i.e. 65 for
+  45 taus; that is no longer the default, and 65 blocks gives a much noisier jackknife
+  denominator. `--blocks` still accepts any value above `n_taus`.

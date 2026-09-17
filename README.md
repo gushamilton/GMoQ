@@ -12,6 +12,20 @@ Stage 2 (R/C++) maps that quantile profile onto the parameters of a distribution
 choose, with standard errors that respect the Stage 1 covariance. The two stages are separate
 packages in one repository and are installed separately.
 
+**What a G-MoQ effect means.** Stage 1 is a *recentered influence function* (RIF)
+regression, so a coefficient at quantile `tau` is an **unconditional** quantile
+effect: how the `tau`-th quantile of Y in the population would move under a
+marginal shift in the genotype distribution, holding the covariate basis fixed.
+It is *not* the conditional quantile effect that classical quantile regression
+estimates, and the two do not coincide. Stage 2 then reports the parameters of
+your chosen distributional model that best explain the whole quantile profile.
+Two consequences bite in practice: anything you subtract from Y before Stage 1
+(a LOCO prediction, a transformation) **redefines the estimand** rather than
+removing a nuisance, which is why `--loco-mode covariate` is the default; and
+the estimand is defined against the unconditional distribution of the analysed
+phenotype, so the analysed phenotype must be recorded with the result. See
+[`docs/ESTIMAND.md`](docs/ESTIMAND.md).
+
 The primary workflow is **OLS with pooled covariance** (`cov_source = "pooled"`,
 `tau_cov_estimator = "ols"`). Both defaults are measured, not assumed:
 
@@ -92,6 +106,20 @@ other-phenotype or whole-paper runs as part of this validation phase.
 - **Mixture components** (e.g., latent subtypes in a disease)
 - **Skewness / Kurtosis**
 - **Any parametric system** definable by a map from quantiles.
+
+## What is in this repository
+
+| path | what it is |
+|---|---|
+| `stage1/` | the Python/C++ quantile GWAS. Installed on its own. |
+| `stage2/` | the R/C++ projection onto a distributional model. Installed on its own. |
+| `docs/` | see [`docs/README.md`](docs/README.md) for which document you want -- they are not all for the same reader. |
+| `scripts/` | runnable helpers: `perf/` benchmarks, `stage2/` runners, `validation/` end-to-end checks. |
+| `tests/` | the tiered simulation suite (`tier0`-`tier4`), separate from the unit tests in `stage1/tests` and `stage2/tests`. See [`docs/TEST_SUITE.md`](docs/TEST_SUITE.md). |
+| `sim/`, `sim_meanvar/`, `sim_skewcorr/` | simulation campaigns behind specific findings. Each has a `tables/` of aggregates; the named document in `docs/` is the readable result. |
+| `experiments/` | dated, immutable records of individual runs. Provenance, not guidance. |
+
+Neither `sim*/` nor `experiments/` is needed to use the package.
 
 ## How It Works
 
@@ -281,6 +309,24 @@ run outputs outside this repository.
 
 See [Phenotype Preparation Guide](docs/phenotype_preparation.md) for details.
 
+**Sample identifiers -- get this right before anything else.** Stage 1 matches
+the phenotype file's **first column (FID)** against the BGEN sample identifiers,
+with **no alias resolution**. It does not try IID, `FID_IID`, or `FID:IID`. If
+your BGEN sample IDs are not what sits in column 1 of the phenotype file,
+rewrite that column; there is no flag that will do it for you.
+
+Pass `--sample <file>` when the BGEN does not embed sample identifiers. Without
+it, and without embedded IDs, the run cannot align anything.
+
+This asymmetry is the one worth knowing: the LOCO reader **does** resolve five
+aliases (`fid`, `iid`, `fid_iid`, `"fid iid"`, `fid:iid`), so a cohort whose
+BGEN IDs are `FID_IID` will match the LOCO predictions happily and then drop
+every sample here. Stage 1 refuses below `--min-sample-match` (1% by default)
+and warns between there and 50%, because a *partial* match is the dangerous
+case -- it runs to completion on a small non-random subset and produces
+attenuated effects with inflated SEs that are internally consistent and wrong.
+Check the matched-sample count in the log before trusting a run.
+
 ### Allele Handling
 - Stage 1 outputs `effect_allele`/`other_allele` and uses BGEN allele1 dosage as the effect allele.
 - Non-biallelic variants are dropped during Stage 1 and the CLI reports the count.
@@ -296,9 +342,12 @@ fungwas-stage1 \
     --pheno inputs/phenotypes.txt \
     --pheno-col testosterone \
     --covar inputs/covariates.txt \
+    --sample data/chr22.sample \
     --out results/chr22 \
     --threads 16
 ```
+*Drop `--sample` only if the BGEN embeds its sample identifiers. Match
+`--threads` to PHYSICAL cores, not to the CPU count the scheduler reports.*
 *Produces `results/chr22.stage1.tsv.gz` (estimates), per-SNP covariance files, and
 `results/chr22.sigma0.tsv.gz` with metadata (pooled covariance).*
 By default, Stage 1 writes covariance in compact int8 format with sidecar
@@ -315,7 +364,9 @@ distribution of `Y`, so subtracting a prediction from `Y` redefines the target
 rather than removing a nuisance; residualising the influence-function columns
 does not. On testosterone chr22 this recovers the precision and the REGENIE
 agreement of a no-LOCO scan. See [`docs/LOCO_AS_COVARIATE.md`](docs/LOCO_AS_COVARIATE.md).
-The default remains `subtract`, so nothing changes silently.
+Since 0.4.0 the default is `covariate` whenever `--loco-preds` is given; with
+no LOCO predictions the mode is moot and resolves to `subtract`. Pass
+`--loco-mode subtract` explicitly to reproduce pre-0.4.0 output.
 
 See [Stage 1 Documentation](stage1/README.md) for full CLI options.
 

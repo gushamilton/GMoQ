@@ -9,8 +9,10 @@ This R package implements "Stage 2" of the FungWas framework: mapping quantile G
 -   **Accurate SEs:** Uses the validated pooled Stage 1 covariance sidecar by default (`cov_source = "pooled"`) or the per-SNP delete-one-block jackknife when selected explicitly.
 -   **Pre-built Models:** Includes helpers for:
     -   vQTLs (`make_weights_vqtl`)
-    -   Normal Mixtures (`make_weights_normal_mixture`)
-    -   Log-normal shifts (`make_weights_lognormal`)
+    -   Normal Mixtures (`make_weights_normal_mixture`,
+        `make_weights_normal_mixture_vqtl`)
+    -   Anything else, from a user-supplied quantile function
+        (`make_weights_generic`)
 
 ## Installation
 

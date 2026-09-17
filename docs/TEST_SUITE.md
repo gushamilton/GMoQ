@@ -129,8 +129,10 @@ breaks the suite loudly instead of silently.
    | `nrow(W)` wrong / rank-deficient `W` | no recycling, no nonsense |
 
 4. **The defaults are the recommended ones.** `tau_cov_estimator` defaults to
-   `"ols"` and `cov_source` to `"jackknife"`, which is what `docs/OLS_VS_GLS.md`
-   and `docs/KNOWN_ISSUES.md` section 10 concluded they must be.
+   `"ols"`, which is what `docs/OLS_VS_GLS.md` and `docs/KNOWN_ISSUES.md`
+   section 10 concluded it must be. `cov_source` defaults to `"pooled"`; see
+   `docs/FINDINGS_covsource_default.md` for the boundary condition on that
+   choice and when to pass `"jackknife"` instead.
 5. **All eight model families**, each with known truth: null, pure location,
    pure scale, location+scale, skew, tail weight (kurtosis), a two-component
    mixture where the SNP moves the mixing weight, and one where it moves a

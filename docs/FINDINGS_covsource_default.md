@@ -5,7 +5,29 @@
 45 taus, paired replicates across all four `(cov_source, tau_cov_estimator)`
 combinations. Aggregates: `sim/covsource/tables/`.
 
-**Answer: `cov_source = "jackknife"` with `tau_cov_estimator = "ols"`.**
+**On the evidence in this document, taken alone: `cov_source = "jackknife"`
+with `tau_cov_estimator = "ols"`.**
+
+**What the package actually ships is `pooled` + `ols`, deliberately.** That is
+not an oversight, and the rest of this document is the reason the exception
+exists rather than an argument that the default is wrong. Read section 10 and
+the README's "primary workflow" section together with the tables below: the
+pooled defect is real, but it is confined to a corner -- a TRUE dispersion
+effect at LOW allele frequency -- and on the 3-column mixture `W` shipped here
+it is concentrated on the component means rather than spread across the fit.
+Outside that corner the two sources are indistinguishable on real data, under
+1% apart on chr22 testosterone.
+
+**Pass `cov_source = "jackknife"` when you are interpreting a mean-component
+effect at a variant that also carries a large dispersion effect at low MAF.**
+That is the case these tables measure, and the only one in which the choice
+changes a conclusion.
+
+Note that this does *not* conflict with `POWER_AND_CONSERVATISM.md`, which
+measures the pooled test as calibrated at 5e-8 to within 2.6%. That study is a
+**null** calibration study, and section 4 below is explicit that null
+simulations cannot detect this defect. The two results cover different regimes
+and are both correct.
 
 This *reverses* the recommendation in `FINDINGS_pooled_dispersion.md` section 8
 item 1, which is withdrawn below.
@@ -130,7 +152,19 @@ exactly where pooled is already 2-295x inflated and the jackknife is nominal.
 
 ## 10. Status of the default
 
-The evidence above is unambiguous, but flipping `cov_source` changes the
-**primary analysis of the paper**, which currently pins pooled. The default has
-therefore **not** been changed in code by this commit; the decision is recorded
-in `BACKLOG.md` item B1 as reopened pending that call.
+The evidence above is unambiguous *within its regime*, but flipping
+`cov_source` changes the **primary analysis of the paper**, which pins pooled.
+
+**The call has since been made: the default stays `pooled`.** The reasoning is
+that the defect requires a true dispersion effect at low MAF to appear at all
+(section 4: the null cannot detect it), that on the shipped 3-column mixture
+`W` it lands on the component means while `gamma` is protected, that on real
+chr22 testosterone the two sources agree to under 1% with identical
+correlations in all 24 z-strata, and that the pooled test is separately
+measured as calibrated at 5e-8 under the null
+(`POWER_AND_CONSERVATISM.md`). `jackknife` is one argument away and is the
+documented choice for the corner this document maps.
+
+This is a boundary condition on the default, not a latent bug: both sources are
+computed by the same Stage 1 pass, both are shipped, and the estimates are
+bit-identical between them. `BACKLOG.md` item B1 records the decision.
