@@ -47,7 +47,8 @@ refuses elementwise anything that is not `qnorm(tau)/(2 sd)`.
 ## Two corrections to the existing record
 
 **1. The prior non-Normal numbers were already empirical-W.**
-`sim_skewcorr/src/exact.py` computes `W = [ones, (q0-m0)/(2 v0)]`, which *is* the
+`sim_skewcorr/src/exact.py` (archived at `archive/sim-campaigns-20260917`)
+computes `W = [ones, (q0-m0)/(2 v0)]`, which *is* the
 empirical column. Every non-Normal figure in `DISPERSION_SKEW_CORRECTION.md` section 5
 was therefore already an empirical-W result, while the surrounding prose quotes
 shipped-W figures. That section mixes two engines.

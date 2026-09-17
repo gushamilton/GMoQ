@@ -1,8 +1,14 @@
 # How a pure mean effect manufactures a vQTL, and what to do about it
 
 Status: exact population calculation, 2026-09-14. Cross-validated against an
-independent implementation. Working code in `sim_meanvar/src/`, package code in
-`stage2/R/dispersion-guards.R`.
+independent implementation. Package code in `stage2/R/dispersion-guards.R`.
+
+The working code was `sim_meanvar/src/` and is frozen at tag
+`archive/sim-campaigns-20260917` — `git show
+archive/sim-campaigns-20260917:sim_meanvar/tables/main.tsv`. Note when reading it
+that its `dispersion-guards.R` is a 340-line snapshot of what is now the
+1,317-line shipped file and has drifted a long way from it; the shipped guard is
+the one in `stage2/`. See [SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) §7.
 
 **Headline.** On a raw, untransformed, right-skewed trait a mean effect of
 **|Z_mu| = 9.5 — about 0.02 SD per allele — is already enough to drive the
@@ -358,7 +364,8 @@ on transportability (§5), not on power.
   hits — the denominator correction is what makes including null variants safe.
 
   Measured behaviour, on 50,000 synthetic variants with `r_av` = 0.135 and sampling
-  error comparable to the signal (`sim_meanvar/src` trim check):
+  error comparable to the signal (`sim_meanvar/src` trim check, archived at
+  `archive/sim-campaigns-20260917`):
 
   | | slope | bias / SE |
   |---|---|---|
@@ -452,7 +459,8 @@ replicate against one phenotype, because the correction is genome-wide and must 
 estimated from many variants. 170 null, 20 pure-mean (|Z_mu| 4 to 40, half each
 sign), 10 pure-dispersion. `r_av` estimated from **all 200**, with no selection on
 truth. That is 68,000 null, 8,000 mean and 4,000 dispersion variant-observations per
-cell. Code in `sim_meanvar/src/mv_*.{py,R}`; tables in
+cell. Code in `sim_meanvar/src/mv_*.{py,R}` (archived at
+`archive/sim-campaigns-20260917`); tables in
 `/user/work/fh6520/meanvar/mc/summary/`.
 
 The Stage 2 call was verified against a hand-rolled fit: OLS `theta` max abs error
