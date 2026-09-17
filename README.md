@@ -116,7 +116,7 @@ other-phenotype or whole-paper runs as part of this validation phase.
 | `docs/` | see [`docs/README.md`](docs/README.md) for which document you want -- they are not all for the same reader. |
 | `scripts/` | runnable helpers: `perf/` benchmarks, `stage2/` runners, `validation/` end-to-end checks. |
 | `tests/` | the tiered simulation suite (`tier0`-`tier4`), separate from the unit tests in `stage1/tests` and `stage2/tests`. See [`docs/TEST_SUITE.md`](docs/TEST_SUITE.md). |
-| `sim/`, `sim_meanvar/`, `sim_skewcorr/` | simulation campaigns behind specific findings. Each has a `tables/` of aggregates; the named document in `docs/` is the readable result. |
+| `sim/` | simulation campaigns behind specific findings. Each has a `tables/` of aggregates; the named document in `docs/` is the readable result. [`docs/SIMULATION_INVENTORY.md`](docs/SIMULATION_INVENTORY.md) audits all of them and records which were archived to `archive/sim-campaigns-20260917`. |
 | `experiments/` | dated, immutable records of individual runs. Provenance, not guidance. |
 
 Neither `sim*/` nor `experiments/` is needed to use the package.

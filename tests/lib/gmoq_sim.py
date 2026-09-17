@@ -33,7 +33,7 @@ N = 50,000, and that cap would be indistinguishable in the results from a
 property of the method. The scale enters through an exponential for the same
 reason: an additive scale coefficient large enough to be interesting drives the
 conditional standard deviation NEGATIVE for some genotypes. The exponential is
-what sim_meanvar/src uses.
+what sim_meanvar/src used (archived at tag archive/sim-campaigns-20260917).
 
 The four derivatives at the baseline are closed form (`cf_weight_matrix`), so
 
@@ -54,7 +54,9 @@ their weight columns are the shipped make_weights_normal_mixture_vqtl().
 
 Stage 1 is the SHIPPED code: fungwas_stage1.core.run_stage1 and
 fungwas_stage1.pooled_cov.compute_sigma0, exactly as sim_meanvar/src and
-sim/density/src drive it. Nothing about the estimator is reimplemented here.
+sim/density/src drove it (both archived at tag
+archive/sim-campaigns-20260917). Nothing about the estimator is reimplemented
+here.
 """
 
 from __future__ import annotations
