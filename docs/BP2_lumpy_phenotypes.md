@@ -12,6 +12,15 @@ Written 2026-09-14. All compute under `/user/work/fh6520/kde_lumpy/`. Stage 1 an
 branch; `fungwasStage2` installed into a private lib with `useDynLib` verified intact). Simulated
 genotypes at MAF 0.05/0.20/0.50; no real data read.
 
+**Where the code is.** The campaign (`src/shapes.py`, `src/keepset.py` and the
+rest, plus the per-cell summaries behind every table below) was `sim/density/`
+and is frozen at tag `archive/sim-campaigns-20260917` —
+`git show archive/sim-campaigns-20260917:sim/density/tables/02_coverage_typeI.txt`.
+It was archived rather than kept because this document reproduces its own tables
+and the failure it found is on the opt-in GLS path; see
+[SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) §5, which also records that
+`BACKLOG.md` C3 still lists two claims here as unverified.
+
 ---
 
 ## Bottom line
