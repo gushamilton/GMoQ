@@ -3,7 +3,21 @@
 **Campaign:** `sim/covsource` (BP `/user/work/fh6520/covsource_run`), 52 cells x
 15,000 replicates = 780,000 simulated scans, N = 461,320, `--blocks 1000`,
 45 taus, paired replicates across all four `(cov_source, tau_cov_estimator)`
-combinations. Aggregates: `sim/covsource/tables/`.
+combinations.
+
+**Aggregates.** Every table below is reproduced verbatim in the paper repository
+at `Gmoq_paper/outputs/simulations/biobank_covariance/full_audit/`, which is what
+paper Figure 3 and the supplementary tables read. The campaign's scripts and the
+identical copy of those tables are frozen at tag `archive/sim-campaigns-20260917`
+(`git show archive/sim-campaigns-20260917:sim/covsource/tables/tables.md`); they
+were removed from `main` as duplication, not as dead evidence. See
+[SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) §1.
+
+**Scope.** This campaign ran the **2-column** `make_weights_vqtl` W. The package
+ships a 3-column mixture W, on which the defect *concentrates* rather than
+disappearing — `gamma` is protected while the component means take it all. That
+follow-up is `sim/covsource_mixtureW/`, still on `main`, and is summarised in
+`README.md` and `BACKLOG.md` B1.
 
 **On the evidence in this document, taken alone: `cov_source = "jackknife"`
 with `tau_cov_estimator = "ols"`.**
