@@ -1,5 +1,13 @@
 # Is the pooled covariance safe as G-MoQ's default?
 
+> **EVIDENCE ARCHIVED, 2026-09-17.** This study's scripts and tables (`sim/src`,
+> `sim/out`) are no longer on `main`. They are frozen at tag
+> `archive/sim-campaigns-20260917` — `git show
+> archive/sim-campaigns-20260917:sim/out/tables.txt`. See
+> [SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) §6 for why, and for what in
+> this document is still load-bearing (the estimand diagnosis) and what is not
+> (the default recommendation).
+
 > **SUPERSEDED IN PART, 2026-09-15.** Section 8 item 1 ("keep pooled as the scan
 > default") is **withdrawn**, and the claim that 5e-8 is "exactly nominal for the
 > jackknife" is true only for jackknife+**OLS**, not jackknife+GLS. See

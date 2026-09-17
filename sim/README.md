@@ -1,45 +1,33 @@
-# Pooled-covariance dispersion study (branch `sim/dispersion`)
+# `sim/` — simulation campaigns
 
-Findings: `docs/FINDINGS_pooled_dispersion.md`.
+Each subdirectory is one campaign. The readable result is always the named
+document in `docs/`; the directory holds the scripts and the aggregate tables.
+None of this is needed to use the package.
 
-## Layout
+`docs/SIMULATION_INVENTORY.md` audits all of them — what each asked, what it
+concluded, and whether that conclusion still holds under the 0.4.0 defaults.
+Read it before reusing any number from here.
 
-    src/truth.py           exact population law of Y given g (copied from ../poolcal)
-    src/make_truth.py      exact Sigma_0 and exact HC0 sandwich (copied from ../poolcal)
-    src/fdr_exact.py       NEW - exact false-dispersion rate engine
-    src/validate_exact.py  NEW - exact engine vs the shipped-code Monte Carlo
-    src/guard.py           NEW - fits and tests the per-variant guard G
-    src/guardmc.py         NEW - independent MC check of the guard
-    src/report.py          NEW - builds the headline tables
-    src/analyse.R          aggregates poolcal's 790 MC chunks (copied from ../poolcal)
-    src/run_analyse.sh     sbatch wrapper for analyse.R
-    src/run_exact.sh       sbatch array (36 tasks) for the exact sweep
-    out/exact/*.tsv        exact sweep: 2 shapes x 6 MAF x 3 N x Z-ladder 3..60
-    out/mc/                salvaged MC: params.tsv, tau.tsv, popexact.tsv
-    out/validation.tsv     exact vs MC, per cell
-    out/tables.txt         headline tables
+## On `main`
 
-## Reproducing
+| directory | question | result |
+|---|---|---|
+| `covsource_mixtureW/` | Does the pooled-covariance defect transfer to the 3-column mixture `W` the paper ships? | `tables/` — **no findings document yet**; `README.md:58` and `docs/BACKLOG.md` B1 quote its numbers |
+| `projeff/` | Why is the OLS-vs-GLS projection penalty 57% in simulation and 0.8% on real testosterone? | [`docs/EFFICIENCY_BOUND.md`](../docs/EFFICIENCY_BOUND.md) |
+| `nscale/` | Does the calibration measured at N = 30,000 survive to N = 461,320? | [`docs/N_SCALING.md`](../docs/N_SCALING.md) |
 
-    sbatch src/run_analyse.sh          # salvage the MC in ../poolcal/rds
-    sbatch src/run_exact.sh            # exact sweep
-    python src/report.py               # tables
-    python src/validate_exact.py       # exact vs MC
-    python src/guard.py
-    python src/guardmc.py
+## Archived
 
-Python needs the fungwas-stage1 conda env; analyse.R needs
-"module load languages/R/4.5.1" and "Rscript --vanilla".
+Removed from `main` and frozen at tag `archive/sim-campaigns-20260917` (branch
+`archive/sim/campaigns-20260917`), both at `9c47e7b`. Nothing was deleted.
 
-## Provenance
+| was | question | result | why archived |
+|---|---|---|---|
+| `covsource/` | Which covariance source should Stage 2 default to? | [`docs/FINDINGS_covsource_default.md`](../docs/FINDINGS_covsource_default.md) | its aggregates are byte-identical to `Gmoq_paper/outputs/simulations/biobank_covariance/full_audit/`, which is what the paper figures read |
+| `density/` | Does G-MoQ hold up on phenotypes that are not smooth? | [`docs/BP2_lumpy_phenotypes.md`](../docs/BP2_lumpy_phenotypes.md) | the document reproduces its own tables; the failure it found is on the opt-in GLS path |
+| `out/`, `src/` | Is the pooled covariance safe as the default? | [`docs/FINDINGS_pooled_dispersion.md`](../docs/FINDINGS_pooled_dispersion.md) | that document is retired guidance: its recommendation is withdrawn and its proposed flag has been replaced by `correct_dispersion_skew()` |
 
-The Monte Carlo was NOT re-run here. ../poolcal had completed all 790 chunks
-across 61 cells before its driving agent died; what had failed was the R package
-rebuild (a stale 00LOCK directory), which left two job arrays in
-DependencyNeverSatisfied. Those were cancelled and the finished RDS files
-aggregated as-is. The MC drives the shipped Stage 1 (compute_rif, residualize,
-compute_sigma0, block jackknife) and the shipped Stage 2 (param_gwas), with the
-exact per-individual HC0 sandwich as reference.
+To read one:
 
-The exact engine in fdr_exact.py is new and is the basis for every 5e-8 number,
-since that level is unreachable by simulation.
+    git show archive/sim-campaigns-20260917:sim/out/tables.txt
+    git worktree add /tmp/simarchive archive/sim-campaigns-20260917
