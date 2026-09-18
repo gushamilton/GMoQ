@@ -10,7 +10,9 @@ param_gwas_multi(
   N,
   n_threads = 1L,
   se_mode = c("tau_cov", "dwls", "diagonal"),
-  cov_data = NULL
+  cov_data = NULL,
+  residual_loss = c("auto", "full_cov"),
+  return_params = FALSE
 )
 }
 \arguments{
@@ -27,9 +29,27 @@ param_gwas_multi(
 
 \item{cov_data}{Optional list with \code{cov_vec} and \code{offsets} for
 \code{se_mode = "tau_cov"}.}
+
+\item{residual_loss}{Which residual loss the score uses. \code{"auto"}
+(default) preserves the historical behaviour: \code{se_mode = "tau_cov"}
+fits GLS and scores \code{r' Sigma^-1 r + 2k}, while \code{"dwls"} /
+\code{"diagonal"} score the diagonal loss. \code{"full_cov"} fits OLS
+parameters and scores the residuals with the per-SNP full covariance,
+\code{Q_full = r' Sigma^-1 r}, returning the coherent OLS score
+\code{Q_full + 2 rank(W)} and \code{Q_full + rank(W) log(N)}. It requires
+\code{se_mode = "tau_cov"} and \code{cov_data}.}
+
+\item{return_params}{Include the fitted OLS parameter matrices in the
+\code{residual_loss = "full_cov"} return value. Default \code{FALSE}
+because a genome-wide scan does not need to hold them.}
 }
 \value{
-Matrix with AIC/BIC columns per model.
+With \code{residual_loss = "auto"}, a matrix with AIC/BIC columns per
+model, exactly as before. With \code{residual_loss = "full_cov"}, a list
+with \code{Q_full} (P x n_models), \code{rank} (length n_models),
+\code{AIC} and \code{BIC} (both P x n_models), \code{reason} (P x
+n_models character), \code{rank_deficient} (logical per model),
+\code{model_names}, and (when requested) \code{params}.
 }
 \description{
 Fits multiple parametric weight matrices to Stage 1 results in one pass

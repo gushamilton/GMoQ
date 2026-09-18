@@ -1150,8 +1150,15 @@ param_gwas_from_file <- function(
 #' @param drop_multiallelic If TRUE, drop duplicated rsIDs or positions before
 #'   fitting.
 #' @param n_threads Number of OpenMP threads.
+#' @param residual_loss Passed to \code{\link{param_gwas_multi}}. The default
+#'   \code{"auto"} preserves the historical behaviour; \code{"full_cov"} fits
+#'   OLS parameters and scores the residuals with the per-SNP full covariance.
+#' @param return_params Passed to \code{\link{param_gwas_multi}}; include the
+#'   fitted OLS parameter matrices when \code{residual_loss = "full_cov"}.
 #'
-#' @return Matrix with AIC/BIC columns per model.
+#' @return With the default \code{residual_loss = "auto"}, a matrix with AIC/BIC
+#'   columns per model. With \code{residual_loss = "full_cov"}, the list
+#'   described in \code{\link{param_gwas_multi}}.
 #'
 #' @export
 param_gwas_multi_from_file <- function(
@@ -1164,10 +1171,13 @@ param_gwas_multi_from_file <- function(
   sigma0_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
-  n_threads = 1L
+  n_threads = 1L,
+  residual_loss = c("auto", "full_cov"),
+  return_params = FALSE
 ) {
   se_mode <- match.arg(se_mode)
   cov_source <- match.arg(cov_source)
+  residual_loss <- match.arg(residual_loss)
   if (!requireNamespace("data.table", quietly = TRUE)) {
     stop("data.table package required for param_gwas_multi_from_file")
   }
@@ -1249,7 +1259,9 @@ param_gwas_multi_from_file <- function(
     N = N,
     n_threads = n_threads,
     se_mode = se_mode,
-    cov_data = cov_data
+    cov_data = cov_data,
+    residual_loss = residual_loss,
+    return_params = return_params
   )
 }
 

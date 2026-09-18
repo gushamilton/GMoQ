@@ -43,6 +43,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fit_multi_models_ols_full_cov
+List fit_multi_models_ols_full_cov(const arma::mat& beta_stage1, const NumericVector& cov_vec, const NumericVector& offsets, const List& W_list, double N, int n_threads, Nullable<NumericVector> cov_scales);
+RcppExport SEXP _fungwasStage2_fit_multi_models_ols_full_cov(SEXP beta_stage1SEXP, SEXP cov_vecSEXP, SEXP offsetsSEXP, SEXP W_listSEXP, SEXP NSEXP, SEXP n_threadsSEXP, SEXP cov_scalesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type beta_stage1(beta_stage1SEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type cov_vec(cov_vecSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< const List& >::type W_list(W_listSEXP);
+    Rcpp::traits::input_parameter< double >::type N(NSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type cov_scales(cov_scalesSEXP);
+    rcpp_result_gen = Rcpp::wrap(fit_multi_models_ols_full_cov(beta_stage1, cov_vec, offsets, W_list, N, n_threads, cov_scales));
+    return rcpp_result_gen;
+END_RCPP
+}
 // compute_calibrated_se
 NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets, NumericMatrix A, int K, Nullable<NumericVector> cov_scales);
 RcppExport SEXP _fungwasStage2_compute_calibrated_se(SEXP cov_vecSEXP, SEXP offsetsSEXP, SEXP ASEXP, SEXP KSEXP, SEXP cov_scalesSEXP) {
@@ -113,6 +130,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_fungwasStage2_fit_multi_models", (DL_FUNC) &_fungwasStage2_fit_multi_models, 5},
     {"_fungwasStage2_fit_multi_models_tau_cov", (DL_FUNC) &_fungwasStage2_fit_multi_models_tau_cov, 7},
+    {"_fungwasStage2_fit_multi_models_ols_full_cov", (DL_FUNC) &_fungwasStage2_fit_multi_models_ols_full_cov, 7},
     {"_fungwasStage2_compute_calibrated_se", (DL_FUNC) &_fungwasStage2_compute_calibrated_se, 5},
     {"_fungwasStage2_compute_param_cov", (DL_FUNC) &_fungwasStage2_compute_param_cov, 5},
     {"_fungwasStage2_compute_gls_param_gwas", (DL_FUNC) &_fungwasStage2_compute_gls_param_gwas, 8},

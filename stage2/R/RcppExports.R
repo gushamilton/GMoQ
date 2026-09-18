@@ -9,6 +9,10 @@ fit_multi_models_tau_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n
     .Call(`_fungwasStage2_fit_multi_models_tau_cov`, beta_stage1, cov_vec, offsets, W_list, N, n_threads, cov_scales)
 }
 
+fit_multi_models_ols_full_cov <- function(beta_stage1, cov_vec, offsets, W_list, N, n_threads = 1L, cov_scales = NULL) {
+    .Call(`_fungwasStage2_fit_multi_models_ols_full_cov`, beta_stage1, cov_vec, offsets, W_list, N, n_threads, cov_scales)
+}
+
 #' Compute Calibrated Standard Errors
 #' 
 #' @param cov_vec Numeric vector containing concatenated upper triangles of covariance matrices.

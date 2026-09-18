@@ -14,7 +14,9 @@ param_gwas_multi_from_file(
   sigma0_file = NULL,
   unsafe_skip_cov_ids = FALSE,
   drop_multiallelic = TRUE,
-  n_threads = 1L
+  n_threads = 1L,
+  residual_loss = c("auto", "full_cov"),
+  return_params = FALSE
 )
 }
 \arguments{
@@ -31,8 +33,8 @@ param_gwas_multi_from_file(
 dequantized using per-SNP scales.}
 
 \item{cov_source}{\code{"pooled"} (default) or \code{"jackknife"}; see
-\code{param_gwas_from_file}. Set it explicitly to \code{"jackknife"} when
-supplying a per-SNP covariance file.}
+\code{param_gwas_from_file}. Set it explicitly to \code{"jackknife"}
+when supplying a per-SNP covariance file.}
 
 \item{sigma0_file}{Path to the Stage 1 \code{.sigma0.tsv.gz}, required when
 \code{cov_source = "pooled"}. If omitted, the conventional sibling sidecar
@@ -45,9 +47,18 @@ covariate IDs sidecar (not recommended).}
 fitting.}
 
 \item{n_threads}{Number of OpenMP threads.}
+
+\item{residual_loss}{Passed to \code{\link{param_gwas_multi}}. The default
+\code{"auto"} preserves the historical behaviour; \code{"full_cov"} fits
+OLS parameters and scores the residuals with the per-SNP full covariance.}
+
+\item{return_params}{Passed to \code{\link{param_gwas_multi}}; include the
+fitted OLS parameter matrices when \code{residual_loss = "full_cov"}.}
 }
 \value{
-Matrix with AIC/BIC columns per model.
+With the default \code{residual_loss = "auto"}, a matrix with AIC/BIC
+columns per model. With \code{residual_loss = "full_cov"}, the list
+described in \code{\link{param_gwas_multi}}.
 }
 \description{
 Convenience wrapper for param_gwas_multi() that reads Stage 1 and covariance
