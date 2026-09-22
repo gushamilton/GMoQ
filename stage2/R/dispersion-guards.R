@@ -739,13 +739,18 @@ dispersion_skew_bias <- function(beta_mu, se_mu = NULL, eaf = NULL,
 .EAF_ORIENT_FOLDED <- c("folded", "maf", "minor", "minor_allele", "unknown")
 
 ## Does a frequency vector carry the signature of a FOLDED minor-allele column?
-##   "ok"           -- some value is >= 0.5, so it straddles: cannot be folded
-##   "folded"       -- every value below 0.5, over enough distinct values to be sure
-##   "unverifiable" -- every value below 0.5, but too few distinct values to tell
+##   "ok"           -- some value is > 0.5, so it straddles: cannot be folded
+##   "folded"       -- every value at or below 0.5, over enough distinct values to be sure
+##   "unverifiable" -- every value at or below 0.5, but too few distinct values to tell
+##
+## Exactly 0.5 is NOT evidence of straddling: a folded minor-allele frequency
+## attains it whenever the two alleles are equally common, and on a 2-3 dp
+## frequency column that is not rare.  Testing `>= 0.5` here let a single such
+## variant return "ok" and disarm the folded-column refusal for the whole set.
 .eaf_orientation_signature <- function(p, n_min = 10L) {
   fin <- p[is.finite(p)]
   if (!length(fin)) return("ok")
-  if (any(fin >= 0.5)) return("ok")
+  if (any(fin > 0.5)) return("ok")
   if (length(unique(fin)) >= n_min) return("folded")
   "unverifiable"
 }
