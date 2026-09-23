@@ -13,7 +13,10 @@ make_weights_normal_mixture(
   mu2,
   sd2,
   include_membership = FALSE,
-  tiny = 1e-12
+  tiny = 1e-12,
+  density = c("model", "hybrid", "stage1"),
+  stage1_density = NULL,
+  identity_tol = 1e-08
 )
 }
 \arguments{
@@ -30,6 +33,26 @@ make_weights_normal_mixture(
 \item{include_membership}{Logical; include a first column \code{"gamma"} if TRUE.}
 
 \item{tiny}{Small positive floor for stabilizing divisions (default: mixture pdf clamped to \code{tiny}).}
+
+\item{density}{Which density divides each column; see
+\code{docs/MIXTURE_WEIGHT_DENSITY.md}. \code{"model"} (default, unchanged
+behaviour): every column is divided by the fitted mixture pdf.
+\code{"hybrid"}: the component columns stay the component shares
+\eqn{P(k \mid q_\tau)} (they sum to 1) and the \code{"gamma"} column is
+divided by the Stage 1 density \code{stage1_density} instead, because the
+Stage 1 coefficient carries that density's scaling.
+\code{"stage1"}: every column is divided by \code{stage1_density}; this
+breaks \eqn{W_1 + W_2 = 1} and warns (sensitivity only).}
+
+\item{stage1_density}{Required for \code{"hybrid"} and \code{"stage1"}: the
+Stage 1 density \eqn{\hat f(q_\tau)} at \code{taus}. A numeric vector,
+a list with \code{fhat} (and optionally \code{taus}, \code{q_tau}, which
+are checked), or the path of a Stage 1 density JSON
+(\code{\link{read_stage1_density}}). Compute it from the phenotype with
+\code{\link{stage1_kde_density}}.}
+
+\item{identity_tol}{Tolerance for the \eqn{W_1 + W_2 = 1} check under
+\code{"hybrid"}.}
 }
 \value{
 A numeric matrix (\code{T x K}) with column names:
@@ -37,6 +60,11 @@ A numeric matrix (\code{T x K}) with column names:
 \item If \code{include_membership = FALSE}: \code{c("beta_1","beta_2")}
 \item Else: \code{c("gamma","beta_1","beta_2")}
 }
+Under a non-default \code{density} the matrix carries attributes
+\code{density_mode}, \code{density_weight_mode},
+\code{stage1_density_columns}, \code{stage1_density} and
+\code{model_density}; read them with \code{\link{weight_density_mode}}.
+The default output carries none, so it is identical to earlier versions.
 }
 \description{
 Constructs a weight matrix \eqn{W} that maps RIF tau-slopes \eqn{b(\tau)}

@@ -840,6 +840,11 @@ if (se_mode == "diagonal") {
 #'   \code{ref_df_source} columns, and a \code{<param>_df} column per fitted
 #'   parameter, so a reader of the results can tell exactly which reference
 #'   distribution produced each p-value.
+#' @param require_density_mode Optional provenance gate: \code{"model"},
+#'   \code{"hybrid"} or \code{"stage1"} (or the matching
+#'   \code{density_weight_mode} label). If set, the run stops unless
+#'   \code{\link{weight_density_mode}(W)} matches. \code{NULL} (default)
+#'   does not check.
 #'
 #' @return A data.table with SNP info and parameter estimates
 #' @export
@@ -865,7 +870,8 @@ param_gwas_from_file <- function(
   cov_meta_file = NULL,
   nu = NULL,
   unknown_nu = c("omit", "normal", "error"),
-  df_coef = NULL
+  df_coef = NULL,
+  require_density_mode = NULL
 ) {
   se_mode <- match.arg(se_mode)
   cov_source <- match.arg(cov_source)
@@ -873,6 +879,9 @@ param_gwas_from_file <- function(
   tau_cov_estimator <- match.arg(tau_cov_estimator)
   q_method <- match.arg(q_method)
   unknown_nu <- match.arg(unknown_nu)
+  if (!is.null(require_density_mode)) {
+    .check_require_density_mode(W, require_density_mode)
+  }
   
   if (!requireNamespace("data.table", quietly = TRUE)) {
     stop("data.table package required for param_gwas_from_file")
@@ -1155,6 +1164,8 @@ param_gwas_from_file <- function(
 #'   OLS parameters and scores the residuals with the per-SNP full covariance.
 #' @param return_params Passed to \code{\link{param_gwas_multi}}; include the
 #'   fitted OLS parameter matrices when \code{residual_loss = "full_cov"}.
+#' @param require_density_mode Optional provenance gate applied to every
+#'   element of \code{W_list}; see \code{\link{param_gwas_from_file}}.
 #'
 #' @return With the default \code{residual_loss = "auto"}, a matrix with AIC/BIC
 #'   columns per model. With \code{residual_loss = "full_cov"}, the list
@@ -1173,11 +1184,20 @@ param_gwas_multi_from_file <- function(
   drop_multiallelic = TRUE,
   n_threads = 1L,
   residual_loss = c("auto", "full_cov"),
-  return_params = FALSE
+  return_params = FALSE,
+  require_density_mode = NULL
 ) {
   se_mode <- match.arg(se_mode)
   cov_source <- match.arg(cov_source)
   residual_loss <- match.arg(residual_loss)
+  if (!is.null(require_density_mode)) {
+    for (i in seq_along(W_list)) {
+      nm <- if (is.null(names(W_list)) || !nzchar(names(W_list)[i])) i else
+        paste0("\"", names(W_list)[i], "\"")
+      .check_require_density_mode(W_list[[i]], require_density_mode,
+                                  what = paste0("W_list[[", nm, "]]"))
+    }
+  }
   if (!requireNamespace("data.table", quietly = TRUE)) {
     stop("data.table package required for param_gwas_multi_from_file")
   }

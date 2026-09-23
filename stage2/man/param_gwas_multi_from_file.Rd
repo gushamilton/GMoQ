@@ -16,7 +16,8 @@ param_gwas_multi_from_file(
   drop_multiallelic = TRUE,
   n_threads = 1L,
   residual_loss = c("auto", "full_cov"),
-  return_params = FALSE
+  return_params = FALSE,
+  require_density_mode = NULL
 )
 }
 \arguments{
@@ -54,6 +55,9 @@ OLS parameters and scores the residuals with the per-SNP full covariance.}
 
 \item{return_params}{Passed to \code{\link{param_gwas_multi}}; include the
 fitted OLS parameter matrices when \code{residual_loss = "full_cov"}.}
+
+\item{require_density_mode}{Optional provenance gate applied to every
+element of \code{W_list}; see \code{\link{param_gwas_from_file}}.}
 }
 \value{
 With the default \code{residual_loss = "auto"}, a matrix with AIC/BIC

@@ -275,8 +275,10 @@ pull.
 
 ### Stage 2 (R proof scripts)
 
-`stage2/tests/` holds standalone R proof scripts (not `testthat` files); each is run with
-`Rscript` and exits non-zero on failure.
+`stage2/tests/` holds standalone R proof scripts; each is run with `Rscript` and exits
+non-zero on failure. `stage2/tests/testthat/` holds testthat unit tests (weight density
+modes), run with `testthat::test_dir("stage2/tests/testthat", package = "fungwasStage2",
+load_package = "installed")` and by `tests/run_tier0.sh`.
 
 ```bash
 R CMD INSTALL -l "$R_LIBS_USER" stage2/
@@ -446,6 +448,26 @@ jackknife_results <- param_gwas_from_file(
 The OLS point estimates are unchanged; covariance and reference calibration
 can change the standard errors and p-values. Keep the covariance sidecars
 beside the `.cov.gz` file so the reader can check variant alignment and metadata.
+
+**Mixture weights: which density (0.5.0).** The mixture and generic weight
+builders take `density = c("model", "hybrid", "stage1")`. The default,
+`"model"`, divides every column by the fitted density, as before. For a
+two-component mixture with a membership parameter, `"hybrid"` changes only the
+`gamma` column. It divides that column by the Stage 1 kernel density at
+`q_tau`, the density the Stage 1 coefficients carry, and the component shares
+still sum to 1. In separated mixtures this removes gamma's attenuation and its
+leakage into the component locations.
+
+```r
+fhat <- stage1_kde_density(y_stage1, q_tau)   # or read_stage1_density("rif_nuisance.json")
+W <- make_weights_normal_mixture(taus, q_tau, p1, mu1, sd1, mu2, sd2,
+                                 include_membership = TRUE,
+                                 density = "hybrid", stage1_density = fhat)
+res <- param_gwas_from_file(..., W = W, require_density_mode = "hybrid")
+```
+
+See [docs/MIXTURE_WEIGHT_DENSITY.md](docs/MIXTURE_WEIGHT_DENSITY.md) for when
+to use each mode.
 
 ### HPC Submission
 See [SLURM Templates](docs/slurm_templates/) for example submission scripts.

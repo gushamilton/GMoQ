@@ -13,6 +13,10 @@ This R package implements "Stage 2" of the FungWas framework: mapping quantile G
         `make_weights_normal_mixture_vqtl`)
     -   Anything else, from a user-supplied quantile function
         (`make_weights_generic`)
+-   **Mixture weight density (0.5.0):** `density = "hybrid"` divides only the
+    membership column by the Stage 1 density (`stage1_kde_density`,
+    `read_stage1_density`); the default `"model"` is unchanged. See
+    `../docs/MIXTURE_WEIGHT_DENSITY.md`.
 
 ## Installation
 

@@ -21,12 +21,34 @@
 #' @param mu2,sd2 Mean and standard deviation of component 2.
 #' @param include_membership Logical; include a first column \code{"gamma"} if TRUE.
 #' @param tiny Small positive floor for stabilizing divisions (default: mixture pdf clamped to \code{tiny}).
+#' @param density Which density divides each column; see
+#'   \code{docs/MIXTURE_WEIGHT_DENSITY.md}. \code{"model"} (default, unchanged
+#'   behaviour): every column is divided by the fitted mixture pdf.
+#'   \code{"hybrid"}: the component columns stay the component shares
+#'   \eqn{P(k \mid q_\tau)} (they sum to 1) and the \code{"gamma"} column is
+#'   divided by the Stage 1 density \code{stage1_density} instead, because the
+#'   Stage 1 coefficient carries that density's scaling.
+#'   \code{"stage1"}: every column is divided by \code{stage1_density}; this
+#'   breaks \eqn{W_1 + W_2 = 1} and warns (sensitivity only).
+#' @param stage1_density Required for \code{"hybrid"} and \code{"stage1"}: the
+#'   Stage 1 density \eqn{\hat f(q_\tau)} at \code{taus}. A numeric vector,
+#'   a list with \code{fhat} (and optionally \code{taus}, \code{q_tau}, which
+#'   are checked), or the path of a Stage 1 density JSON
+#'   (\code{\link{read_stage1_density}}). Compute it from the phenotype with
+#'   \code{\link{stage1_kde_density}}.
+#' @param identity_tol Tolerance for the \eqn{W_1 + W_2 = 1} check under
+#'   \code{"hybrid"}.
 #'
 #' @return A numeric matrix (\code{T x K}) with column names:
 #'   \itemize{
 #'     \item If \code{include_membership = FALSE}: \code{c("beta_1","beta_2")}
 #'     \item Else: \code{c("gamma","beta_1","beta_2")}
 #'   }
+#'   Under a non-default \code{density} the matrix carries attributes
+#'   \code{density_mode}, \code{density_weight_mode},
+#'   \code{stage1_density_columns}, \code{stage1_density} and
+#'   \code{model_density}; read them with \code{\link{weight_density_mode}}.
+#'   The default output carries none, so it is identical to earlier versions.
 #'
 #' @examples
 #' taus <- seq(0.10, 0.90, by = 0.05)
@@ -48,9 +70,13 @@ make_weights_normal_mixture <- function(
   mu1, sd1,
   mu2, sd2,
   include_membership = FALSE,
-  tiny = 1e-12
+  tiny = 1e-12,
+  density = c("model", "hybrid", "stage1"),
+  stage1_density = NULL,
+  identity_tol = 1e-8
 ) {
   stopifnot(length(taus) == length(q_tau))
+  density <- match.arg(density)
   Tt <- length(taus)
 
   F1 <- pnorm(q_tau, mean = mu1, sd = sd1)
@@ -59,12 +85,22 @@ make_weights_normal_mixture <- function(
   f2 <- dnorm(q_tau, mean = mu2, sd = sd2)
 
   f  <- pmax(p1 * f1 + (1 - p1) * f2, tiny)
+  # Density for the location columns (f_loc) and for the membership column
+  # (f_gam). Under the default both are the model pdf, so the arithmetic is
+  # exactly that of earlier versions.
+  f_loc <- f; f_gam <- f; s1 <- NULL
+  if (density != "model") {
+    s1 <- .resolve_stage1_density(stage1_density, taus, q_tau, density)
+    fh <- pmax(s1$fhat, tiny)
+    f_gam <- fh
+    if (density == "stage1") f_loc <- fh
+  }
 
-  W1 <- p1 * f1 / f
-  W2 <- (1 - p1) * f2 / f
+  W1 <- p1 * f1 / f_loc
+  W2 <- (1 - p1) * f2 / f_loc
 
   if (isTRUE(include_membership)) {
-    Wp <- -(p1 * (1 - p1) / f) * (F1 - F2)
+    Wp <- -(p1 * (1 - p1) / f_gam) * (F1 - F2)
     W  <- cbind(Wp, W1, W2)
     colnames(W) <- c("gamma", "beta_1", "beta_2")
   } else {
@@ -73,6 +109,12 @@ make_weights_normal_mixture <- function(
   }
   rownames(W) <- paste0("tau", taus)
   storage.mode(W) <- "double"
+  if (density != "model") {
+    .check_weight_identities(W, list(c("beta_1", "beta_2")), density, identity_tol)
+    cols <- if (density == "stage1") colnames(W) else
+      intersect("gamma", colnames(W))
+    W <- .tag_weight_density(W, density, s1$fhat, cols, f, s1$source)
+  }
   W
 }
 
@@ -163,9 +205,16 @@ make_weights_vqtl <- function(
 #' @param mu1,sd1 Mean and sd of component 1.
 #' @param mu2,sd2 Mean and sd of component 2.
 #' @param tiny Small positive floor to stabilize divisions (mixture pdf clamped to at least \code{tiny}).
+#' @param density,stage1_density,identity_tol As in
+#'   \code{\link{make_weights_normal_mixture}}. Under \code{"hybrid"} only the
+#'   \code{gamma} column is divided by the Stage 1 density; the mean and sd
+#'   columns (component share times a location or scale score) keep the model
+#'   pdf, so \code{beta_mu1 + beta_mu2 = 1} still holds.
 #'
 #' @return A T x 5 numeric matrix \code{W} with columns:
 #'   \code{c("gamma","beta_mu1","beta_mu2","beta_sigma1","beta_sigma2")}.
+#'   Non-default \code{density} adds the attributes described in
+#'   \code{\link{make_weights_normal_mixture}}.
 #'
 #' @examples
 #' taus <- seq(0.1, 0.9, 0.1)
@@ -185,9 +234,13 @@ make_weights_normal_mixture_vqtl <- function(
   p1,
   mu1, sd1,
   mu2, sd2,
-  tiny = 1e-12
+  tiny = 1e-12,
+  density = c("model", "hybrid", "stage1"),
+  stage1_density = NULL,
+  identity_tol = 1e-8
 ) {
   stopifnot(length(taus) == length(q_tau))
+  density <- match.arg(density)
 
   # Component pdfs and cdfs
   f1 <- dnorm(q_tau, mean = mu1, sd = sd1)
@@ -197,18 +250,30 @@ make_weights_normal_mixture_vqtl <- function(
 
   # Mixture density (guarded)
   f <- pmax(p1 * f1 + (1 - p1) * f2, tiny)
+  f_loc <- f; f_gam <- f; s1 <- NULL
+  if (density != "model") {
+    s1 <- .resolve_stage1_density(stage1_density, taus, q_tau, density)
+    fh <- pmax(s1$fhat, tiny)
+    f_gam <- fh
+    if (density == "stage1") f_loc <- fh
+  }
 
   # Weights
-  W_gamma    <- -(p1 * (1 - p1) / f) * (F1 - F2)
-  W_mu1      <- (p1 * f1) / f
-  W_mu2      <- ((1 - p1) * f2) / f
-  W_sigma1   <- (p1 * f1 * (q_tau - mu1) / sd1) / f
-  W_sigma2   <- ((1 - p1) * f2 * (q_tau - mu2) / sd2) / f
+  W_gamma    <- -(p1 * (1 - p1) / f_gam) * (F1 - F2)
+  W_mu1      <- (p1 * f1) / f_loc
+  W_mu2      <- ((1 - p1) * f2) / f_loc
+  W_sigma1   <- (p1 * f1 * (q_tau - mu1) / sd1) / f_loc
+  W_sigma2   <- ((1 - p1) * f2 * (q_tau - mu2) / sd2) / f_loc
 
   W <- cbind(W_gamma, W_mu1, W_mu2, W_sigma1, W_sigma2)
   colnames(W) <- c("gamma","beta_mu1","beta_mu2","beta_sigma1","beta_sigma2")
   rownames(W) <- paste0("tau", taus)
   storage.mode(W) <- "double"
+  if (density != "model") {
+    .check_weight_identities(W, list(c("beta_mu1", "beta_mu2")), density, identity_tol)
+    cols <- if (density == "stage1") colnames(W) else "gamma"
+    W <- .tag_weight_density(W, density, s1$fhat, cols, f, s1$source)
+  }
   W
 }
 
@@ -254,8 +319,32 @@ make_fd_grad <- function(param, dist_cdf, eps = 1e-6) {
 #'   (y, params) -> numeric giving derivative of F(y; params) wrt that parameter.
 #'   Can be analytic, or constructed with \code{make_fd_grad()}.
 #' @param tiny Small positive floor to stabilize divisions (\eqn{f(q_tau)} clamped).
+#' @param density Which density divides each column (see
+#'   \code{docs/MIXTURE_WEIGHT_DENSITY.md}): \code{"model"} (default,
+#'   unchanged) divides every column by \code{dist_pdf}; \code{"hybrid"}
+#'   divides the columns named in \code{stage1_columns} (the membership
+#'   derivative of a mixture) by the Stage 1 density and every other column by
+#'   \code{dist_pdf}; \code{"stage1"} divides every column by the Stage 1
+#'   density and warns (sensitivity only).
+#' @param stage1_density Stage 1 density at \code{taus}, required unless
+#'   \code{density = "model"}; see \code{\link{make_weights_normal_mixture}}.
+#' @param stage1_columns Columns divided by the Stage 1 density under
+#'   \code{"hybrid"} (default \code{"gamma"}). At least one must be present,
+#'   unless \code{character(0)} is passed to state that the family has no
+#'   membership column (then \code{"hybrid"} equals \code{"model"}).
+#' @param unit_sum Optional identity check: a character vector, or a list of
+#'   them, naming groups of columns whose row sums must equal 1 (for example
+#'   \code{c("beta_left", "beta_right")} for component locations, or
+#'   \code{"additive"} for a shift column, which must be identically 1). A
+#'   violation beyond \code{identity_tol} stops under \code{"model"} and
+#'   \code{"hybrid"}; under \code{"stage1"} the deviations are reported in a
+#'   warning. Not checked when \code{NULL} (default).
+#' @param identity_tol Tolerance for \code{unit_sum}; the default \code{1e-6}
+#'   allows for finite-difference gradients (\code{\link{make_fd_grad}}).
 #'
 #' @return A T x K numeric matrix of weights with columns named by parameter.
+#'   Non-default \code{density} adds the attributes described in
+#'   \code{\link{make_weights_normal_mixture}}.
 #'
 #' @details
 #' The generic approach uses the identity:
@@ -282,11 +371,37 @@ make_fd_grad <- function(param, dist_cdf, eps = 1e-6) {
 make_weights_generic <- function(
   taus, q_tau, dist_cdf, dist_pdf,
   params, grad_funcs,
-  tiny = 1e-12
+  tiny = 1e-12,
+  density = c("model", "hybrid", "stage1"),
+  stage1_density = NULL,
+  stage1_columns = "gamma",
+  unit_sum = NULL,
+  identity_tol = 1e-6
 ) {
   stopifnot(length(taus) == length(q_tau))
+  density <- match.arg(density)
   Tt <- length(taus)
   f  <- pmax(dist_pdf(q_tau, params), tiny)
+
+  s1 <- NULL
+  use_s1 <- rep(FALSE, length(grad_funcs))
+  if (density != "model") {
+    s1 <- .resolve_stage1_density(stage1_density, taus, q_tau, density)
+    fh <- pmax(s1$fhat, tiny)
+    if (density == "stage1") {
+      use_s1[] <- TRUE
+    } else {
+      use_s1 <- names(grad_funcs) %in% stage1_columns
+      # character(0) states explicitly that the family has no membership
+      # column, in which case "hybrid" equals "model" (still recorded).
+      if (!any(use_s1) && length(stage1_columns)) {
+        stop("density = \"hybrid\" needs at least one membership column: none of ",
+             "`stage1_columns` (", paste(stage1_columns, collapse = ", "),
+             ") is among the gradient names (", paste(names(grad_funcs), collapse = ", "),
+             ").", call. = FALSE)
+      }
+    }
+  }
 
   W <- matrix(NA_real_, nrow = Tt, ncol = length(grad_funcs))
   colnames(W) <- names(grad_funcs)
@@ -295,8 +410,14 @@ make_weights_generic <- function(
   for (j in seq_along(grad_funcs)) {
     gfun <- grad_funcs[[j]]
     dF   <- vapply(q_tau, function(q) gfun(q, params), numeric(1))
-    W[, j] <- -dF / f
+    W[, j] <- if (use_s1[j]) -dF / fh else -dF / f
   }
   storage.mode(W) <- "double"
+  if (density != "model" || !is.null(unit_sum)) {
+    .check_weight_identities(W, unit_sum, density, identity_tol)
+  }
+  if (density != "model") {
+    W <- .tag_weight_density(W, density, s1$fhat, colnames(W)[use_s1], f, s1$source)
+  }
   W
 }

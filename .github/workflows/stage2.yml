@@ -30,6 +30,10 @@ jobs:
             Rscript --vanilla "stage2/tests/$script"
           done
 
+      - name: Run testthat unit tests
+        run: |
+          Rscript --vanilla -e 'testthat::test_dir("stage2/tests/testthat", package = "fungwasStage2", load_package = "installed", stop_on_failure = TRUE)'
+
       # Legacy demonstration scripts include large simulations and optional data.
       # Run the assertion-based regressions above separately from package checks.
       - name: Build and check installed package structure and examples

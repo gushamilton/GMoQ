@@ -25,7 +25,8 @@ param_gwas_from_file(
   cov_meta_file = NULL,
   nu = NULL,
   unknown_nu = c("omit", "normal", "error"),
-  df_coef = NULL
+  df_coef = NULL,
+  require_density_mode = NULL
 )
 }
 \arguments{
@@ -85,6 +86,12 @@ omit p-values (default), use an explicitly labelled normal or chi-square limit,
 or error.}
 
 \item{df_coef}{Optional override for the effective-df coefficient.}
+
+\item{require_density_mode}{Optional provenance gate: \code{"model"},
+\code{"hybrid"} or \code{"stage1"} (or the matching
+\code{density_weight_mode} label). If set, the run stops unless
+\code{\link{weight_density_mode}(W)} matches. \code{NULL} (default)
+does not check.}
 }
 \value{
 A data.table with SNP identifiers, parameter estimates, standard errors,

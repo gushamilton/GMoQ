@@ -12,7 +12,10 @@ make_weights_normal_mixture_vqtl(
   sd1,
   mu2,
   sd2,
-  tiny = 1e-12
+  tiny = 1e-12,
+  density = c("model", "hybrid", "stage1"),
+  stage1_density = NULL,
+  identity_tol = 1e-08
 )
 }
 \arguments{
@@ -27,10 +30,18 @@ make_weights_normal_mixture_vqtl(
 \item{mu2, sd2}{Mean and sd of component 2.}
 
 \item{tiny}{Small positive floor to stabilize divisions (mixture pdf clamped to at least \code{tiny}).}
+
+\item{density, stage1_density, identity_tol}{As in
+\code{\link{make_weights_normal_mixture}}. Under \code{"hybrid"} only the
+\code{gamma} column is divided by the Stage 1 density; the mean and sd
+columns (component share times a location or scale score) keep the model
+pdf, so \code{beta_mu1 + beta_mu2 = 1} still holds.}
 }
 \value{
 A T x 5 numeric matrix \code{W} with columns:
 \code{c("gamma","beta_mu1","beta_mu2","beta_sigma1","beta_sigma2")}.
+Non-default \code{density} adds the attributes described in
+\code{\link{make_weights_normal_mixture}}.
 }
 \description{
 Constructs a weight matrix \code{W} that maps RIF tau-slopes \eqn{b(tau)}

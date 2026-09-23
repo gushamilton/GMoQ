@@ -69,6 +69,24 @@ for name in $LEGACY; do
     "${name%.R}" "$st" "$name" >>"$GMOQ_TEST_OUT/results.jsonl"
 done
 
+# The testthat unit tests under stage2/tests/testthat (weight density modes).
+echo
+echo "########## stage2 testthat ##########"
+tt_log="$GMOQ_TEST_OUT/testthat.log"
+if gmoq_rscript -e 'suppressPackageStartupMessages({library(testthat); library(fungwasStage2)});
+    r <- as.data.frame(testthat::test_dir(file.path(Sys.getenv("GMOQ_REPO"), "stage2/tests/testthat"),
+                                          reporter = "summary", stop_on_failure = FALSE));
+    cat("testthat:", sum(r$nb), "expectations,", sum(r$failed), "failed,", sum(r$error), "errored,",
+        sum(r$skipped), "skipped\n"); quit(status = as.integer(sum(r$failed) + sum(r$error) > 0))' \
+    >"$tt_log" 2>&1; then
+  echo "  ok"; st=PASS
+else
+  echo "  FAIL (see $tt_log)"; tail -n 30 "$tt_log"; st=FAIL; fail=1
+fi
+tail -n 1 "$tt_log"
+printf '{"tier":"tier0","group":"testthat","id":"T0.TESTTHAT.stage2","status":"%s","establishes":"stage2/tests/testthat passes (weight density modes).","criterion":"no failed or errored expectation"}\n' \
+  "$st" >>"$GMOQ_TEST_OUT/results.jsonl"
+
 t_end=$(date +%s)
 echo
 echo "########## tier 0 finished in $((t_end - t_start))s ##########"

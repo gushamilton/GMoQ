@@ -11,7 +11,12 @@ make_weights_generic(
   dist_pdf,
   params,
   grad_funcs,
-  tiny = 1e-12
+  tiny = 1e-12,
+  density = c("model", "hybrid", "stage1"),
+  stage1_density = NULL,
+  stage1_columns = "gamma",
+  unit_sum = NULL,
+  identity_tol = 1e-06
 )
 }
 \arguments{
@@ -30,9 +35,38 @@ make_weights_generic(
 Can be analytic, or constructed with \code{make_fd_grad()}.}
 
 \item{tiny}{Small positive floor to stabilize divisions (\eqn{f(q_tau)} clamped).}
+
+\item{density}{Which density divides each column (see
+\code{docs/MIXTURE_WEIGHT_DENSITY.md}): \code{"model"} (default,
+unchanged) divides every column by \code{dist_pdf}; \code{"hybrid"}
+divides the columns named in \code{stage1_columns} (the membership
+derivative of a mixture) by the Stage 1 density and every other column by
+\code{dist_pdf}; \code{"stage1"} divides every column by the Stage 1
+density and warns (sensitivity only).}
+
+\item{stage1_density}{Stage 1 density at \code{taus}, required unless
+\code{density = "model"}; see \code{\link{make_weights_normal_mixture}}.}
+
+\item{stage1_columns}{Columns divided by the Stage 1 density under
+\code{"hybrid"} (default \code{"gamma"}). At least one must be present,
+unless \code{character(0)} is passed to state that the family has no
+membership column (then \code{"hybrid"} equals \code{"model"}).}
+
+\item{unit_sum}{Optional identity check: a character vector, or a list of
+them, naming groups of columns whose row sums must equal 1 (for example
+\code{c("beta_left", "beta_right")} for component locations, or
+\code{"additive"} for a shift column, which must be identically 1). A
+violation beyond \code{identity_tol} stops under \code{"model"} and
+\code{"hybrid"}; under \code{"stage1"} the deviations are reported in a
+warning. Not checked when \code{NULL} (default).}
+
+\item{identity_tol}{Tolerance for \code{unit_sum}; the default \code{1e-6}
+allows for finite-difference gradients (\code{\link{make_fd_grad}}).}
 }
 \value{
 A T x K numeric matrix of weights with columns named by parameter.
+Non-default \code{density} adds the attributes described in
+\code{\link{make_weights_normal_mixture}}.
 }
 \description{
 Constructs a tau-by-K weight matrix \eqn{W} for an arbitrary parametric family,
