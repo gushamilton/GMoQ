@@ -149,7 +149,7 @@ See [Stage 2 Documentation](stage2/README.md) for full details.
 
 We provide a Conda environment that handles Python dependencies and system libraries
 (Armadillo, a C++ compiler and OpenMP). It works on Linux and on macOS, including Apple Silicon.
-Both packages share one version (currently 0.6.1); see [stage2/NEWS.md](stage2/NEWS.md).
+Both packages share one version (currently 0.6.2); see [stage2/NEWS.md](stage2/NEWS.md).
 
 ```bash
 # Create and activate the environment
@@ -164,6 +164,11 @@ cd stage1
 pip install .
 ```
 *Note: This builds the optimized C++ extension.*
+
+Without conda, install Armadillo (and, on macOS, libomp) first, e.g.
+`brew install armadillo libomp` or `apt install libarmadillo-dev`, then
+`pip install ./stage1` into a virtual environment. For an Armadillo in a
+non-standard place, set `ARMADILLO_DIR` to its prefix.
 
 ### 3. Install Stage 2 (R)
 

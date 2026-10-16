@@ -645,6 +645,36 @@ def query_bgi_records_for_rsids(bgen_path: str, requested_rsids: Set[str]) -> Li
         conn.close()
 
 
+def warn_if_no_openmp(threads) -> None:
+    """Say so when the extension was built without OpenMP, so --threads does nothing."""
+    from . import core
+    if not core.HAVE_CPP:
+        return
+    try:
+        enabled = bool(core.cpp_ext.openmp_info()["openmp_enabled"])
+    except Exception:
+        return
+    if not enabled and (threads is None or threads > 1):
+        logger.warning("The C++ extension was built WITHOUT OpenMP, so Stage 1 runs on one "
+                       "thread whatever --threads says. Reinstall with an OpenMP-capable "
+                       "compiler (see the README) to use more.")
+
+
+#: Values that commonly mean "missing" in genetics files but are read as numbers here.
+SUSPECT_MISSING_CODES = (-9.0,)
+
+
+def _warn_dropped_and_suspect(dropped: Counter, suspect: Counter) -> None:
+    """Log why samples were dropped and which columns hold likely missing codes."""
+    if dropped:
+        detail = "; ".join(f"{n} {why}" for why, n in dropped.most_common())
+        logger.warning(f"Dropped {sum(dropped.values())} phenotype rows before analysis: {detail}. "
+                       "Only the literal NA (or nan) means missing.")
+    for (col, code), n in sorted(suspect.items()):
+        logger.warning(f"{n} samples have the value {code:g} in column '{col}'. It is analysed "
+                       "as a number; if it means missing, recode it to NA.")
+
+
 def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Optional[str],
                          keep_file: Optional[str] = None,
                          covar_cols: Optional[list[str]] = None) -> tuple:
@@ -684,6 +714,8 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
     sample_aliases = []
     y_values = {col: [] for col in pheno_cols}
     X_list = []
+    dropped = Counter()   # reason -> rows
+    suspect = Counter()   # (column, code) -> rows kept with that value
 
     for row in pheno_data:
         fid = row['FID']
@@ -696,24 +728,40 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
             for col in pheno_cols:
                 val = float(row[col]) if row[col] != 'NA' else np.nan
                 pheno_vals.append(val)
-            if np.any(np.isnan(pheno_vals)):
-                continue
-
-            if covar_file:
-                if fid not in covar_map:
-                    continue
-                c_row = covar_map[fid]
-                x_vals = [float(c_row[c]) if c_row[c] != 'NA' else np.nan for c in covar_cols]
-                if np.any(np.isnan(x_vals)):
-                    continue
-                X_list.append(x_vals)
-
-            sample_ids.append(fid)
-            sample_aliases.append(build_sample_aliases(fid, iid))
-            for col, val in zip(pheno_cols, pheno_vals):
-                y_values[col].append(val)
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
+            dropped["with a non-numeric or empty phenotype"] += 1
             continue
+        if np.any(np.isnan(pheno_vals)):
+            dropped["with a missing (NA) phenotype"] += 1
+            continue
+
+        if covar_file:
+            if fid not in covar_map:
+                dropped["with no row in the covariate file (matched on FID)"] += 1
+                continue
+            c_row = covar_map[fid]
+            try:
+                x_vals = [float(c_row[c]) if c_row[c] != 'NA' else np.nan for c in covar_cols]
+            except (ValueError, KeyError, TypeError):
+                dropped["with a non-numeric or empty covariate"] += 1
+                continue
+            if np.any(np.isnan(x_vals)):
+                dropped["with a missing (NA) covariate"] += 1
+                continue
+            for c, v in zip(covar_cols, x_vals):
+                if v in SUSPECT_MISSING_CODES:
+                    suspect[(c, v)] += 1
+            X_list.append(x_vals)
+
+        for col, v in zip(pheno_cols, pheno_vals):
+            if v in SUSPECT_MISSING_CODES:
+                suspect[(col, v)] += 1
+        sample_ids.append(fid)
+        sample_aliases.append(build_sample_aliases(fid, iid))
+        for col, val in zip(pheno_cols, pheno_vals):
+            y_values[col].append(val)
+
+    _warn_dropped_and_suspect(dropped, suspect)
 
     n_samples = len(sample_ids)
     log_mem(f"Loaded {n_samples} samples with valid phenotypes")
@@ -1936,6 +1984,7 @@ def main():
     args = parser.parse_args()
     set_numpy_fallback_allowed(args.allow_numpy_fallback)
     require_cpp_extension("fungwas-stage1 CLI")
+    warn_if_no_openmp(args.threads)
 
     if not args.pheno_col and not args.pheno_cols:
         parser.error("Provide --pheno-col or --pheno-cols")

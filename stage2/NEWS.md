@@ -1,3 +1,18 @@
+# fungwasStage2 0.6.2 (and fungwas-stage1 0.6.2)
+
+Stage 1 only; no change to any estimate.
+
+* Installs without conda. `setup.py` finds Armadillo via `ARMADILLO_DIR`, conda,
+  Homebrew or the system prefixes, embeds its library path so the extension loads,
+  and stops with install instructions if Armadillo is missing. If the extension
+  cannot be loaded, the error now gives the real import error and the right
+  reinstall command.
+* Warnings instead of silence: Stage 1 reports how many phenotype rows it dropped
+  and why (missing or non-numeric phenotype or covariate, no covariate row for
+  the FID), warns when a phenotype or covariate column contains `-9` (analysed as
+  a number), and warns when the extension was built without OpenMP so `--threads`
+  has no effect. Which rows are analysed is unchanged.
+
 # fungwasStage2 0.6.1 (and fungwas-stage1 0.6.1)
 
 * MIT `LICENSE` at the repository root and in `stage1/`.

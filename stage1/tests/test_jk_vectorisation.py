@@ -103,6 +103,15 @@ def test_float32_covariance_packing_matches_struct_pack(values):
     # so out loud.
     with np.errstate(over="ignore"):
         packed = arr.astype("<f4", copy=False).tobytes()
-    assert struct.pack(f"{arr.size}f", *arr) == packed
+    try:
+        expected = struct.pack(f"{arr.size}f", *arr)
+    except OverflowError:
+        # Newer Pythons refuse to narrow a finite overflow; the payload is written
+        # with NumPy, which saturates it to inf. Pin that directly.
+        got = np.frombuffer(packed, dtype="<f4")
+        over = np.isfinite(arr) & (np.abs(arr) > np.finfo(np.float32).max)
+        assert np.all(np.isinf(got[over]))
+        expected = struct.pack(f"{arr.size}f", *np.where(over, np.sign(arr) * np.inf, arr))
+    assert expected == packed
 
 

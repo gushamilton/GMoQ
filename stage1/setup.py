@@ -22,27 +22,43 @@ class get_pybind_include:
         import pybind11
         return pybind11.get_include()
 
-def get_armadillo_include():
-    """Find Armadillo include path from conda."""
-    conda_prefix = os.environ.get('CONDA_PREFIX', '')
-    if conda_prefix:
-        arma_path = os.path.join(conda_prefix, 'include')
-        if os.path.exists(os.path.join(arma_path, 'armadillo')):
-            return arma_path
-    # Fallback to common locations
-    for path in ['/usr/include', '/usr/local/include']:
-        if os.path.exists(os.path.join(path, 'armadillo')):
-            return path
+def _brew_prefix(formula):
+    """Homebrew prefix of a formula, or None."""
+    brew = shutil.which('brew')
+    if not brew:
+        return None
+    try:
+        return subprocess.run([brew, '--prefix', formula], capture_output=True,
+                              text=True, check=True).stdout.strip() or None
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def find_armadillo():
+    """(include_dir, lib_dir) of an Armadillo install, or None.
+
+    Looks in $ARMADILLO_DIR, the active conda environment, Homebrew and the system
+    prefixes, in that order.
+    """
+    prefixes = [os.environ.get('ARMADILLO_DIR'), os.environ.get('CONDA_PREFIX'),
+                _brew_prefix('armadillo'), '/opt/homebrew', '/usr/local', '/usr']
+    for p in dict.fromkeys(p for p in prefixes if p):
+        inc = os.path.join(p, 'include')
+        if not os.path.exists(os.path.join(inc, 'armadillo')):
+            continue
+        for sub in ('lib', 'lib64', 'lib/x86_64-linux-gnu', 'lib/aarch64-linux-gnu'):
+            d = os.path.join(p, sub)
+            if os.path.isdir(d) and any(f.startswith('libarmadillo') for f in os.listdir(d)):
+                return inc, d
     return None
 
-def get_armadillo_lib():
-    """Find Armadillo library path from conda."""
-    conda_prefix = os.environ.get('CONDA_PREFIX', '')
-    if conda_prefix:
-        lib_path = os.path.join(conda_prefix, 'lib')
-        if os.path.exists(lib_path):
-            return lib_path
-    return None
+ARMADILLO_MISSING = (
+    "Armadillo (C++ linear algebra library) was not found. Install it with one of:\n"
+    "  conda env create -f environment.yml   (recommended; see README)\n"
+    "  brew install armadillo                (macOS)\n"
+    "  apt install libarmadillo-dev          (Debian/Ubuntu)\n"
+    "or point ARMADILLO_DIR at a prefix containing include/armadillo and lib/libarmadillo*."
+)
 
 # ISA flags for the C++ kernel. The default is EMPTY: the portable x86-64 SSE2
 # (or arm64) baseline, chosen for portability. The extension is often built once
@@ -74,18 +90,18 @@ def resolve_arch_flags(env=None):
 
 
 _arch_flags = resolve_arch_flags()
+_arma = find_armadillo()
 
 ext_modules = [
     Extension(
         'fungwas_stage1._stage1_cpp',
         sources=['src/stage1_pybind.cpp'],
         depends=['src/stage1_fast.hpp', 'src/stage1_fast_hot.inc'],
-        include_dirs=[
-            get_pybind_include(),
-            get_armadillo_include(),
-        ],
-        library_dirs=[get_armadillo_lib()] if get_armadillo_lib() else [],
-        runtime_library_dirs=[get_armadillo_lib()] if get_armadillo_lib() else [],
+        include_dirs=[get_pybind_include()] + ([_arma[0]] if _arma else []),
+        library_dirs=[_arma[1]] if _arma else [],
+        # An explicit rpath: on macOS setuptools' runtime_library_dirs emits -L only,
+        # which leaves @rpath/libarmadillo unresolvable outside conda.
+        extra_link_args=['-Wl,-rpath,' + _arma[1]] if _arma else [],
         libraries=['armadillo'],
         # OpenMP flags are added by BuildExt once a probe compile shows which work.
         extra_compile_args=['-std=c++14', '-O3', '-fPIC'] + _arch_flags,
@@ -96,17 +112,8 @@ ext_modules = [
 
 def _libomp_prefixes():
     """Where a separately installed libomp may live (macOS: conda, Homebrew)."""
-    out = []
-    if os.environ.get('CONDA_PREFIX'):
-        out.append(os.environ['CONDA_PREFIX'])
-    brew = shutil.which('brew')
-    if brew:
-        try:
-            out.append(subprocess.run([brew, '--prefix', 'libomp'], capture_output=True,
-                                      text=True, check=True).stdout.strip())
-        except (OSError, subprocess.CalledProcessError):
-            pass
-    out += ['/opt/homebrew/opt/libomp', '/usr/local/opt/libomp']
+    out = [os.environ.get('CONDA_PREFIX'), _brew_prefix('libomp'),
+           '/opt/homebrew/opt/libomp', '/usr/local/opt/libomp']
     return [p for p in dict.fromkeys(out) if p and os.path.exists(os.path.join(p, 'include', 'omp.h'))]
 
 
@@ -148,6 +155,8 @@ class BuildExt(build_ext):
         # Remove -Wstrict-prototypes (not valid for C++)
         if '-Wstrict-prototypes' in self.compiler.compiler_so:
             self.compiler.compiler_so.remove('-Wstrict-prototypes')
+        if _arma is None:
+            raise SystemExit('\n' + ARMADILLO_MISSING + '\n')
         flags = None
         if os.environ.get('FUNGWAS_STAGE1_OPENMP', '1') != '0':
             flags = next((c for c in openmp_candidates() if self._openmp_works(*c)), None)
