@@ -9,7 +9,8 @@
 #' @param G Numeric matrix (N x P) of SNP dosages or genotypes.
 #' @param taus Numeric vector of quantile levels.
 #' @param C Optional N x K covariate matrix.
-#' @param covar_mode Either "residualize" (default) or "include".
+#' @param covar_mode \code{"residualize"} (default; covariates are projected out of
+#'   the RIF and the genotypes). \code{"include"} is not implemented and stops.
 #'   - "residualize": partial out C from G before regression.
 #'   - "include": include C directly in regression.
 #' @param density_floor Positive scalar; lower bound for estimated densities.
@@ -84,26 +85,8 @@ quantile_gwas <- function(
       SE_tau[, j]  <- se_b
     }
 
-  } else if (covar_mode == "include") {
-    stop("covar_mode = 'include' is still in development")
-
-    # Joint regression RIF ~ SNP + C
-    if (is.null(C)) stop("Must provide C if covar_mode = 'include'.")
-    C <- as.matrix(C)
-
-    for (j in seq_len(P)) {
-      X <- cbind(G[, j], C)  # SNP + covariates
-      fit <- lm.fit(X, RIF)  # multi-response regression (N x T outcome)
-      b <- fit$coefficients[1, ]      # SNP slope
-      Q_slope[, j] <- b
-
-      # compute SEs for SNP slope (per tau)
-      resid <- RIF - X %*% fit$coefficients
-      sigma2 <- colSums(resid^2) / (N - ncol(X))
-      XtXinv <- chol2inv(chol(crossprod(X)))
-      se_b <- sqrt(sigma2 * XtXinv[1, 1])
-      SE_tau[, j] <- se_b
-    }
+  } else {
+    stop("covar_mode = 'include' is not implemented; use 'residualize'.")
   }
 
   t3 <- proc.time()[["elapsed"]]

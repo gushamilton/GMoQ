@@ -1,3 +1,0 @@
-run_id	tau_count	snps	dense_bytes	compact_bytes	dense_bytes_per_snp	compact_bytes_per_snp	dense_elapsed_sec	compact_elapsed_sec	reduction
-pooled-memory-repair-20260915-01	45	1000	8288096	24424	8288.096	24.424	0.086	0.034	339.342286275794
-pooled-memory-repair-20260915-01	45	10000	82880096	168424	8288.0096	16.8424	0.605	0.01	492.091958390728

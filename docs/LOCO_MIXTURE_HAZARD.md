@@ -48,7 +48,7 @@ every incentive to spend its capacity there.
 > both arms share the same reference. They are **not** the right numbers for
 > *how does G-MoQ compare to a sex-stratified GWAS at its best*. For that, and
 > for the full register of every comparison in this project, see
-> [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md).
+> [COMPARATOR_LEDGER.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/COMPARATOR_LEDGER.md).
 
 chr22 testosterone, pooled + OLS, median SE relative to sex-stratified REGENIE
 (which was itself run `--ignore-pred`, so no-LOCO is the like-for-like
@@ -104,7 +104,7 @@ too small.
 > `gamma`'s SE *and* `gamma`'s lambda untouched while inflating `beta_left`/
 > `beta_right` SEs by 9.5%/14.7%, and only those two lambdas moved. Genuine
 > confounding inflates every statistic from the same genotypes; this deflated only
-> the two it had inflated. See [TWO_PASS_LOCO.md](TWO_PASS_LOCO.md#what-the-lambda-actually-was).
+> the two it had inflated. See [TWO_PASS_LOCO.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/TWO_PASS_LOCO.md#what-the-lambda-actually-was).
 > The original paragraph is kept below for the record.
 
 ~~**RETRACTED 2026-09-16 (later the same day).** This section previously argued
@@ -159,7 +159,7 @@ is trusted on a structured phenotype.
 **Implemented as `scripts/loco_blind_diagnostic.R`.** On the old testosterone
 LOCO it returns a membership-proxy ratio of 17.4 and flags it; on the two-pass
 LOCO it returns 0.006-0.012 and clears it. Measured values in
-[TWO_PASS_LOCO.md](TWO_PASS_LOCO.md#the-blind-diagnostic-on-old-and-new-loco).
+[TWO_PASS_LOCO.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/TWO_PASS_LOCO.md#the-blind-diagnostic-on-old-and-new-loco).
 
 ## Options, in order of preference
 
@@ -170,7 +170,7 @@ LOCO it returns 0.006-0.012 and clears it. Measured values in
    no-LOCO, effect correlations within 0.004 of it, and a LOCO predictor that
    explains 2.2-5.7% within a component instead of 0.03-0.15%. Genomic inflation
    is unchanged from no-LOCO. Full results and the recommended transform in
-   [TWO_PASS_LOCO.md](TWO_PASS_LOCO.md).
+   [TWO_PASS_LOCO.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/TWO_PASS_LOCO.md).
 2. **No LOCO.** Acceptable fallback: it costs 1-3% in SE against two-pass and
    nothing in lambda. The "+5% female, +9% male" inflation penalty recorded in
    an earlier draft of this document was the with-LOCO arm's SE inflation, not a

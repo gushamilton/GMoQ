@@ -48,12 +48,9 @@ if (!requireNamespace("jsonlite", quietly = TRUE)) {
   .libPaths(unique(c(lib[nzchar(lib)], .libPaths())))
 }
 
-TIERS <- c("tier0", "tier1", "tier2", "tier3")
+TIERS <- "tier0"   # tiers 1-4 are at tag archive/research-records-20261016
 TIER_MEANS <- c(
-  tier0 = "Unit: closed-form identities. Establishes that the arithmetic is right. Establishes nothing about statistical validity.",
-  tier1 = "Integration: Stage 1 to Stage 2 on small simulated data with a known theta, plus every refusal path.",
-  tier2 = "Statistical validity: counted coverage and Type-I error against known truth on a preregistered grid.",
-  tier3 = "Scale and timing at production N. Establishes cost, not correctness.")
+  tier0 = "Unit: closed-form identities. Establishes that the arithmetic is right. Establishes nothing about statistical validity.")
 
 rows <- list()
 present <- character(0)
@@ -87,7 +84,7 @@ skipped <- tab[tab$status == "SKIP", , drop = FALSE]
 info <- tab[tab$status == "INFO", , drop = FALSE]
 passed <- tab[tab$status == "PASS", , drop = FALSE]
 
-missing_tiers <- setdiff(c("tier0", "tier1", "tier2"), present)
+missing_tiers <- setdiff(TIERS, present)
 verdict <- if (nrow(blocking_fail) > 0) {
   "REGRESSION CHECKS FAILED"
 } else if (length(missing_tiers)) {
@@ -116,12 +113,12 @@ payload <- list(
                 advisory_fail = nrow(advisory_fail), skipped = nrow(skipped),
                 reported = nrow(info), total = nrow(tab)),
   verdict_rule = paste(
-    "REGRESSION CHECKS PASSED: every blocking check passed and tiers 0, 1 and 2 all ran.",
+    "REGRESSION CHECKS PASSED: every blocking check passed and tier 0 ran.",
     "REGRESSION CHECKS PARTIAL: every blocking check that ran passed, but a tier did not run.",
     "REGRESSION CHECKS FAILED: at least one blocking check failed.",
     "Advisory failures are real defects that do not by themselves invalidate results.",
     "A tier that did not run is never counted as a pass.",
-    "These historical regression labels do not certify scientific validity; see tests/validity_pilot/README.md."),
+    "These regression labels do not certify scientific validity; see docs/examples/1kg_chr22 for recovery of known effects."),
   checks = tab)
 writeLines(jsonlite::toJSON(payload, auto_unbox = TRUE, na = "null", digits = 8,
                             pretty = TRUE),
@@ -194,9 +191,9 @@ if (nrow(info)) {
 } else md <- c(md, "_none_", "")
 
 md <- c(md, "## What this report does NOT establish", "",
-        "See `tests/validity_pilot/README.md` for the paired known-truth pilot. In summary: no real genotypes,",
-        "no LD, no relatedness, no LOCO residualisation in the simulated cells, no",
-        "direct measurement at p = 5e-8, and no comparison against any other method.",
+        "Tier 0 checks arithmetic only: no real genotypes, no LD, no relatedness,",
+        "no measurement at p = 5e-8 and no comparison against any other method.",
+        "`docs/examples/1kg_chr22` checks recovery of known effects on real genotypes.",
         "")
 writeLines(md, file.path(outdir, "RELEASE_REPORT.md"))
 

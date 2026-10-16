@@ -97,6 +97,6 @@ against making GLS silent and automatic.
 
 ## Reproducing
 
-Workspace `/user/work/fh6520/gls_coverage`: `src/cells.py` (design), `src/sim_stage1.py`,
+The campaign's sources were `src/cells.py` (design), `src/sim_stage1.py`,
 `src/stage2_driver.R`, `src/truth.R`, `src/summarise.R`, `src/tail.R`.
 Per-cell results in `out/stage2_cell*.rds`; the assembled table in `out/summary.tsv`.

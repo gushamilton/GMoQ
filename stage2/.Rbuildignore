@@ -1,15 +1,7 @@
 ^docs$
-^_pkgdown\.yml$
-^pkgdown$
-^scripts$
-^diagnose_.*$
 ^stage2$
 ^tests/out$
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^tests/test-.*\.R$
-^tests/proof_.*\.R$
 ^tests/load-installed\.R$
-^tests/pooled-memory-repair-20260915-01$
-^tests/robust_probe$
-^tests/validity_biobank_check$

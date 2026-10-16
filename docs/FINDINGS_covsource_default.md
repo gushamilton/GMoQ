@@ -1,6 +1,6 @@
 # Which covariance source should Stage 2 default to?
 
-**Campaign:** `sim/covsource` (BP `/user/work/fh6520/covsource_run`), 52 cells x
+**Campaign:** `sim/covsource` (at tag `archive/research-records-20261016`), 52 cells x
 15,000 replicates = 780,000 simulated scans, N = 461,320, `--blocks 1000`,
 45 taus, paired replicates across all four `(cov_source, tau_cov_estimator)`
 combinations.
@@ -11,7 +11,7 @@ paper Figure 3 and the supplementary tables read. The campaign's scripts and the
 identical copy of those tables are frozen at tag `archive/sim-campaigns-20260917`
 (`git show archive/sim-campaigns-20260917:sim/covsource/tables/tables.md`); they
 were removed from `main` as duplication, not as dead evidence. See
-[SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) §1.
+[SIMULATION_INVENTORY.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/SIMULATION_INVENTORY.md) §1.
 
 **Scope.** This campaign ran the **2-column** `make_weights_vqtl` W. The package
 ships a 3-column mixture W, on which the defect *concentrates* rather than

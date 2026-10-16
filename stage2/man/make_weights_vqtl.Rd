@@ -9,9 +9,12 @@ make_weights_vqtl(taus, q_tau, mu, sd)
 \arguments{
 \item{taus}{Numeric vector of quantile levels (length T).}
 
-\item{q_tau}{Numeric vector of baseline quantiles at taus (length T, type=8 recommended).}
+\item{q_tau}{Numeric vector of baseline quantiles at taus (length T, type=8
+recommended). Only its length is checked: the Normal weights depend on
+\code{taus} and \code{sd} alone. Kept for a common builder interface.}
 
-\item{mu}{Baseline mean of Y.}
+\item{mu}{Baseline mean of Y. Unused, for the same reason; kept for the
+interface.}
 
 \item{sd}{Baseline standard deviation of Y.}
 }

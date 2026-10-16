@@ -24,7 +24,9 @@ make_weights_generic(
 
 \item{q_tau}{Numeric vector of baseline quantiles at \code{taus} (length T).}
 
-\item{dist_cdf}{Function (y, params) -> numeric. CDF of the distribution.}
+\item{dist_cdf}{Function (y, params) -> numeric. CDF of the distribution. Not
+called by the builder itself (the gradients carry the CDF); kept so the
+family is fully specified and for \code{make_fd_grad()}-style gradients.}
 
 \item{dist_pdf}{Function (y, params) -> numeric. PDF of the distribution.}
 

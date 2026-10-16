@@ -24,7 +24,8 @@ quantile_gwas(
 
 \item{C}{Optional N x K covariate matrix.}
 
-\item{covar_mode}{Either "residualize" (default) or "include".
+\item{covar_mode}{\code{"residualize"} (default; covariates are projected out of
+the RIF and the genotypes). \code{"include"} is not implemented and stops.
 \itemize{
 \item "residualize": partial out C from G before regression.
 \item "include": include C directly in regression.

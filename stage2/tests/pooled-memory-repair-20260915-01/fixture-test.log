@@ -1,5 +1,0 @@
-GLS tau_cov diagnostics: 8 SNPs, 8 solved (100.0000%); ridge repair attempted 0 (0.0000%), rescued 0, Sigma still not SPD 0; skipped: beta non-finite 0, bad offset 0, cov non-finite 0, Sigma solve fail 0, WtSinvW not SPD 0, theta fail 0, Vtheta fail 0, Q invalid 0
-GLS path: q_method = "saddlepoint" resolves to the exact Hotelling F reference for Q. The GLS quadratic form has a degenerate eigenvalue spectrum, so there is nothing for a saddlepoint to approximate. Recorded as Q_ref_dist = "hotelling_f".
-GLS tau_cov diagnostics: 8 SNPs, 8 solved (100.0000%); ridge repair attempted 0 (0.0000%), rescued 0, Sigma still not SPD 0; skipped: beta non-finite 0, bad offset 0, cov non-finite 0, Sigma solve fail 0, WtSinvW not SPD 0, theta fail 0, Vtheta fail 0, Q invalid 0
-GLS path: q_method = "saddlepoint" resolves to the exact Hotelling F reference for Q. The GLS quadratic form has a degenerate eigenvalue spectrum, so there is nothing for a saddlepoint to approximate. Recorded as Q_ref_dist = "hotelling_f".
-OK: compact pooled covariance matches dense consumers; payload is chromosome-shared

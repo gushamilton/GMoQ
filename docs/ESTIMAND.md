@@ -35,7 +35,7 @@ interpreting pooled p-values in that regime.
 The current jackknife also holds the fitted quantiles and density fixed. It
 therefore does not propagate all nuisance-estimation uncertainty for nonzero
 effects. A lower-bias density estimate alone does not close that gap; see the
-[RIF uncertainty derivation](../stage2/docs/DENSITY_RIF_NUISANCE.md). The
+[RIF uncertainty derivation](DENSITY_RIF_NUISANCE.md). The
 jackknife comparison above is useful evidence, not a universal calibration
 guarantee.
 
