@@ -193,17 +193,16 @@ bgenix -g data.chr22.bgen -s data.chr1-22.sample -incl-range 1:1000-2000 | ...
 
 ### 5. **Pooled covariance and fingerprint**
 
-**What:** Run Stage 1 with both jackknife (`--cov-source jackknife`) and pooled (`--cov-source pooled`) options. Verify the `--sigma0` fingerprint correctly identifies which covariance estimator was used.
+**What:** One Stage 1 run (default `--cov-mode full`) writes both the per-SNP jackknife covariance (`.cov.gz`) and the pooled `Sigma_0` sidecar (`.sigma0.tsv.gz`, unless `--no-sigma0`). The covariance source is chosen in Stage 2 (`cov_source = "pooled"` or `"jackknife"`). Verify that the `.sigma0.meta.json` fingerprint identifies the scan it was built from.
 
 **How:**
 ```bash
-# Run with both covariance sources
-python -m fungwas_stage1.cli ... --cov-source jackknife --out s1_jk
-python -m fungwas_stage1.cli ... --cov-source pooled --out s1_pooled
+fungwas-stage1 ... --out s1          # writes s1.cov.gz and s1.sigma0.tsv.gz
+# In R: param_gwas_from_file(..., cov_source = "pooled",    sigma0_file = "s1.sigma0.tsv.gz")
+#       param_gwas_from_file(..., cov_source = "jackknife", cov_file    = "s1.cov.gz")
 # Check:
-#  - s1_jk.cov.meta.json has "cov_source": "jackknife"
-#  - s1_pooled.cov.meta.json has "cov_source": "pooled"
-#  - Stage 2 refuses to mix them (sigma0 mismatch check works)
+#  - the two give identical OLS estimates and differ only in SE
+#  - Stage 2 refuses a Sigma_0 whose metadata does not match the scan
 ```
 
 **Expected result:** Both covariance sources work; metadata correctly identifies the source; Stage 2 respects the metadata.

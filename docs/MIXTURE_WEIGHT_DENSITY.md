@@ -1,9 +1,16 @@
 # Which density divides a mixture weight column
 
 `make_weights_normal_mixture()`, `make_weights_normal_mixture_vqtl()` and
-`make_weights_generic()` take `density = c("model", "hybrid", "stage1")`
-(since 0.5.0). The default, `"model"`, is the behaviour of every earlier
-version, and its output is byte-identical to theirs.
+`make_weights_generic()` take `density = "model"`, `"hybrid"` or `"stage1"`
+(since 0.5.0). **Since 0.6.0 the default is `"hybrid"` whenever the weight
+matrix has a membership (`gamma`) column, and `"model"` otherwise.** A
+membership W therefore needs `stage1_density` (see below); without it the
+builder stops and says so. Pass `density = "model"` to reproduce 0.5.0 and
+earlier, whose output it matches byte for byte.
+
+The 1000 Genomes example (`docs/examples/1kg_chr22/`) shows why: in a
+two-component mixture separated by 4 SDs, `"model"` recovers about 70% of the
+true membership effect and `"hybrid"` about 90%, within its standard errors.
 
 ## Why the choice exists
 
@@ -37,8 +44,8 @@ which one.
 
 | mode | location / scale columns | membership (`gamma`) column | identities | use |
 |---|---|---|---|---|
-| `"model"` (default) | model pdf | model pdf | hold: `W_1 + W_2 = 1`, additive column = 1 | unimodal and overlapping mixtures; families without a membership column; reproducing earlier results |
-| `"hybrid"` | model pdf (unchanged) | **Stage 1 density** `fhat` | hold (checked; a violation stops) | two-component mixtures with a membership parameter, especially separated ones |
+| `"model"` (default without a membership column) | model pdf | model pdf | hold: `W_1 + W_2 = 1`, additive column = 1 | unimodal and overlapping mixtures; families without a membership column; reproducing earlier results |
+| `"hybrid"` (default with a membership column) | model pdf (unchanged) | **Stage 1 density** `fhat` | hold (checked; a violation stops) | two-component mixtures with a membership parameter, especially separated ones |
 | `"stage1"` | Stage 1 density | Stage 1 density | **broken**, and the builder warns | sensitivity analysis only; this is the old `stage1_rif_density` weight file |
 
 With no membership column, `"hybrid"` gives the same matrix as `"model"`. For

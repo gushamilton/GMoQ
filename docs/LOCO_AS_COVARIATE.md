@@ -1,8 +1,8 @@
 # LOCO belongs in the covariate basis, not in the phenotype
 
 Status: measured on testosterone chr22, 2026-09-16. Implemented as
-`--loco-mode covariate`; the default stays `subtract`, and no published result
-changes.
+`--loco-mode covariate`, which has been the default whenever `--loco-preds` is
+given since 0.4.0. Pass `--loco-mode subtract` to reproduce earlier runs.
 
 ## The semantic argument
 

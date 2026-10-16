@@ -12,15 +12,14 @@
 
 # Load modules (adjust for your cluster)
 module load lang/python/3.10
-# module load bgenix  # if available as module
 
 # Configuration
 BGEN_DIR="/path/to/bgen/files"
 PHENO_FILE="inputs/regenie_pheno.txt"
+PHENO_COL="your_phenotype"   # column in PHENO_FILE (first column must match BGEN sample IDs)
 COVAR_FILE="inputs/regenie_covar.txt"
 HM3_DIR="inputs"  # Contains chr${CHR}_hm3.txt files
 OUT_DIR="results/stage1"
-BGENIX_PATH="bgenix"  # or full path
 
 # Get chromosome from array task
 CHR=${SLURM_ARRAY_TASK_ID}
@@ -35,12 +34,11 @@ echo "Running Stage 1 for chromosome ${CHR}"
 fungwas-stage1 \
     --bgen "${BGEN_DIR}/data.chr${CHR_PAD}.bgen" \
     --pheno "${PHENO_FILE}" \
+    --pheno-col "${PHENO_COL}" \
     --covar "${COVAR_FILE}" \
     --snps "${HM3_DIR}/chr${CHR}_hm3.txt" \
-    --blocks 25 \
     --batch-size 1000 \
     --threads 4 \
-    --bgenix-path "${BGENIX_PATH}" \
     --output-rtau \
     --out "${OUT_DIR}/chr${CHR}"
 

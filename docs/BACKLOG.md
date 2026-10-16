@@ -69,11 +69,11 @@ Audit running. Each of these has already produced one wrong claim of the same sh
 | # | Item | Status |
 |---|---|---|
 | F1 | No top-level `LICENSE`; Stage 1 ships no license text though `pyproject.toml` declares MIT. | **OPEN** |
-| F2 | Version numbers mean nothing: both components say `0.1.0`, tags say `v0.2.0`/`v0.3.0`, code advertises "pre-v0.4.0". No `NEWS`/`CHANGELOG`. | **OPEN** |
+| F2 | Version numbers mean nothing: both components say `0.1.0`, tags say `v0.2.0`/`v0.3.0`, code advertises "pre-v0.4.0". No `NEWS`/`CHANGELOG`. | **CLOSED** in 0.6.0: both packages are 0.6.0 (Stage 1's version is single-sourced from `fungwas_stage1/__init__.py`), and `stage2/NEWS.md` covers both. |
 | F3 | READMEs never mention `--loco-scale`, `tau_cov_estimator`, `cov_source` or the dispersion guards - the substance of the last 31 commits. | **OPEN** |
-| F4 | `param_gwas_from_file` is exported with no man page; its roxygen is attached to the internal `.validate_cov_ids`. `q_method` undocumented. | **OPEN** |
+| F4 | `param_gwas_from_file` is exported with no man page; its roxygen is attached to the internal `.validate_cov_ids`. `q_method` undocumented. | **CLOSED**: `man/param_gwas_from_file.Rd` exists and is regenerated from current roxygen. |
 | F5 | Phantom functions in docs: `make_weights_lognormal`, `make_weights_mixture_vqtl`. Both removed from `stage2/README.md` on 2026-09-17; the helpers that exist are `make_weights_generic`, `make_weights_vqtl`, `make_weights_normal_mixture` and `make_weights_normal_mixture_vqtl`, checked against `NAMESPACE`. | **CLOSED** |
-| F6 | `docs/slurm_templates/submit_stage1.sh` fails three ways against the current CLI. | **OPEN** |
+| F6 | `docs/slurm_templates/submit_stage1.sh` fails three ways against the current CLI. | **CLOSED** in 0.6.0: adds `--pheno-col`, drops the non-existent `--bgenix-path` and the `--blocks 25` override. |
 | F7 | No end-to-end synthetic example that runs as written; `docs/examples/` predates the pooled path. | **OPEN** |
 
 ## G. Unmerged branches

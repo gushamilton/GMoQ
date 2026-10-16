@@ -19,8 +19,9 @@ established. Full evidence lives in the analysis tree under
 | Are Stage 2 parameter estimates biased? | **No** — -0.0004 +/- 0.0022 (null), +0.0030 +/- 0.0030 (0.02 SD/allele) | measured against the RIF projection estimand |
 | Is Type-I error correct at conventional thresholds? | **Yes** — 1.085x at p=0.05 | |
 
-Software correctness is separately covered by the test suite: 43 Stage 1
-tests, 18 Stage 2 tests.
+Software correctness is separately covered by the test suite (counts as of
+0.6.0): 164 Stage 1 tests, 24 standalone Stage 2 scripts plus the testthat
+suite, and tier 0.
 
 ## 2. The one substantive defect: tail calibration
 
@@ -631,7 +632,7 @@ This bites hardest when a long-lived analysis tree keeps its own R library
 (for example a paper repository's `.local/Rlib`) and Stage 1 is later
 regenerated from a newer package: Stage 2 then refuses its own Stage 1 output.
 
-The version is now 0.4.0, matching the tag series; DESCRIPTION had been left at 0.1.0 while tags reached v0.3.0, so the string was no guide to behaviour at all. Bump it whenever the on-disk formats or the
+The version is now 0.6.0 for both packages (Stage 1 had been left at 0.1.0 through 0.5.0), matching the tag series; DESCRIPTION had once been left at 0.1.0 while tags reached v0.3.0, so the string was no guide to behaviour at all. Bump it whenever the on-disk formats or the
 estimator behaviour change, so a stale install is visible without running it.
 
 ## The LOCO workflow can destroy the structure being estimated (2026-09-16)

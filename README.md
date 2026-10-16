@@ -97,8 +97,9 @@ The primary result is Stage 2 OLS with pooled covariance; jackknife covariance i
 retained as a sensitivity analysis. Commit `afb59ab` adds an optional
 `fourth_order_gaussian` RIF density kernel and records its method in the
 Stage 1/Stage 2 provenance, while preserving `silverman_gaussian` as the default.
-That kernel is implemented but has not yet passed its focused compute-node tests
-or an end-to-end testosterone chromosome 22 gate. Do not treat genome-wide,
+That kernel was measured and **not taken forward**: it is unreliable for
+multimodal, rounded and count phenotypes (issue #1), so do not use it for
+results. Do not treat genome-wide,
 other-phenotype or whole-paper runs as part of this validation phase.
 
 **FungWas** allows you to test SNP associations with:
@@ -131,7 +132,7 @@ See [Stage 2 Documentation](stage2/README.md) for full details.
     -   Performs **Recentered Influence Function (RIF) regression** on the phenotype at multiple quantile levels (taus).
     -   This is a highly optimized, parallelized quantile GWAS.
     -   **Output:** Beta estimates and standard errors for each tau, plus the full covariance matrix of estimates across taus for each SNP.
-    -   **Key Tech:** Python CLI, `bgen-reader` for fast I/O, C++ kernel with OpenMP.
+    -   **Key Tech:** Python CLI, the `bgen` package for BGEN I/O, C++ kernel with OpenMP.
 
 2.  **Stage 2 (R/C++):**
     -   Maps the quantile effects from Stage 1 to parameters of interest (e.g., mean/variance of a mixture model).
@@ -143,7 +144,9 @@ See [Stage 2 Documentation](stage2/README.md) for full details.
 
 ### 1. Create Environment (Recommended)
 
-We provide a Conda environment that handles Python dependencies and system libraries (Armadillo, OpenMP).
+We provide a Conda environment that handles Python dependencies and system libraries
+(Armadillo, a C++ compiler and OpenMP). It works on Linux and on macOS, including Apple Silicon.
+Both packages are version 0.6.0; see [stage2/NEWS.md](stage2/NEWS.md).
 
 ```bash
 # Create and activate the environment
@@ -161,16 +164,27 @@ pip install .
 
 ### 3. Install Stage 2 (R)
 
-```r
-# From R (ensure devtools is installed)
-devtools::install("stage2")
+```bash
+R CMD INSTALL stage2
 ```
+
+### 4. Check it works
+
+`docs/examples/1kg_chr22/` runs the whole pipeline on public 1000 Genomes genotypes with
+simulated phenotypes in about a minute and prints PASS/FAIL against the simulated truth.
 
 ## Detailed Build Instructions
 
 ### System Requirements
-- C/C++ compiler with OpenMP (e.g. GCC >= 9).
-- R >= 4.2 with `Rcpp` and `RcppArmadillo` available.
+- A C++ compiler with OpenMP: GCC >= 9, or LLVM clang with libomp. The conda
+  environment provides one. Apple's own clang has no OpenMP; the build then
+  looks for a separately installed libomp (conda-forge `llvm-openmp` or
+  `brew install libomp`). If it finds none, it still builds but runs
+  single-threaded, and says so.
+- R >= 4.2 with `Rcpp`, `RcppArmadillo` and `data.table`. On macOS, Homebrew R
+  can build `data.table` without zlib, which breaks writing `.gz` files; if
+  `data.table::fwrite(data.frame(a = 1), tempfile(fileext = ".gz"))` fails,
+  reinstall it with `install.packages("data.table", type = "source")`.
 - Python >= 3.10 with `pip` and `numpy`.
 
 ### Build Stage 1 (Python/C++)
@@ -229,8 +243,9 @@ pip install -e .
 python -c "from fungwas_stage1 import core; print(core.HAVE_CPP)"
 ```
 
-If `core.HAVE_CPP` is `False`, ensure your compiler and OpenMP runtime are available,
-then reinstall with `pip install -e .`.
+If `core.HAVE_CPP` is `False`, the extension did not build: check the `pip install`
+output for compiler errors and reinstall. A build without OpenMP prints a warning
+saying so; set `FUNGWAS_STAGE1_OPENMP=0` to ask for one deliberately.
 
 ### Build Stage 2 (R/C++)
 
@@ -290,7 +305,12 @@ Some scripts are large simulation demonstrations or require optional dependencie
 the CI workflow lists the fast assertion-based regression checks separately.
 `test-plink-files.R` requires `GMOQ_PLINK_PREFIX`; `test-qstat.R` needs `fitdistrplus`.
 
-### End-to-end check (synthetic data only)
+### End-to-end check
+
+[`docs/examples/1kg_chr22/`](docs/examples/1kg_chr22/README.md) is the quickest
+check: real 1000 Genomes chr22 genotypes, phenotypes simulated under a null, a
+mean shift, a variance effect and a two-component mixture, then Stage 1 and
+Stage 2, then a PASS/FAIL comparison with the truth.
 
 `docs/examples/generate_stage1_sim.py` and `stage2/scripts/simulate_full_pipeline_stage1.py`
 simulate data, run Stage 1, and write Stage 1 outputs that Stage 2 can consume. For a check that
@@ -305,7 +325,9 @@ run outputs outside this repository.
 ## Workflow Guide
 
 ### Step 0: Data Preparation
--   **Genotypes:** BGEN format (indexed with `bgenix`).
+-   **Genotypes:** BGEN format. A `bgenix` index (`.bgen.bgi`) is optional: it
+    speeds up `--snps` subsets, and without one Stage 1 reads the variant
+    headers instead.
 -   **Phenotypes:** Standard space-delimited text file (FID IID Pheno).
 -   **Covariates:** Standard space-delimited text file (FID IID Age Sex ...).
 
@@ -449,9 +471,11 @@ The OLS point estimates are unchanged; covariance and reference calibration
 can change the standard errors and p-values. Keep the covariance sidecars
 beside the `.cov.gz` file so the reader can check variant alignment and metadata.
 
-**Mixture weights: which density (0.5.0).** The mixture and generic weight
-builders take `density = c("model", "hybrid", "stage1")`. The default,
-`"model"`, divides every column by the fitted density, as before. For a
+**Mixture weights: which density.** The mixture and generic weight
+builders take `density = "model"`, `"hybrid"` or `"stage1"`. **Since 0.6.0 the
+default is `"hybrid"` whenever W has a membership (`gamma`) column**, and
+`"model"` (every column divided by the fitted density) otherwise. Pass
+`density = "model"` to reproduce 0.5.0. For a
 two-component mixture with a membership parameter, `"hybrid"` changes only the
 `gamma` column. It divides that column by the Stage 1 kernel density at
 `q_tau`, the density the Stage 1 coefficients carry, and the component shares
@@ -462,7 +486,7 @@ leakage into the component locations.
 fhat <- stage1_kde_density(y_stage1, q_tau)   # or read_stage1_density("rif_nuisance.json")
 W <- make_weights_normal_mixture(taus, q_tau, p1, mu1, sd1, mu2, sd2,
                                  include_membership = TRUE,
-                                 density = "hybrid", stage1_density = fhat)
+                                 stage1_density = fhat)   # density = "hybrid" by default
 res <- param_gwas_from_file(..., W = W, require_density_mode = "hybrid")
 ```
 
