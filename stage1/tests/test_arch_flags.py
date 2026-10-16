@@ -65,6 +65,8 @@ def test_fast_math_is_never_compiled_in(setup_module_obj):
     assert '-ffast-math' not in base
     assert '-Ofast' not in base          # -Ofast implies -ffast-math
     assert '-O3' in base
-    assert '-fopenmp' in base
+    # OpenMP is added by BuildExt after a probe compile; -fopenmp is always tried first.
+    assert setup_module_obj.openmp_candidates("linux") == [(['-fopenmp'], ['-fopenmp'])]
+    assert setup_module_obj.openmp_candidates("darwin")[0] == (['-fopenmp'], ['-fopenmp'])
 
 

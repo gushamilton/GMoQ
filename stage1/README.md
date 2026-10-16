@@ -9,22 +9,21 @@ Python/C++ implementation for blazing-fast RIF quantile regression with jackknif
 Stage 1 requires a **C++ extension** for fast jackknife covariance computation. Without it, the NumPy fallback is dramatically slower and should only be used for debugging.
 
 ```bash
-# With conda (recommended)
+# With conda (recommended; Linux and macOS, including Apple Silicon)
 conda env create -f environment.yml
 conda activate fungwas-stage1
 
-# Build C++ extension (REQUIRED for performance)
-python setup.py build_ext --inplace
-
-# Install package
-pip install -e .
+# Build the C++ extension and install the package
+pip install .
 ```
 
-**Important:** Stage 1 now fails fast if the C++ extension is not available. Build it with:
-```bash
-cd stage1
-python setup.py build_ext --inplace
-```
+The environment includes a C++ compiler and OpenMP. The build probes for working
+OpenMP flags (`-fopenmp`, or Apple clang's `-Xpreprocessor -fopenmp` with a
+separately installed libomp); if none work it builds single-threaded and prints a
+warning. For an editable development install, use `pip install -e .`, or
+`python setup.py build_ext --inplace` to build the extension in the source tree.
+
+**Important:** Stage 1 fails fast if the C++ extension is not available.
 
 The NumPy fallback is only available with the explicit CLI flag `--allow-numpy-fallback`, and is intended for debugging only. It can be ~1000x slower than the compiled path.
 
@@ -50,7 +49,7 @@ pytest -q tests/test_loco.py
 
 ### Conda environment notes (BGEN support)
 
-Stage 1 uses the Python `bgen` module for BGEN streaming, installed via pip (currently pinned to `bgen==1.9.7`). No external tools are required.
+Stage 1 uses the Python `bgen` module for BGEN streaming, installed via pip (currently pinned to `bgen==1.9.7`). No external tools are required: a `bgenix` index (`.bgen.bgi`) is used when present (it makes `--snps` subsets seek directly), and without one Stage 1 reads the variant headers. `bgen-reader` is in the environment only for the tests, which use it as an independent decoder.
 
 ```bash
 conda env update -n fungwas-stage1 -f environment.yml
@@ -222,8 +221,9 @@ Note: `chr:pos` formats are not accepted in this file - only RSIDs.
 | File | Description |
 |------|-------------|
 | `{out}.stage1.tsv.gz` | Per-SNP betas and SEs for each tau |
-| `{out}.cov.gz` | Binary covariance matrices (upper triangle; int8 by default, float32 optional) |
+| `{out}.cov.gz` | Binary per-SNP jackknife covariance matrices (upper triangle; int8 by default, float32 optional). Not written under `--cov-mode pooled` or `pooled-only` |
 | `{out}.cov.scale.gz` | Per-SNP float32 scales (only when `--cov-dtype int8`) |
+| `{out}.cov.ids.tsv.gz` | The SNP order of the `.cov.gz` records, which Stage 2 checks against the TSV |
 | `{out}.cov.meta.json` | Covariance storage metadata (`cov_dtype`, record layout) and the `analysis` provenance block |
 | `{out}.sigma0.tsv.gz` | Pooled cross-quantile covariance `Sigma_0`, one T×T float64 matrix per chromosome (suppress with `--no-sigma0`) |
 | `{out}.sigma0.meta.json` | What `Sigma_0` was built from: phenotype, covariates, tau grid, sample count, LOCO predictor, fingerprint |
@@ -232,9 +232,12 @@ Note: `chr:pos` formats are not accepted in this file - only RSIDs.
 ### Stage 1 TSV format
 
 ```
-snp_id  chr  bp  effect_allele  other_allele  beta_tau_0.10  se_tau_0.10  beta_tau_0.15  se_tau_0.15  ...
-rs123   22   1000  A  G  0.0123         0.0045       0.0089         0.0041       ...
+snp_id  chr  bp  effect_allele  other_allele  beta_tau_0.10  se_tau_0.10  ...  d_resid
+rs123   22   1000  A  G  0.0123         0.0045       ...  412.7
 ```
+
+`d_resid` is the SNP's residual genotype variation, `sum((g - X(X'X)^-1 X'g)^2)`;
+Stage 2's pooled covariance for that SNP is `Sigma_0 / d_resid`.
 
 ### Covariance binary format
 
