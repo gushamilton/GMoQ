@@ -1999,7 +1999,6 @@ def main():
     
     log_mem(f"Starting FungWas Stage 1 (taus={T}, blocks={args.blocks}, "
             f"density_method={args.density_method})")
-    logger.info("Note: For Stage 2, consider mean-centering non-intercept columns of your W matrix to reduce collinearity.")
     t_start = time.time()
     t_load = time.perf_counter()
     

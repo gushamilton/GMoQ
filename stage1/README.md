@@ -1,306 +1,89 @@
-# FungWas Stage 1: Fast RIF Quantile GWAS
+# Stage 1: RIF quantile GWAS (`fungwas-stage1`)
 
-Python/C++ implementation for blazing-fast RIF quantile regression with jackknife covariance estimation.
+For every SNP in a BGEN file, Stage 1 estimates its effect on 45 quantiles of the phenotype
+(unconditional quantile regression via the recentered influence function, RIF) and the
+covariance of those effects across quantiles. Stage 2 reads the output.
 
-## Installation
-
-### Prerequisites
-
-Stage 1 requires a **C++ extension** for fast jackknife covariance computation. Without it, the NumPy fallback is dramatically slower and should only be used for debugging.
+## Install
 
 ```bash
-# With conda (recommended; Linux and macOS, including Apple Silicon)
-conda env create -f environment.yml
-conda activate fungwas-stage1
-
-# Build the C++ extension and install the package
+conda env create -f environment.yml && conda activate fungwas-stage1
 pip install .
 ```
 
-The environment includes a C++ compiler and OpenMP. The build probes for working
-OpenMP flags (`-fopenmp`, or Apple clang's `-Xpreprocessor -fopenmp` with a
-separately installed libomp); if none work it builds single-threaded and prints a
-warning. For an editable development install, use `pip install -e .`, or
-`python setup.py build_ext --inplace` to build the extension in the source tree.
+Without conda, or if something goes wrong: [../docs/BUILD.md](../docs/BUILD.md).
 
-**Important:** Stage 1 fails fast if the C++ extension is not available.
-
-The NumPy fallback is only available with the explicit CLI flag `--allow-numpy-fallback`, and is intended for debugging only. It can be ~1000x slower than the compiled path.
-
-When the fallback is enabled, Stage 1 emits a large warning at runtime stating that it is "SUPER SUPER SLOW" and should not be used for production GWAS.
-
-### Quick sanity check after build
-
-After building the extension, confirm that the package can see the compiled module:
+## Run
 
 ```bash
-python - <<'PY'
-from fungwas_stage1 import core
-print(core.HAVE_CPP)
-print(core.cpp_ext.__file__ if core.HAVE_CPP else "NO_EXTENSION")
-PY
+fungwas-stage1 \
+    --bgen data/chr22.bgen \
+    --pheno pheno.txt --pheno-col bmi \
+    --covar covar.txt \
+    --out results/chr22 \
+    --threads 8
 ```
 
-For a quick local regression check:
+### Inputs
 
-```bash
-pytest -q tests/test_loco.py
-```
+- **`--bgen`**: BGEN v1.2 dosages. Effects are per copy of allele 1 (`effect_allele` in the
+  output). A `bgenix` index (`.bgen.bgi`) is optional; it speeds up `--snps`.
+- **`--pheno`**: space- or tab-delimited, header `FID IID <columns>`, the raw phenotype (Stage 1
+  builds the RIF itself). The first column (FID) must equal the BGEN sample IDs. Only `NA` means
+  missing.
+- **`--covar`** (optional): same layout. All non-ID columns are used unless you pass
+  `--covar-col`. Covariates are projected out of the RIF and the genotypes, not out of Y.
+- **`--sample`**: only if the BGEN does not embed sample IDs.
 
-### Conda environment notes (BGEN support)
+The log reports the samples loaded, the rows dropped and why, and the samples matched to the
+BGEN. Read it.
 
-Stage 1 uses the Python `bgen` module for BGEN streaming, installed via pip (currently pinned to `bgen==1.9.7`). No external tools are required: a `bgenix` index (`.bgen.bgi`) is used when present (it makes `--snps` subsets seek directly), and without one Stage 1 reads the variant headers. `bgen-reader` is in the environment only for the tests, which use it as an independent decoder.
+### Options you are likely to use
 
-```bash
-conda env update -n fungwas-stage1 -f environment.yml
-```
+| option | default | what it does |
+|---|---|---|
+| `--pheno-col` / `--pheno-cols a,b` | | one phenotype, or several in one genotype pass (samples complete for all of them) |
+| `--covar-col` | all | which covariates to use |
+| `--snps FILE` | all | restrict to these rsIDs (one per line) |
+| `--keep FILE` | all | restrict to these FIDs (one per line) |
+| `--threads` | 1 | set to the number of physical cores |
+| `--blocks` | 1000 | jackknife blocks; use fewer (e.g. 100) below N of about 5,000 |
+| `--taus` | 45 from 0.02 to 0.98 | comma-separated quantile grid |
+| `--loco-preds FILE` | | REGENIE step 1 `.loco` or `_pred.list`; added to the covariate basis |
 
-## Usage
+`fungwas-stage1 --help` lists every option.
 
-### Option 1: Array-based API (for testing / small data)
+### Outputs
 
-Similar to R's `quantile_gwas(Y, G, taus)`:
+| file | contents |
+|---|---|
+| `{out}.stage1.tsv.gz` | per SNP: `snp_id chr bp effect_allele other_allele`, `beta_tau_*` and `se_tau_*` for each quantile, and `d_resid` |
+| `{out}.sigma0.tsv.gz`, `{out}.sigma0.meta.json` | pooled cross-quantile covariance, used by Stage 2 by default |
+| `{out}.cov.gz`, `{out}.cov.scale.gz`, `{out}.cov.ids.tsv.gz`, `{out}.cov.meta.json` | per-SNP jackknife covariance, for Stage 2's `cov_source = "jackknife"` |
+
+Keep these files together; Stage 2 reads the sidecars next to the file you give it. Variants
+with more than two alleles, rsIDs with several BGEN records, and SNPs with minor allele count
+below 5 are skipped.
+
+## Python API
+
+For small in-memory data:
 
 ```python
 import numpy as np
 from fungwas_stage1 import run_stage1
 
-# Simulate data
-N, M = 5000, 100
-G = np.random.binomial(2, 0.3, (N, M)).astype(float)
-Y = np.random.randn(N)  # Raw phenotype (NOT pre-computed RIF!)
-taus = np.linspace(0.02, 0.98, 45)
-
-# Run Stage 1 - RIF is computed internally
-result = run_stage1(G, Y, taus, n_blocks=None, n_threads=4)  # auto blocks = 1000
-
-# Access results
-print(result['betas'].shape)       # (M, T) tau-level betas
-print(result['se'].shape)          # (M, T) standard errors
-print(result['covariances'][0])    # (T, T) covariance for SNP 0
+G = np.random.binomial(2, 0.3, (5000, 100)).astype(float)   # N x M dosages
+Y = np.random.randn(5000)                                    # raw phenotype
+res = run_stage1(G, Y, taus=np.round(np.linspace(0.02, 0.98, 45), 3), n_threads=4)
+res["betas"].shape, res["se"].shape, res["covariances"][0].shape   # (M, T), (M, T), (T, T)
 ```
 
-### Option 2: CLI for BGEN files (for HPC production)
+## Tests
+
+From the repository root (so the installed package, not the source tree, is imported):
 
 ```bash
-# Basic usage - provide raw phenotype, RIF computed internally
-fungwas-stage1 \
-    --bgen data.chr22.bgen \
-    --pheno phenotypes.txt \
-    --pheno-col testosterone \
-    --out results/chr22
-
-# With all options
-fungwas-stage1 \
-    --bgen data.chr22.bgen \
-    --sample data.sample \
-    --pheno phenotypes.txt \
-    --pheno-col testosterone \
-    --covar covariates.txt \
-    --snps chr22_hm3.txt \
-    --taus "0.020,0.042,0.064,0.085,0.107,0.129,0.151,0.173,0.195,0.216,0.238,0.260,0.282,0.304,0.325,0.347,0.369,0.391,0.413,0.435,0.456,0.478,0.500,0.522,0.544,0.565,0.587,0.609,0.631,0.653,0.675,0.696,0.718,0.740,0.762,0.784,0.805,0.827,0.849,0.871,0.893,0.915,0.936,0.958,0.980" \
-    --blocks 64 \
-    --batch-size 500 \
-    --threads 8 \
-    --cov-dtype int8 \
-    --output-rtau \
-    --out results/chr22
+python -m pytest stage1/tests -q
 ```
 
-The RIF density kernel is selected with `--density-method`. The default
-`silverman_gaussian` preserves the historical estimator. The explicit
-`fourth_order_gaussian` option uses
-`K(u) = (1.5 - 0.5*u^2) phi(u)` with the same Silverman bandwidth; Stage 1
-records the choice in its covariance metadata so matched Stage 2 weights cannot
-silently use a different density construction.
-
-#### Multi-phenotype CLI (single BGEN pass)
-
-Provide comma-separated phenotype columns to scan multiple phenotypes with one
-genotype pass. Outputs are suffixed with the phenotype name.
-
-Note: the multi-phenotype path uses the intersection of samples with
-non-missing values across all phenotypes (and covariates, if provided). This
-means phenotypes with more missingness reduce the sample set for *all*
-phenotypes in the joint run. This tradeoff enables shared residualization and
-block computations for speed. If you need per-phenotype sample sizes, run each
-phenotype separately using the single-phenotype CLI.
-
-```bash
-fungwas-stage1 \
-    --bgen data.chr22.bgen \
-    --pheno phenotypes.txt \
-    --pheno-cols "phenotype_a,phenotype_b" \
-    --covar covariates.txt \
-    --snps chr22_hm3.txt \
-    --taus "0.10,0.50,0.90" \
-    --blocks 64 \
-    --batch-size 500 \
-    --threads 8 \
-    --out results/chr22
-```
-
-If `--pheno-cols` contains a single phenotype, Stage 1 automatically falls back
-to the single-phenotype kernel to avoid extra overhead.
-
-When multiple phenotypes are supplied, the compiled path shares genotype
-residualization and block-score computation across phenotypes in one pass.
-
-### BGEN Loading Strategy
-
-Stage 1 uses an efficient hybrid approach for BGEN loading:
-
-1. **Pre-filtering**: Uses the BGEN index (`bfile.rsids()`) to intersect the user's SNP list with variants actually in the BGEN file
-2. **delay_parsing**: Opens BGEN with `delay_parsing=True` to defer genotype decompression until needed
-3. **Streaming**: Iterates through the BGEN file, yielding only matching variants
-4. **Batching**: Processes variants in chunks (default 500) for memory efficiency
-
-**Performance:**
-- ~800 SNPs/second for full chromosome scans
-- ~22 seconds for 17k HapMap3 SNPs on chr22 (463k samples)
-- Constant memory usage (~140MB regardless of SNP count)
-
-```bash
-# Full chromosome (streams all variants)
-fungwas-stage1 --bgen data.chr22.bgen --pheno pheno.txt --pheno-col y --out results/chr22
-
-# SNP subset (pre-filters using index, then streams matches)
-fungwas-stage1 --bgen data.chr22.bgen --pheno pheno.txt --pheno-col y --snps hm3_snps.txt --out results/chr22
-```
-
-### Multi-phenotype C++ kernel (advanced)
-
-The C++ pybind module exposes `process_block_dense_impl`/`process_block_sparse_impl`
-for running multiple RIF matrices against the same genotype block. This shares
-the genotype residualization and leverage calculations across phenotypes.
-
-```python
-from fungwas_stage1 import _stage1_cpp
-
-results = _stage1_cpp.process_block_dense_impl(G, [rif1, rif2], Q)
-for betas, ses in results:
-    print(betas.shape, ses.shape)
-```
-
-## Input Files
-
-### Phenotype file (space/tab delimited)
-
-Standard format with FID, IID, and raw phenotype column(s):
-```
-FID IID testosterone age_at_assessment
-1001 1001 15.3 45
-1002 1002 12.1 52
-```
-
-The `--pheno-col` argument specifies which column to analyze. FungWas computes RIF internally.
-
-### Covariate file (space/tab delimited)
-
-```
-FID IID age sex PC1 PC2 PC3 ...
-1001 1001 45 1 0.012 -0.034 0.056 ...
-```
-
-### SNP list file (single-column RSIDs)
-
-When using `--snps`, provide a single-column file of RSIDs (one per line), e.g.:
-
-```
-rs123
-rs456
-rs789
-```
-
-These RSIDs are matched against the BGEN file's index. Only variants present in both the list and the BGEN are processed.
-
-Note: `chr:pos` formats are not accepted in this file - only RSIDs.
-
-## Output Files
-
-| File | Description |
-|------|-------------|
-| `{out}.stage1.tsv.gz` | Per-SNP betas and SEs for each tau |
-| `{out}.cov.gz` | Binary per-SNP jackknife covariance matrices (upper triangle; int8 by default, float32 optional). Not written under `--cov-mode pooled` or `pooled-only` |
-| `{out}.cov.scale.gz` | Per-SNP float32 scales (only when `--cov-dtype int8`) |
-| `{out}.cov.ids.tsv.gz` | The SNP order of the `.cov.gz` records, which Stage 2 checks against the TSV |
-| `{out}.cov.meta.json` | Covariance storage metadata (`cov_dtype`, record layout) and the `analysis` provenance block |
-| `{out}.sigma0.tsv.gz` | Pooled cross-quantile covariance `Sigma_0`, one T×T float64 matrix per chromosome (suppress with `--no-sigma0`) |
-| `{out}.sigma0.meta.json` | What `Sigma_0` was built from: phenotype, covariates, tau grid, sample count, LOCO predictor, fingerprint |
-| `{out}.Rtau.tsv` | T×T correlation matrix (with `--output-rtau`) |
-
-### Stage 1 TSV format
-
-```
-snp_id  chr  bp  effect_allele  other_allele  beta_tau_0.10  se_tau_0.10  ...  d_resid
-rs123   22   1000  A  G  0.0123         0.0045       ...  412.7
-```
-
-`d_resid` is the SNP's residual genotype variation, `sum((g - X(X'X)^-1 X'g)^2)`;
-Stage 2's pooled covariance for that SNP is `Sigma_0 / d_resid`.
-
-### Covariance binary format
-
-Default (`--cov-dtype int8`):
-- For each SNP, Stage 1 stores the upper triangle of the T×T covariance matrix as int8.
-- A per-SNP float32 scale is written to `{out}.cov.scale.gz`.
-- Reconstruct as: `cov_upper_float = cov_upper_int8 * scale`.
-
-Legacy mode (`--cov-dtype float32`):
-- For each SNP, the upper triangle is stored directly as float32.
-
-For T=17 taus:
-- Float32: 153 values = 612 bytes/SNP.
-- Int8 + scale: 153 bytes + 4-byte scale = 157 bytes/SNP (~74% smaller).
-
-### Pooled covariance format
-
-`{out}.sigma0.tsv.gz` is a gzipped TSV with columns `chr`, `tau` and one column
-per tau, `%.17g` so float64 round-trips exactly; one block of T rows per
-chromosome, keyed `ALL` when the run had no `--loco-preds`. Stage 2 reads it with
-`cov_source = "pooled"` and forms the per-variant covariance as
-`Sigma_0 / d_resid`. Measured on real chr22 at T=45: **13.3 KB per chromosome**
-against 227-285 gzipped bytes *per variant* for the jackknife, and 0.06 s to
-compute. See `docs/KNOWN_ISSUES.md` section 10.
-
-## Performance
-
-- **C++ kernel**: OpenMP-parallelized block score computation
-- **Batched processing**: Configurable batch size for memory efficiency (default 500)
-- **BGEN loading**: delay_parsing + index pre-filtering for efficient streaming
-- **Speed**: ~800 SNPs/second for full scans, ~22s for 17k HM3 SNPs on chr22
-
-## How It Works
-
-1. **Load phenotype**: Read raw phenotype column from file
-2. **Compute RIF**: Build Recentered Influence Function matrix for each tau
-3. **Residualize**: Regress out covariates from RIF (not from raw phenotype)
-4. **BGEN pre-filter**: Use BGEN index to find valid SNPs from user list
-5. **Stream variants**: Iterate BGEN with delay_parsing, extract dosages on demand
-6. **Block scores**: Compute per-block sufficient statistics for jackknife
-7. **Covariance**: Estimate full T×T covariance per SNP for accurate Stage 2 SEs
-
-## API Reference
-
-### `run_stage1(G, Y, taus, covariates=None, n_blocks=None, seed=42, n_threads=1)`
-
-Full Stage 1 pipeline on arrays.
-
-**Parameters:**
-- `G`: (N, M) genotype dosage matrix
-- `Y`: (N,) raw phenotype (RIF computed internally)
-- `taus`: (T,) quantile levels
-- `covariates`: (N, K) optional covariate matrix
-- `n_blocks`: number of jackknife blocks
-- `seed`: random seed for block assignment
-- `n_threads`: OpenMP threads
-
-**Returns:** dict with `betas`, `se`, `covariances`, `q_tau`, `taus`
-
-Important:
-- Stage 1 now enforces `n_blocks > n_taus` for covariance stability.
-- Recommended for robust Stage 2 `tau_cov`: `n_blocks >= n_taus + 20`.
-- The default is 45 taus in `[0.02, 0.98]` and `--blocks 1000` (`DEFAULT_N_BLOCKS`,
-  `core.py:26`). An earlier revision auto-sized blocks as `max(T + 20, 64)`, i.e. 65 for
-  45 taus; that is no longer the default, and 65 blocks gives a much noisier jackknife
-  denominator. `--blocks` still accepts any value above `n_taus`.

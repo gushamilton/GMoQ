@@ -16,7 +16,7 @@ are recorded in `docs/KNOWN_ISSUES.md` (and, in full, in
 `docs/VALIDATION_2026-09-15.md` at the archive tag); passing implementation tests
 is not proof that those statistical limits are repaired.
 
-Use Luna xhigh subagents for the user-authorized implementation work. All
+Use GPT-6 Astra (`gpt-6-astra`) subagents for the user-authorized implementation work. All
 BluePebble execution runs on compute nodes, including small R/Python commands,
 tests and builds. Login nodes are for inspection, files, Git and job control.
 Coordinate one held allocation and bounded worker resources; never start a

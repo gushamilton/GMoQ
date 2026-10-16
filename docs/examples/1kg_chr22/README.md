@@ -20,14 +20,14 @@ outside the repository; set `GMOQ_1KG_DIR` to put them elsewhere.
 ```bash
 bash docs/examples/1kg_chr22/00_get_data.sh   # once: chr22 VCF + index, ~200 MB
 bash docs/examples/1kg_chr22/run_all.sh       # ~1 min: BGEN, simulate, Stage 1, Stage 2, checks
-SEED=7 bash docs/examples/1kg_chr22/run_all.sh  # same genotypes, new phenotypes
+SEED=7 bash docs/examples/1kg_chr22/run_all.sh  # same genotypes, new causal SNPs and phenotypes
 ```
 
 Settings (paths, threads) are in `config.sh` and can be overridden from the environment.
 
 | step | what it does |
 |---|---|
-| `01_make_bgen.sh` | biallelic SNPs, MAF > 0.05; 5 PCs from LD-pruned SNPs; 2,000 random SNPs as BGEN v1.2 (`ref-first`, so allele 1 = REF = Stage 1's effect allele) |
+| `01_make_bgen.sh` | biallelic SNPs, MAF ≥ 0.05; 5 PCs from LD-pruned SNPs; 2,000 random SNPs as BGEN v1.2 (`ref-first`, so allele 1 = REF = Stage 1's effect allele) |
 | `02_simulate.R` | four phenotypes plus `truth.tsv` (below) |
 | `03_stage1.sh` | `fungwas-stage1`, 45 quantiles, PCs as covariates, `--blocks 100` |
 | `04_stage2.R` | `param_gwas_from_file()` with pooled and jackknife covariance |
@@ -41,7 +41,7 @@ Settings (paths, threads) are in `config.sh` and can be overridden from the envi
 |---|---|---|---|
 | `null` | no SNP effect | Normal mean/variance | everything 0 |
 | `shift` | `Y = 0.25·G + e`, 5 SNPs | Normal mean/variance | `beta_mu = 0.25`, `beta_sigma2 = 0` |
-| `variance` | `Y = sqrt(1 + 0.3·(G − mean G))·e`, 3 SNPs | Normal mean/variance | `beta_mu = 0`, `beta_sigma2 = ±0.3` per allele, **on the variance scale** |
+| `variance` | `Y = sqrt(1 + 0.3·(M − mean M))·e`, 3 SNPs, where M counts the minor allele | Normal mean/variance | `beta_mu = 0`, `beta_sigma2 = ±0.3` per copy of allele 1 (+ if allele 1 is the minor allele), **on the variance scale** |
 | `mixture` | N(0,1) with probability `p1`, else N(4,1); `logit p1 = logit 0.7 + 0.5·(G − mean G)`, 5 SNPs | Normal mixture with membership: `density = "hybrid"` (default) and `"model"` | `gamma = 0.5`, `beta_1 = beta_2 = 0` |
 
 Notes:
@@ -77,4 +77,4 @@ Expected result for seed 2026, pooled covariance. Seeds 7 and 99 also pass.
 
 Across every model, parameter and covariance source, 4.5% to 6.5% of null SNPs have p < 0.05,
 and the Q lack-of-fit test rejects 4.5% to 6.5% of them. Pooled and jackknife standard errors
-agree, as expected at MAF > 0.05.
+agree, as expected at MAF ≥ 0.05.
