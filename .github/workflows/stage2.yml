@@ -24,7 +24,8 @@ jobs:
 
       - name: Install Stage 2 dependencies
         run: |
-          Rscript --vanilla -e 'install.packages(c("Rcpp", "RcppArmadillo", "data.table", "R.utils", "Matrix", "ggplot2", "jsonlite", "knitr", "rmarkdown", "testthat"))'
+          # No --vanilla here: setup-r configures the binary repository in the site profile.
+          Rscript -e 'install.packages(c("Rcpp", "RcppArmadillo", "data.table", "R.utils", "Matrix", "ggplot2", "jsonlite", "knitr", "rmarkdown", "testthat"))'
 
       - name: Install fungwasStage2
         run: |
