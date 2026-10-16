@@ -49,13 +49,16 @@ NUMPY_FALLBACK_WARNING = (
 )
 
 # Try to import C++ extension
+CPP_IMPORT_ERROR = None
 try:
     from . import _stage1_cpp as cpp_ext
     HAVE_CPP = True
     logger.info("C++ extension loaded successfully")
-except ImportError:
+except ImportError as e:
     HAVE_CPP = False
-    logger.warning("C++ extension not found; Stage 1 will fail unless NumPy fallback is explicitly enabled.")
+    CPP_IMPORT_ERROR = str(e)
+    logger.warning("C++ extension could not be loaded (%s); Stage 1 will fail unless NumPy "
+                   "fallback is explicitly enabled.", e)
 
 
 def set_numpy_fallback_allowed(allow: bool):
@@ -260,10 +263,12 @@ def require_cpp_extension(context: str = "Stage 1 computation"):
     """Fail fast unless the compiled extension is present or fallback was explicitly allowed."""
     if HAVE_CPP or ALLOW_NUMPY_FALLBACK:
         return
+    reason = f" Import error: {CPP_IMPORT_ERROR}." if CPP_IMPORT_ERROR else ""
     raise RuntimeError(
-        f"{context} requires the compiled C++ extension, but it is not available. "
-        "Build it with `python setup.py build_ext --inplace` in `fungwas/stage1`, or rerun "
-        "the CLI with `--allow-numpy-fallback` if you intentionally want the ~1000x slower path."
+        f"{context} requires the compiled C++ extension, but it could not be loaded.{reason} "
+        "Reinstall with `pip install .` from the stage1/ directory (see the README for the "
+        "conda environment), or rerun with `--allow-numpy-fallback` if you intentionally "
+        "want the ~1000x slower path."
     )
 
 
