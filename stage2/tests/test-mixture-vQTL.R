@@ -70,7 +70,8 @@ stage1 <- quantile_gwas(
 W_mix_vqtl <- make_weights_normal_mixture_vqtl(
   taus, stage1$q_tau,
   p1 = p1, mu1 = mu1, sd1 = sd1,
-  mu2 = mu2, sd2 = sd2
+  mu2 = mu2, sd2 = sd2,
+  stage1_density = stage1_kde_density(Y, stage1$q_tau)   # default density = "hybrid"
 )
 
 stage2 <- param_gwas(

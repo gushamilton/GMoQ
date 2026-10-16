@@ -92,7 +92,8 @@ gmoq_model_set <- function(taus, sigma, mix = NULL, e0 = 0, d0 = 0) {
   if (!is.null(mix)) {
     Wm <- make_weights_normal_mixture_vqtl(
       taus = taus, q_tau = mix$q_tau, p1 = mix$p1,
-      mu1 = mix$mu1, sd1 = mix$sd1, mu2 = mix$mu2, sd2 = mix$sd2
+      mu1 = mix$mu1, sd1 = mix$sd1, mu2 = mix$mu2, sd2 = mix$sd2,
+      density = "model"   # the tournament's registered weights (pre-0.6.0 default)
     )
     out$MIX_W   <- Wm[, "gamma", drop = FALSE]        # SNP moves the mixing weight
     out$MIX_MU1 <- Wm[, "beta_mu1", drop = FALSE]     # SNP moves component 1's mean

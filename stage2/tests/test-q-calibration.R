@@ -16,12 +16,7 @@ file_arg <- args[grep("^--file=", args)]
 this_file <- if (length(file_arg)) sub("^--file=", "", file_arg) else "tests/test-q-calibration.R"
 pkg_root <- normalizePath(file.path(dirname(this_file), ".."))
 
-Rcpp::sourceCpp(file.path(pkg_root, "src", "stage2_se_helper.cpp"))
-source(file.path(pkg_root, "R", "utils.R"))
-source(file.path(pkg_root, "R", "covariance.R"))
-source(file.path(pkg_root, "R", "weight-functions.R"))
-source(file.path(pkg_root, "R", "tail-reference.R"))
-source(file.path(pkg_root, "R", "gwas.R"))
+source(file.path(pkg_root, "tests", "load-installed.R"))
 
 ok <- function(cond, msg) {
   if (isTRUE(cond)) cat("PASS:", msg, "\n")

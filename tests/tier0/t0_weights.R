@@ -89,7 +89,8 @@ mix_q <- function(taus, p) {
 q_mix <- mix_q(taus, MP)
 Wm <- make_weights_normal_mixture_vqtl(
   taus, q_tau = q_mix, p1 = stats::plogis(MP$gamma),
-  mu1 = MP$mu1, sd1 = MP$sd1, mu2 = MP$mu2, sd2 = MP$sd2)
+  mu1 = MP$mu1, sd1 = MP$sd1, mu2 = MP$mu2, sd2 = MP$sd2,
+  density = "model")   # the closed form below is the model-density W
 
 gmoq_check("T0.W.mix_colnames",
            "The mixture builder returns gamma, beta_mu1, beta_mu2, beta_sigma1, beta_sigma2.",
@@ -110,7 +111,7 @@ for (pair in list(c("gamma", "gamma"), c("beta_mu1", "mu1"), c("beta_mu2", "mu2"
 Wm2 <- make_weights_normal_mixture(
   taus, q_tau = q_mix, p1 = stats::plogis(MP$gamma),
   mu1 = MP$mu1, sd1 = MP$sd1, mu2 = MP$mu2, sd2 = MP$sd2,
-  include_membership = TRUE)
+  include_membership = TRUE, density = "model")
 gmoq_close("T0.W.mix_two_builders_agree",
            "make_weights_normal_mixture and ..._vqtl agree on the shared columns.",
            as.numeric(Wm2[, c("gamma", "beta_1", "beta_2")]),

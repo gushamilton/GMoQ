@@ -56,7 +56,8 @@ W <- make_weights_normal_mixture(
   taus, q_tau,
   p1 = meta$p1, mu1 = meta$mu1, sd1 = meta$sd1,
   mu2 = meta$mu2, sd2 = meta$sd2,
-  include_membership = TRUE
+  include_membership = TRUE,
+  density = "model"
 )
 
 cat("Running Stage 2 (SE Mode: diagonal)...\n")

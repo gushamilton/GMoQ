@@ -11,24 +11,43 @@ fhat <- f_model * (1 + 0.8 * exp(-q^2))
 mix <- function(...) make_weights_normal_mixture(taus, q, P$p1, P$mu1, P$sd1,
                                                  P$mu2, P$sd2, include_membership = TRUE, ...)
 
-test_that("default output is identical to the previous commit", {
+test_that("density = \"model\" output is identical to the previous commit", {
   fx <- test_path("fixtures", "weights_default_5f19557.rds")
   skip_if_not(file.exists(fx), "fixture not recorded")
   old <- readRDS(fx)
   new <- weight_cases_default()
   expect_setequal(names(new), names(old))
   for (nm in names(old)) {
-    expect_identical(new[[nm]], old[[nm]], label = nm)
+    expect_equal(new[[nm]], old[[nm]], tolerance = 1e-12, label = nm)
   }
-  # Explicit density = "model" is the default, attribute-free.
-  expect_identical(mix(density = "model"), old$mix_membership)
+  # density = "model" is attribute-free.
+  expect_equal(mix(density = "model"), old$mix_membership, tolerance = 1e-12)
+})
+
+test_that("the default is hybrid with a membership column and model without (0.6.0)", {
+  expect_identical(mix(stage1_density = fhat), mix(density = "hybrid", stage1_density = fhat))
+  expect_error(mix(), "default whenever W has a membership column")
+  expect_identical(make_weights_normal_mixture(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2),
+                   make_weights_normal_mixture(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2,
+                                               density = "model"))
+  expect_equal(weight_density_mode(
+    make_weights_normal_mixture_vqtl(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2,
+                                     stage1_density = fhat)), "hybrid")
+  expect_error(make_weights_normal_mixture_vqtl(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2),
+               "needs `stage1_density`")
+  expect_error(mix(density = "bogus"), "must be one of")
+  # Generic: hybrid only when a gradient is a membership column.
+  cdf <- function(x, p) pnorm(x, p$mu, p$sd); pdf <- function(x, p) dnorm(x, p$mu, p$sd)
+  Wn <- make_weights_generic(taus, q, cdf, pdf, list(mu = 0, sd = 1),
+                             grad_funcs = list(beta_mu = make_fd_grad("mu", cdf)))
+  expect_equal(weight_density_mode(Wn), "model")
 })
 
 test_that("hybrid gamma column is -dF/dgamma divided by the Stage 1 density", {
   W <- mix(density = "hybrid", stage1_density = fhat)
   dF_dgamma <- P$p1 * (1 - P$p1) * (pnorm(q, P$mu1, P$sd1) - pnorm(q, P$mu2, P$sd2))
   expect_equal(unname(W[, "gamma"]), -dF_dgamma / fhat, tolerance = 1e-14)
-  W0 <- mix()
+  W0 <- mix(density = "model")
   expect_identical(unname(W[, c("beta_1", "beta_2")]), unname(W0[, c("beta_1", "beta_2")]))
   expect_equal(weight_density_mode(W), "hybrid")
   expect_equal(weight_density_mode(W, label = TRUE), "hybrid_stage1_membership_density")
@@ -39,7 +58,8 @@ test_that("hybrid gamma column is -dF/dgamma divided by the Stage 1 density", {
   Wv <- make_weights_normal_mixture_vqtl(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2,
                                          density = "hybrid", stage1_density = fhat)
   expect_equal(unname(Wv[, "gamma"]), -dF_dgamma / fhat, tolerance = 1e-14)
-  Wv0 <- make_weights_normal_mixture_vqtl(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2)
+  Wv0 <- make_weights_normal_mixture_vqtl(taus, q, P$p1, P$mu1, P$sd1, P$mu2, P$sd2,
+                                          density = "model")
   expect_identical(unname(Wv[, -1]), unname(Wv0[, -1]))
 
   # Generic builder with a finite-difference membership gradient.
@@ -61,7 +81,7 @@ test_that("hybrid gamma column is -dF/dgamma divided by the Stage 1 density", {
 })
 
 test_that("identities hold under model and hybrid; stage1 breaks them and warns", {
-  for (W in list(mix(), mix(density = "hybrid", stage1_density = fhat))) {
+  for (W in list(mix(density = "model"), mix(density = "hybrid", stage1_density = fhat))) {
     expect_lt(max(abs(W[, "beta_1"] + W[, "beta_2"] - 1)), 1e-12)
   }
   expect_warning(Ws <- mix(density = "stage1", stage1_density = fhat), "sensitivity")
@@ -127,7 +147,7 @@ test_that("stage1_kde_density reproduces the Stage 1 Silverman KDE", {
 })
 
 test_that("provenance: weight_density_mode and the Stage 2 gate", {
-  W0 <- mix(); Wh <- mix(density = "hybrid", stage1_density = fhat)
+  W0 <- mix(density = "model"); Wh <- mix(density = "hybrid", stage1_density = fhat)
   expect_equal(weight_density_mode(W0), "model")
   expect_equal(weight_density_mode(W0, label = TRUE), "parametric_model_density")
   expect_equal(weight_density_mode(list(W = W0,
@@ -165,7 +185,8 @@ test_that("hybrid removes the gamma attenuation when the fitted density misses t
   }, numeric(1))
 
   p1 <- mean(lower); s <- b * sqrt(2)
-  Wp <- make_weights_normal_mixture(tt, qt, p1, -loc, s, loc, s, include_membership = TRUE)
+  Wp <- make_weights_normal_mixture(tt, qt, p1, -loc, s, loc, s, include_membership = TRUE,
+                                    density = "model")
   Wh <- make_weights_normal_mixture(tt, qt, p1, -loc, s, loc, s, include_membership = TRUE,
                                     density = "hybrid", stage1_density = fh)
   mid <- which.min(abs(tt - 0.5))

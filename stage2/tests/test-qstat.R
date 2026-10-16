@@ -3,6 +3,7 @@
 # ============================================================
 
 library(fungwasStage2)
+if (!requireNamespace("fitdistrplus", quietly = TRUE)) { message("SKIP: fitdistrplus not installed"); quit(status = 0) }
 library(fitdistrplus)  # provides fitdist() used below
 
 set.seed(123)

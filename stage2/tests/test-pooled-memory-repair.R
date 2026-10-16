@@ -15,15 +15,7 @@ this_file <- if (length(file_arg)) sub("^--file=", "", file_arg) else
   "tests/test-pooled-memory-repair.R"
 pkg_root <- normalizePath(file.path(dirname(this_file), ".."))
 
-Rcpp::sourceCpp(file.path(pkg_root, "src", "stage2_se_helper.cpp"))
-Rcpp::sourceCpp(file.path(pkg_root, "src", "models.cpp"))
-source(file.path(pkg_root, "R", "utils.R"))
-source(file.path(pkg_root, "R", "covariance.R"))
-source(file.path(pkg_root, "R", "weight-functions.R"))
-source(file.path(pkg_root, "R", "tail-reference.R"))
-source(file.path(pkg_root, "R", "pooled-covariance.R"))
-source(file.path(pkg_root, "R", "gwas.R"))
-source(file.path(pkg_root, "R", "param_gwas.R"))
+source(file.path(pkg_root, "tests", "load-installed.R"))
 
 assert_close <- function(x, y, tol = 2e-10, label = "value") {
   if (is.null(x) || is.null(y)) stop(label, " is unexpectedly NULL")

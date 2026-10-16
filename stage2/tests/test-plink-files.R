@@ -7,6 +7,7 @@
 # Install if needed
 # install.packages("bigsnpr")
 # Install the G-MoQ Stage 2 package locally:  R CMD INSTALL stage2/
+if (!requireNamespace("bigsnpr", quietly = TRUE)) { message("SKIP: bigsnpr not installed"); quit(status = 0) }
 library(bigsnpr)
 library(fungwasStage2)
 

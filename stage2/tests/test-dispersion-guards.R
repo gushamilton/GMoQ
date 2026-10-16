@@ -496,7 +496,8 @@ ok("on that W the correction would over-subtract by 2*sd: +1.51e-02 -> -2.41e-02
 
 ## the 5-parameter mixture design, which passes a name check via mu_name
 Wmix <- make_weights_normal_mixture_vqtl(TAUS, q_tau = sdY * zt, p1 = 0.5,
-                                         mu1 = -1, sd1 = 1, mu2 = 1, sd2 = 1)
+                                         mu1 = -1, sd1 = 1, mu2 = 1, sd2 = 1,
+                                         density = "model")
 stopifnot(all(c("beta_mu1", "beta_sigma2") %in% colnames(Wmix)))
 stopifnot(errs(check_vqtl_design(Wmix, sd = sdY, mu_name = "beta_mu1")))
 ok("check_vqtl_design refuses the 5-parameter mixture design under mu_name = 'beta_mu1'")

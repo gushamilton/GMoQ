@@ -556,7 +556,9 @@ build_skew_mixture <- function(y, q_tau, taus, seed, f_stage1, density_method) {
       gamma = grad_gamma,
       beta_left = fungwasStage2::make_fd_grad("xi1", cdf),
       beta_right = fungwasStage2::make_fd_grad("xi2", cdf)
-    )
+    ),
+    # dist_pdf above already selects the density; keep the builder on it.
+    density = "model"
   )
   f_model <- as.numeric(pdf(q_tau, p))
   list(W = W, taus = taus, q_tau = q_tau,

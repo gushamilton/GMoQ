@@ -45,6 +45,9 @@ weights <- rep(1, length(resid))
 ```
 
 **Example B: Two-component mixture model (mixtools)**
+
+`mixtools` is not a dependency of the package; install it separately for this example.
+
 ```r
 library(mixtools)
 
@@ -230,7 +233,7 @@ model_scores <- param_gwas_multi_from_file(
 ```
 
 ### Weight Builders
-Functions to generate the `W` matrix ($K \times T$) mapping $T$ quantiles to $K$ parameters.
+Functions to generate the `W` matrix ($T \times K$: one row per quantile, one column per parameter) mapping $T$ quantiles to $K$ parameters.
 
 -   `make_weights_vqtl(taus, q_tau, mu, sd)`
 -   `make_weights_normal_mixture(taus, q_tau, p1, mu1, sd1, ...)`
@@ -242,7 +245,7 @@ The Stage 2 output includes per-SNP parameter estimates and diagnostics. For sco
 
 - **beta_mu:** Estimated effect of the SNP on the mean of the target distribution parameterization.
 - **beta_mu_se:** Standard error of `beta_mu`.
-- **beta_sigma2:** Estimated effect of the SNP on the log-variance (variance parameter) of the target distribution.
+- **beta_sigma2:** Estimated effect of the SNP on the variance $\sigma^2$ of the target distribution, per allele, in squared phenotype units (not the log-variance).
 - **beta_sigma2_se:** Standard error of `beta_sigma2`.
 - **Q:** Heterogeneity (misfit) statistic, computed as a quadratic form of residual quantile slopes, testing whether the SNP affects *any* parameters of the chosen model. Its reference depends on the estimator and covariance source.
 - **Q_pval:** Calibrated lack-of-fit p-value when the selected `q_method` has a supported reference. The default OLS path uses a covariance-aware weighted chi-square mixture; the GLS path uses the Hotelling F reference when covariance degrees of freedom are known. An explicitly naive or unsupported reference omits `Q_pval` rather than silently applying $\chi^2_{T-K}$.

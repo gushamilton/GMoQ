@@ -13,12 +13,7 @@ this_file <- if (length(file_arg)) {
 }
 pkg_root <- normalizePath(file.path(dirname(this_file), ".."))
 
-Rcpp::sourceCpp(file.path(pkg_root, "src", "stage2_se_helper.cpp"))
-source(file.path(pkg_root, "R", "utils.R"))
-source(file.path(pkg_root, "R", "covariance.R"))
-source(file.path(pkg_root, "R", "weight-functions.R"))
-source(file.path(pkg_root, "R", "tail-reference.R"))
-source(file.path(pkg_root, "R", "gwas.R"))
+source(file.path(pkg_root, "tests", "load-installed.R"))
 
 upper_row_major <- function(Sigma) {
   out <- numeric(nrow(Sigma) * (nrow(Sigma) + 1) / 2)

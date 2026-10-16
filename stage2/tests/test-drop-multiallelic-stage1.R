@@ -8,8 +8,7 @@ args <- commandArgs(trailingOnly = FALSE)
 file_arg <- args[grep("^--file=", args)]
 this_file <- sub("^--file=", "", file_arg)
 pkg_root <- normalizePath(file.path(dirname(this_file), ".."))
-source(file.path(pkg_root, "R", "tail-reference.R"))
-source(file.path(pkg_root, "R", "gwas.R"))
+source(file.path(pkg_root, "tests", "load-installed.R"))
 
 stage1_dt <- data.table(
   snp_id = c("rs_dup", "rs_dup", "rs_pos_a", "rs_pos_b", "rs_keep"),

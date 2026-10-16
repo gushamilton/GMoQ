@@ -132,7 +132,9 @@ fit_mix <- param_gwas(
   transform_args = list(
     p1 = p1, mu1 = mu1, sd1 = sd1,
     mu2 = mu2, sd2 = sd2,
-    include_membership = TRUE
+    include_membership = TRUE,
+    # A membership W defaults to density = "hybrid": pass the Stage 1 density.
+    stage1_density = stage1_kde_density(Y, stage1$q_tau)
   ),
   se_mode = "diagonal")
 
@@ -221,7 +223,8 @@ Weight matrices (`W`) define how quantile slopes correspond to parameter changes
      W <- make_weights_normal_mixture(taus, stage1$q_tau,
                                       p1 = 0.5, mu1 = 1, sd1 = 1,
                                       mu2 = 3, sd2 = 1.5,
-                                      include_membership = TRUE)
+                                      include_membership = TRUE,
+                                      stage1_density = stage1_kde_density(Y, stage1$q_tau))
      ```
    * If custom:
 

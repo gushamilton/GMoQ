@@ -30,40 +30,59 @@ param_gwas_from_file(
 )
 }
 \arguments{
-\item{stage1_file}{Path to Stage 1 results (.stage1.tsv.gz).}
+\item{stage1_file}{Path to Stage 1 TSV file (.stage1.tsv.gz)}
 
-\item{W}{Weight matrix (T x K).}
+\item{W}{Weight matrix (T x K)}
 
-\item{se_mode}{Standard error computation mode; see \code{param_gwas}.}
+\item{se_mode}{SE computation mode (see \code{param_gwas})}
 
-\item{cov_file}{Per-SNP covariance file (.cov.gz) for
-\code{cov_source = "jackknife"}. A matching .cov.ids.tsv.gz sidecar is
-validated when present.}
+\item{cov_file}{Path to covariance file (.cov.gz) for tau_cov mode. If a
+sidecar file with suffix .cov.ids.tsv.gz exists, it is used to validate
+row alignment against the Stage 1 file. If .cov.scale.gz is present, the
+covariance payload is read as int8 and dequantized using per-SNP scales.}
 
-\item{cov_source}{Covariance source for \code{se_mode = "tau_cov"}.
-\code{"pooled"} (default) reads \code{Sigma_0} from \code{sigma0_file} and
-forms \code{Sigma_0 / d_resid}; \code{"jackknife"} reads \code{cov_file}.
-The jackknife path remains available explicitly.}
+\item{cov_source}{Which Stage 1 covariance to use. \code{"pooled"}
+(default) reads the trait-level
+\code{Sigma_0} sidecar from \code{sigma0_file} and forms
+\code{Sigma_v = Sigma_0 / d_resid} per SNP, which reproduces an exact
+per-individual HC0 sandwich to a median diagonal ratio of 1.00000 and a
+median cross-tau correlation deviation of 0.0053 on real chr22 data, against
+the jackknife's 0.725-1.307 5-95\\% spread on the variance. The pooled path
+refuses rather than proceeds if the recorded covariate set, tau grid or
+sample count does not match the scan. Set \code{cov_source = "jackknife"}
+explicitly to read the per-SNP delete-one-block covariance from
+\code{cov_file}; that path remains fully supported for analyses where a
+lead locus may violate the pooled working-independence assumption.}
 
-\item{sigma0_file}{Stage 1 pooled covariance sidecar (.sigma0.tsv.gz).
-When omitted for the pooled source, the conventional sibling sidecar is used
-when present.}
+\item{sigma0_file}{Path to the Stage 1 \code{.sigma0.tsv.gz} sidecar, required
+when \code{cov_source = "pooled"}. If omitted, the wrapper looks for a
+sibling sidecar by replacing \code{.stage1.tsv.gz} with
+\code{.sigma0.tsv.gz}; pass this argument explicitly when the sidecar has
+another name. Its \code{.sigma0.meta.json} and the scan's
+\code{.cov.meta.json} must both be present: the second is what the first
+is checked against.}
 
-\item{require_covariates, require_n_samples}{Optional caller assertions for
-the pooled sidecar metadata.}
+\item{require_covariates}{Optional character vector of covariate column names
+the \code{Sigma_0} sidecar must have been built on. Supply it when you know
+what the scan used and want the mismatch caught here rather than trusted.}
 
-\item{rtau_file}{Optional R_tau correlation matrix for \code{plugin_cor}.}
+\item{require_n_samples}{Optional analysed sample count the \code{Sigma_0}
+sidecar must match.}
 
-\item{return_cov}{Whether to return parameter covariance; one of
-\code{"none"}, \code{"upper"}, \code{"full"}, or \code{"mashr"}.}
+\item{rtau_file}{Path to R_tau correlation matrix (.Rtau.tsv) for plugin_cor mode}
 
-\item{param_cov_file}{Optional output file for parameter covariance upper
-triangles.}
+\item{return_cov}{Optional output of parameter covariance derived from Stage 1
+tau covariance. One of \code{"none"} (default), \code{"upper"}, \code{"full"},
+or \code{"mashr"}.}
 
-\item{unsafe_skip_cov_ids}{If TRUE, allow jackknife covariance loading without
-a covariance IDs sidecar.}
+\item{param_cov_file}{Optional output file for parameter covariance upper triangles
+(binary float32, same layout as Stage 1 .cov.gz).}
 
-\item{drop_multiallelic}{Drop duplicated rsIDs or positions before fitting.}
+\item{unsafe_skip_cov_ids}{If TRUE, allow tau_cov to proceed without a
+covariate IDs sidecar (not recommended).}
+
+\item{drop_multiallelic}{If TRUE, drop duplicated rsIDs or positions before
+fitting.}
 
 \item{tau_cov_estimator}{Estimator for tau-covariance mode: \code{"ols"}
 (default) or \code{"gls"}.}
@@ -76,16 +95,28 @@ repair.}
 \item{q_method}{Reference method for the lack-of-fit statistic. An explicitly
 naive or unsupported reference omits \code{Q_pval}.}
 
-\item{cov_meta_file}{Optional Stage 1 covariance metadata path.}
+\item{cov_meta_file}{Path to the Stage 1 \code{.cov.meta.json} sidecar that
+records the jackknife block count. Defaults to the \code{.cov.meta.json}
+next to \code{cov_file}. This is where the degrees of freedom for the
+\code{t} reference come from.}
 
-\item{nu}{Optional explicit degrees of freedom for parameter and GLS Q
-references.}
+\item{nu}{Override for the degrees of freedom, applied to every SNP and
+every parameter. Normally leave this \code{NULL}: the per-SNP law is
+better, and a constant is not defensible at \code{n_blocks >= 500}.}
 
-\item{unknown_nu}{Action when covariance degrees of freedom are unavailable:
-omit p-values (default), use an explicitly labelled normal or chi-square limit,
-or error.}
+\item{unknown_nu}{What to do when \code{nu} cannot be determined:
+\code{"omit"} (default) emits no \code{<param>_p} columns and warns,
+\code{"normal"} emits normal-reference p-values and warns, \code{"error"}
+stops. Whatever happens, the returned table carries \code{ref_dist} and
+\code{ref_df_source} columns, and a \code{<param>_df} column per fitted
+parameter, so a reader of the results can tell exactly which reference
+distribution produced each p-value.}
 
-\item{df_coef}{Optional override for the effective-df coefficient.}
+\item{df_coef}{Optional override for the Satterthwaite coefficient \code{c}:
+one number, or a vector named by parameter. The shipped values (0.88 for a
+location-type contrast, 2.62 for a scale-type one) were calibrated for
+\code{W = [1, q_tau - mean(q_tau)]}; a very different \code{W} needs its
+own.}
 
 \item{require_density_mode}{Optional provenance gate: \code{"model"},
 \code{"hybrid"} or \code{"stage1"} (or the matching
@@ -94,10 +125,9 @@ or error.}
 does not check.}
 }
 \value{
-A data.table with SNP identifiers, parameter estimates, standard errors,
-supported p-values, reference provenance and covariance-source metadata.
+A data.table with SNP info and parameter estimates
 }
 \description{
-Reads Stage 1 quantile GWAS and covariance files and maps tau-level effects to
-the supplied parametric design matrix.
+Convenience wrapper for \code{param_gwas()} that reads Stage 1 output files
+directly, including covariance data for \code{se_mode = "tau_cov"}.
 }

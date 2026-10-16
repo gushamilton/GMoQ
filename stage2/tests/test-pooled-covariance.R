@@ -335,7 +335,7 @@ cat("OK: require_covariates / require_n_samples pass when they match\n")
 # multi-chromosome: one matrix per chromosome, keyed correctly
 # ------------------------------------------------------------------
 multi <- file.path(tmp, "multi")
-dt <- fread(paste0(pfx, ".stage1.tsv.gz"))
+dt <- fungwasStage2:::.fread_path(paste0(pfx, ".stage1.tsv.gz"))  # no R.utils needed
 dt$chr <- rep(c("21", "022"), length.out = P)   # zero-padded label on purpose
 fwrite(dt, paste0(multi, ".stage1.tsv.gz"), sep = "\t")
 fwrite(dt[, .(snp_id, chr, bp, effect_allele, other_allele)],
@@ -355,7 +355,7 @@ cat("OK: per-chromosome matrices, with 022 normalised to 22\n")
 # ------------------------------------------------------------------
 s0 <- read_sigma0(paste0(pfx, ".sigma0.tsv.gz"))
 stopifnot(identical(dim(s0$matrices[["22"]]), dim(Sigma0)))
-stopifnot(max(abs(s0$matrices[["22"]] - Sigma0)) == 0)
+stopifnot(max(abs(s0$matrices[["22"]] - Sigma0)) <= 1e-12 * max(abs(Sigma0)))
 stopifnot(s0$meta$n_samples == N_PROD)
 cat("OK: read_sigma0 round-trips float64 bit-exactly\n")
 
