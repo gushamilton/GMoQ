@@ -8,8 +8,8 @@
 #
 # Two things this file exists to enforce:
 #
-#   1. THE LIBRARY PATH. ~/.Rprofile on the analysis cluster contains a bare
-#      .libPaths("/user/work/fh6520/r_packages"), which REPLACES the search
+#   1. THE LIBRARY PATH. A ~/.Rprofile on a shared cluster can contain a bare
+#      .libPaths("/some/shared/r_packages"), which REPLACES the search
 #      path rather than prepending to it, so R_LIBS_USER is silently ignored
 #      and a stale fungwasStage2 gets loaded instead of the one under test.
 #      --vanilla skips the profile; this file then sets the path explicitly

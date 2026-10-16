@@ -1,9 +1,6 @@
 # Documentation index
 
-Thirty-odd files live here and they are not all for the same reader. Start in
-the right column.
-
-## If you are going to RUN G-MoQ
+## If you are going to run G-MoQ
 
 Read these four, in order:
 
@@ -14,41 +11,35 @@ Read these four, in order:
 | [ALLELE_CONVENTION.md](ALLELE_CONVENTION.md) | Which allele the effect is counted against. Get this wrong and every sign flips. |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | What the package does not do well, stated plainly. |
 
+Then run [examples/1kg_chr22/](examples/1kg_chr22/README.md) to check your install end to end.
+
 ## If you hit a specific question
 
 | Question | File |
 |---|---|
 | Which covariance source, and when does it matter? | [FINDINGS_covsource_default.md](FINDINGS_covsource_default.md) |
 | Why is the estimator OLS and not GLS? | [OLS_VS_GLS.md](OLS_VS_GLS.md), [WHY_GLS_DEGRADES.md](WHY_GLS_DEGRADES.md) |
-| How should I handle LOCO / REGENIE predictions? | [LOCO_AS_COVARIATE.md](LOCO_AS_COVARIATE.md), [LOCO_SCALE.md](LOCO_SCALE.md), [LOCO_MIXTURE_HAZARD.md](LOCO_MIXTURE_HAZARD.md), [TWO_PASS_LOCO.md](TWO_PASS_LOCO.md) |
-| My phenotype is lumpy / has a point mass | [BP2_lumpy_phenotypes.md](BP2_lumpy_phenotypes.md) |
-| I found a variance effect -- is it real? | [MEAN_VARIANCE_ARTEFACT.md](MEAN_VARIANCE_ARTEFACT.md), [DISPERSION_SKEW_CORRECTION.md](DISPERSION_SKEW_CORRECTION.md) |
-| How does this behave as N grows? | [N_SCALING.md](N_SCALING.md), [EFFICIENCY_BOUND.md](EFFICIENCY_BOUND.md) |
-| Related samples? | [RELATEDNESS.md](RELATEDNESS.md) |
+| How should I handle LOCO / REGENIE predictions? | [LOCO_AS_COVARIATE.md](LOCO_AS_COVARIATE.md), [LOCO_SCALE.md](LOCO_SCALE.md), [LOCO_MIXTURE_HAZARD.md](LOCO_MIXTURE_HAZARD.md) |
+| Which density divides a mixture weight column? | [MIXTURE_WEIGHT_DENSITY.md](MIXTURE_WEIGHT_DENSITY.md) |
+| How do I get SEs for a function of the fitted parameters? | [FUNCTIONAL_GRADIENTS.md](FUNCTIONAL_GRADIENTS.md) |
 | How fast is Stage 1, and which kernel runs? | [STAGE1_FAST_KERNEL.md](STAGE1_FAST_KERNEL.md) |
-| Can I run several phenotypes in one pass? | [MULTI_PHENOTYPE_FUSION.md](MULTI_PHENOTYPE_FUSION.md) (answer: no, it is slower) |
+| Where does the RIF's own uncertainty go? | [DENSITY_RIF_NUISANCE.md](DENSITY_RIF_NUISANCE.md) |
 
-## If you are developing or reviewing the package
+## Archived research notes
 
-| | |
+These are not needed to run the packages. They live at the tag
+[`archive/research-records-20261016`](https://github.com/gushamilton/GMoQ/tree/archive/research-records-20261016/docs),
+together with the simulation campaigns, run records and audit reports they cite.
+
+| Question | File |
 |---|---|
-| [BACKLOG.md](BACKLOG.md) | Open defects and decisions, with status. |
-| [TEST_SUITE.md](TEST_SUITE.md) | What the tiered simulation suite covers. |
-| [SIMULATION_INVENTORY.md](SIMULATION_INVENTORY.md) | Every simulation campaign: what it asked, what it concluded, whether that still holds under the 0.4.0 defaults, and where the archived ones went. Read this before reusing a number from `sim/`. |
-| [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md) | Every G-MoQ-vs-REGENIE number, and what a fair comparator is. |
-| [POWER_AND_CONSERVATISM.md](POWER_AND_CONSERVATISM.md) | What the LOCO change bought; null calibration at 5e-8. |
-| [EMPIRICAL_W.md](EMPIRICAL_W.md) | Where the shipped weight matrices come from. |
-
-## Audit trail -- point-in-time records, not current guidance
-
-These say what was true on a date. They are kept for provenance and are **not**
-maintained against the current code: [AUDIT_2026-09-16.md](AUDIT_2026-09-16.md),
-[VALIDATION_2026-09-15.md](VALIDATION_2026-09-15.md),
-[VERIFICATION_v0.3.0.md](VERIFICATION_v0.3.0.md),
-[CHR22_VALIDATION.md](CHR22_VALIDATION.md),
-[FINDINGS_pooled_dispersion.md](FINDINGS_pooled_dispersion.md) (section 8 item 1
-is withdrawn; see FINDINGS_covsource_default.md),
-[PAPER_FIGURES_AND_TABLES.md](PAPER_FIGURES_AND_TABLES.md).
-
-When one of these disagrees with the README or with the four "going to run it"
-documents above, the README wins.
+| My phenotype is lumpy / has a point mass | [BP2_lumpy_phenotypes.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/BP2_lumpy_phenotypes.md) |
+| I found a variance effect -- is it real? | [MEAN_VARIANCE_ARTEFACT.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/MEAN_VARIANCE_ARTEFACT.md), [DISPERSION_SKEW_CORRECTION.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/DISPERSION_SKEW_CORRECTION.md) |
+| How does this behave as N grows? | [N_SCALING.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/N_SCALING.md), [EFFICIENCY_BOUND.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/EFFICIENCY_BOUND.md) |
+| Related samples? | [RELATEDNESS.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/RELATEDNESS.md) |
+| Two-pass LOCO? | [TWO_PASS_LOCO.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/TWO_PASS_LOCO.md) |
+| Can I run several phenotypes in one pass? | [MULTI_PHENOTYPE_FUSION.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/MULTI_PHENOTYPE_FUSION.md) (answer: no, it is slower) |
+| Where do the shipped weight matrices come from? | [EMPIRICAL_W.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/EMPIRICAL_W.md) |
+| Every G-MoQ-vs-REGENIE number | [COMPARATOR_LEDGER.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/COMPARATOR_LEDGER.md), [POWER_AND_CONSERVATISM.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/POWER_AND_CONSERVATISM.md) |
+| Every simulation campaign and what it concluded | [SIMULATION_INVENTORY.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/SIMULATION_INVENTORY.md), [TEST_SUITE.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/TEST_SUITE.md) |
+| Dated audits and validation reports | [AUDIT_2026-09-16.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/AUDIT_2026-09-16.md), [VALIDATION_2026-09-15.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/VALIDATION_2026-09-15.md), [VERIFICATION_v0.3.0.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/VERIFICATION_v0.3.0.md), [CHR22_VALIDATION.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/CHR22_VALIDATION.md), [FINDINGS_pooled_dispersion.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/FINDINGS_pooled_dispersion.md), [BACKLOG.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/BACKLOG.md) |

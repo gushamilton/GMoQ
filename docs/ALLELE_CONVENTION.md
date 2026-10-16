@@ -44,15 +44,11 @@ across datasets; the check below concerns the same chr22 data.
 The earlier `x[ea != ra, mb := -mb]` harmonisation line is a no-op for these
 results. Omitting it does **not** produce a correlation of -0.993.
 
-The saved files used were:
-
-- `/user/work/fh6520/tmp_locotest/log_bmi_regression.stage1.tsv.gz`
-- `/user/work/fh6520/fungwas_paper/results/paper/regenie_step2/log_bmi/log_bmi_additive_chr22_log_bmi.regenie`
-
-Reproduce using `scripts/validation/check_allele_alignment.py --stage1 ...
---regenie ... --out allele_alignment.json`. This check was run on
-`bp1-compute001`, Slurm job 18964919; BluePebble execution belongs on compute
-nodes. The script reports aggregates and rejects duplicate variant IDs.
+The comparison used a chr22 log-BMI Stage 1 scan and the matching REGENIE step 2
+output. It can be reproduced with `scripts/validation/check_allele_alignment.py
+--stage1 ... --regenie ... --out allele_alignment.json` from the tag
+`archive/research-records-20261016`; the script reports aggregates and rejects
+duplicate variant IDs.
 
 This establishes alignment of the saved results, not independent correctness
 of all dosage decoding or unbiasedness of the estimator. The public BGEN fixture

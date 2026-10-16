@@ -54,8 +54,7 @@ The primary workflow is **OLS with pooled covariance** (`cov_source = "pooled"`,
   not. **Use `cov_source = "jackknife"` for rare variants, for component-specific
   parameters, or when mixture separation is below about 4**; it is nominal in
   every regime measured and costs nothing in the estimates. See
-  [FINDINGS_covsource_default.md](docs/FINDINGS_covsource_default.md) and
-  `sim/covsource_mixtureW/`.
+  [FINDINGS_covsource_default.md](docs/FINDINGS_covsource_default.md).
 
 Stage 1 writes the pooled `Sigma_0` sidecar by default and Stage 2 scales it by
 each SNP's residual genotype variation. The per-SNP jackknife remains available
@@ -114,13 +113,17 @@ other-phenotype or whole-paper runs as part of this validation phase.
 |---|---|
 | `stage1/` | the Python/C++ quantile GWAS. Installed on its own. |
 | `stage2/` | the R/C++ projection onto a distributional model. Installed on its own. |
-| `docs/` | see [`docs/README.md`](docs/README.md) for which document you want -- they are not all for the same reader. |
-| `scripts/` | runnable helpers: `perf/` benchmarks, `stage2/` runners, `validation/` end-to-end checks. |
-| `tests/` | the tiered simulation suite (`tier0`-`tier4`), separate from the unit tests in `stage1/tests` and `stage2/tests`. See [`docs/TEST_SUITE.md`](docs/TEST_SUITE.md). |
-| `sim/` | simulation campaigns behind specific findings. Each has a `tables/` of aggregates; the named document in `docs/` is the readable result. [`docs/SIMULATION_INVENTORY.md`](docs/SIMULATION_INVENTORY.md) audits all of them and records which were archived to `archive/sim-campaigns-20260917`. |
-| `experiments/` | dated, immutable records of individual runs. Provenance, not guidance. |
+| `docs/` | user guidance; see [`docs/README.md`](docs/README.md). `docs/examples/1kg_chr22/` is a one-minute end-to-end check. |
+| `scripts/` | `loco_blind_diagnostic.R`, a check on any LOCO predictor before trusting it. |
+| `tests/` | tier 0, the fast cross-package unit suite (`bash tests/run_tier0.sh`), separate from the unit tests in `stage1/tests` and `stage2/tests`. |
 
-Neither `sim*/` nor `experiments/` is needed to use the package.
+The research record behind the method -- simulation campaigns (`sim/`), dated run
+records (`experiments/`), the BluePebble/UK Biobank runners, the tier 1-4 simulation
+suites and the audit and validation reports -- is not needed to use the packages and
+lives at the git tag
+[`archive/research-records-20261016`](https://github.com/gushamilton/GMoQ/tree/archive/research-records-20261016)
+(`git checkout archive/research-records-20261016`). A file named in these docs or in a
+code comment that is not on `main` is there.
 
 ## How It Works
 
@@ -146,7 +149,7 @@ See [Stage 2 Documentation](stage2/README.md) for full details.
 
 We provide a Conda environment that handles Python dependencies and system libraries
 (Armadillo, a C++ compiler and OpenMP). It works on Linux and on macOS, including Apple Silicon.
-Both packages are version 0.6.0; see [stage2/NEWS.md](stage2/NEWS.md).
+Both packages share one version (currently 0.6.1); see [stage2/NEWS.md](stage2/NEWS.md).
 
 ```bash
 # Create and activate the environment
@@ -259,12 +262,6 @@ If you install into a user library, set:
 export R_LIBS_USER=/path/to/your/R/library
 ```
 
-### Example simulation helper
-
-The Stage 1 simulation helper used by the Stage 2 proof script lives in
-`docs/examples/generate_stage1_sim.py`. It writes `.stage1.tsv.gz` and `.cov.gz`
-files compatible with `param_gwas_from_file`.
-
 ## Testing
 
 Both stages ship their own checks. Tests should use the installed package and must not
@@ -278,7 +275,7 @@ cd stage1 && python setup.py build_ext --inplace && cd ..
 PYTHONPATH=stage1 python -m pytest stage1/tests/ -q
 ```
 
-164 tests, ~8s on 8 CPUs.
+164 tests, a few seconds.
 
 **Rebuild the extension after pulling anything that touches `stage1/src/`.**
 A stale `_stage1_cpp` produces a wall of failures that look like broken code but
@@ -288,22 +285,18 @@ layer, and pulling the restructured kernel without rebuilding fails on a missing
 `BlockPlan`. The `build_ext --inplace` line above is not optional after such a
 pull.
 
-### Stage 2 (R proof scripts)
+### Stage 2 (R)
 
-`stage2/tests/` holds standalone R proof scripts; each is run with `Rscript` and exits
-non-zero on failure. `stage2/tests/testthat/` holds testthat unit tests (weight density
-modes), run with `testthat::test_dir("stage2/tests/testthat", package = "fungwasStage2",
-load_package = "installed")` and by `tests/run_tier0.sh`.
+`stage2/tests/test-*.R` are standalone assertion scripts against the installed package;
+each exits non-zero on failure. `stage2/tests/testthat/` holds the testthat suite, which
+`R CMD check` runs.
 
 ```bash
-R CMD INSTALL -l "$R_LIBS_USER" stage2/
-cd stage2/tests
-for t in test-*.R; do Rscript --vanilla "$t" || exit 1; done
+R CMD INSTALL stage2
+for t in stage2/tests/test-*.R; do Rscript --vanilla "$t" || exit 1; done
+Rscript -e 'testthat::test_dir("stage2/tests/testthat", package = "fungwasStage2", load_package = "installed")'
+bash tests/run_tier0.sh     # tier 0: both of the above plus the cross-package unit checks
 ```
-
-Some scripts are large simulation demonstrations or require optional dependencies/data;
-the CI workflow lists the fast assertion-based regression checks separately.
-`test-plink-files.R` requires `GMOQ_PLINK_PREFIX`; `test-qstat.R` needs `fitdistrplus`.
 
 ### End-to-end check
 
@@ -311,13 +304,6 @@ the CI workflow lists the fast assertion-based regression checks separately.
 check: real 1000 Genomes chr22 genotypes, phenotypes simulated under a null, a
 mean shift, a variance effect and a two-component mixture, then Stage 1 and
 Stage 2, then a PASS/FAIL comparison with the truth.
-
-`docs/examples/generate_stage1_sim.py` and `stage2/scripts/simulate_full_pipeline_stage1.py`
-simulate data, run Stage 1, and write Stage 1 outputs that Stage 2 can consume. For a check that
-also exercises the real BGEN path, write a small synthetic BGEN with `bgen.BgenWriter`, run the
-`fungwas-stage1` CLI over it, and feed the resulting `.stage1.tsv.gz` plus the covariance quartet
-(`.cov.gz`, `.cov.scale.gz`, `.cov.ids.tsv.gz`, `.cov.meta.json`) into `param_gwas_from_file()`
-with `se_mode = "tau_cov"`.
 
 **Never run these inside a directory holding, or writing to, individual-level data.** Write all
 run outputs outside this repository.
@@ -493,9 +479,6 @@ res <- param_gwas_from_file(..., W = W, require_density_mode = "hybrid")
 See [docs/MIXTURE_WEIGHT_DENSITY.md](docs/MIXTURE_WEIGHT_DENSITY.md) for when
 to use each mode.
 
-### HPC Submission
-See [SLURM Templates](docs/slurm_templates/) for example submission scripts.
-
 ## Advanced Topics
 
 ### Standard Error Modes
@@ -505,9 +488,9 @@ Stage 2 supports different methods for SE calculation (`param_gwas` argument `se
 -   `diagonal`: Assumes independence between quantiles. Least accurate, not recommended for final results.
 
 ### Proof & Verification
-The repository includes proof scripts demonstrating the statistical correctness of the methods:
--   `stage1/tests/test_jk_equivalence.py`: Proves Stage 1 jackknife SEs match analytic theory.
--   `stage2/tests/test-vQTL.R`: Proves vQTL recovery on simulated data.
+-   `stage1/tests/test_jk_equivalence.py`: Stage 1 jackknife SEs match analytic theory.
+-   `docs/examples/1kg_chr22/`: recovery of known shift, variance and mixture effects, and
+    null calibration, on real genotypes.
 
 ## License
-MIT License
+MIT; see [LICENSE](LICENSE).

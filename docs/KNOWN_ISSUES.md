@@ -20,7 +20,7 @@ established. Full evidence lives in the analysis tree under
 | Is Type-I error correct at conventional thresholds? | **Yes** — 1.085x at p=0.05 | |
 
 Software correctness is separately covered by the test suite (counts as of
-0.6.0): 164 Stage 1 tests, 24 standalone Stage 2 scripts plus the testthat
+0.6.1): 164 Stage 1 tests, 15 standalone Stage 2 scripts plus the testthat
 suite, and tier 0.
 
 ## 2. The one substantive defect: tail calibration
@@ -336,11 +336,11 @@ the margin is expected to be smaller.
 
 **Scope update, 2026-09-15:** the Q and model-selection comparisons below do
 not establish unbiased non-null parameter estimates or calibrated confidence
-intervals. The later [paired density diagnosis](../tests/validity_pilot/evidence/DENSITY_DIAGNOSIS.md)
+intervals. The later [paired density diagnosis](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/tests/validity_pilot/evidence/DENSITY_DIAGNOSIS.md)
 isolated smoothing bias in the Normal variance projection at both N=10,000
 and N=100,000. Cancellation in a single-quantile zero-effect Wald statistic
 does not remove that non-null estimation problem. No density repair has yet
-been validated for production; consult the [experiment register](../experiments/README.md)
+been validated for production; consult the [experiment register](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/experiments/README.md)
 before repeating or extending these investigations.
 
 `stage1/fungwas_stage1/core.py` selects the bandwidth as
@@ -632,7 +632,7 @@ This bites hardest when a long-lived analysis tree keeps its own R library
 (for example a paper repository's `.local/Rlib`) and Stage 1 is later
 regenerated from a newer package: Stage 2 then refuses its own Stage 1 output.
 
-The version is now 0.6.0 for both packages (Stage 1 had been left at 0.1.0 through 0.5.0), matching the tag series; DESCRIPTION had once been left at 0.1.0 while tags reached v0.3.0, so the string was no guide to behaviour at all. Bump it whenever the on-disk formats or the
+Both packages now share one version (Stage 1 had been left at 0.1.0 through 0.5.0), matching the tag series; DESCRIPTION had once been left at 0.1.0 while tags reached v0.3.0, so the string was no guide to behaviour at all. Bump it whenever the on-disk formats or the
 estimator behaviour change, so a stale install is visible without running it.
 
 ## The LOCO workflow can destroy the structure being estimated (2026-09-16)
@@ -644,11 +644,11 @@ subtracting it costs 8-10% in SE and 0.07-0.10 in effect correlation. See
 diagnostic that detects it without knowing membership, and which other traits in
 this project are at risk.
 
-Related: [EFFICIENCY_BOUND.md](EFFICIENCY_BOUND.md) shows the mixture
+Related: [EFFICIENCY_BOUND.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/EFFICIENCY_BOUND.md) shows the mixture
 information cost itself is only ~2% at testosterone's separation, so the LOCO
 offset was the larger term by far.
 
 Both of those measurements use a REGENIE comparator run `--ignore-pred`, with no
-LOCO of its own. [COMPARATOR_LEDGER.md](COMPARATOR_LEDGER.md) rebuilds the
+LOCO of its own. [COMPARATOR_LEDGER.md](https://github.com/gushamilton/GMoQ/blob/archive/research-records-20261016/docs/COMPARATOR_LEDGER.md) rebuilds the
 comparator with a proper within-stratum step 1 and registers every
 G-MoQ-vs-REGENIE estimate in this project, marking which are like-for-like.
