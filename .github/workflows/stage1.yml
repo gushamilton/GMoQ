@@ -7,7 +7,12 @@ on:
 
 jobs:
   stage1-tests:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple Silicon: no AVX2, and Apple clang has no OpenMP.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash -l {0}
@@ -19,8 +24,8 @@ jobs:
         with:
           activate-environment: fungwas-stage1
           environment-file: stage1/environment.yml
+          miniforge-version: latest
           auto-activate-base: false
-          auto-update-conda: true
 
       - name: Build Stage 1 extension
         working-directory: stage1

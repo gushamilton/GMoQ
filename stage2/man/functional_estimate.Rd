@@ -14,10 +14,10 @@ functional_estimate(object, f, theta, cov_theta = NULL, eps = 1e-06)
 \item{theta}{Named (or positional) vector of Stage 2 parameter estimates.}
 
 \item{cov_theta}{Optional covariance matrix of \code{theta}, with rows and
-columns in the order of \code{colnames(object$W)}. When \code{NULL} the
+columns in the order of \code{colnames(object$W)}.  When \code{NULL} the
 returned \code{se} is \code{NA}.}
 
-\item{eps}{Central finite-difference step (default \code{1e-06}).}
+\item{eps}{Central finite-difference step (default \code{1e-6}).}
 }
 \value{
 A list with \code{estimate} (the functional at \code{theta}),

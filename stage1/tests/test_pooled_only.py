@@ -138,7 +138,7 @@ def _rows(prefix):
 
 
 def test_cli_pooled_only_against_full_mode(tmp_path, monkeypatch):
-    fixture = pytest.importorskip("tests.test_bgen_fixture", reason="fixture helpers")
+    import test_bgen_fixture as fixture  # sibling module; pytest puts tests/ on sys.path
     dosages = fixture._known_dosages()
     bgen = tmp_path / "fixture.bgen"
     fixture._write_bgen(bgen, fixture.SAMPLES, dosages)
@@ -196,7 +196,7 @@ def test_cli_pooled_only_against_full_mode(tmp_path, monkeypatch):
 def test_cli_pooled_only_records_the_se_source(tmp_path, monkeypatch):
     import json
 
-    fixture = pytest.importorskip("tests.test_bgen_fixture", reason="fixture helpers")
+    import test_bgen_fixture as fixture  # sibling module; pytest puts tests/ on sys.path
     dosages = fixture._known_dosages()
     bgen = tmp_path / "fixture.bgen"
     fixture._write_bgen(bgen, fixture.SAMPLES, dosages)

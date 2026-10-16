@@ -102,7 +102,8 @@ mix_cdf <- function(x) p1 * pnorm(x, mu1, sd1) + (1 - p1) * pnorm(x, mu2, sd2)
 q_mix <- vapply(taus, function(tt)
   stats::uniroot(function(x) mix_cdf(x) - tt, c(-40, 60),
                  tol = .Machine$double.eps^0.75)$root, numeric(1))
-W_smooth <- make_weights_normal_mixture_vqtl(taus, q_mix, p1, mu1, sd1, mu2, sd2)
+W_smooth <- make_weights_normal_mixture_vqtl(taus, q_mix, p1, mu1, sd1, mu2, sd2,
+                                             density = "model")
 obj_smooth <- list(
   W = W_smooth,
   components = data.frame(component = c("lower", "upper"),

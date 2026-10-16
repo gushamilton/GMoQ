@@ -9,7 +9,7 @@ file_arg <- args[grep("^--file=", args)]
 this_file <- sub("^--file=", "", file_arg)
 pkg_root <- normalizePath(file.path(dirname(this_file), ".."))
 
-Rcpp::sourceCpp(file.path(pkg_root, "src", "models.cpp"))
+source(file.path(pkg_root, "tests", "load-installed.R"))
 
 # Two SNPs, one tau
 beta_stage1 <- matrix(c(0.5, -1.0), nrow = 2, ncol = 1)

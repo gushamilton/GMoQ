@@ -1,7 +1,8 @@
 # Deterministic weight-builder calls shared by test-weight-density.R and by
 # fixtures/make_weights_default_fixture.R, which records their output under the
-# PREVIOUS package commit. The default (density = "model") output of the
-# current package must be identical() to that record.
+# PREVIOUS package commit. The density = "model" output of the current package
+# must match that record. ("model" was the default before 0.6.0; a W with a
+# membership column now defaults to "hybrid", so those cases ask for "model".)
 
 weight_cases_taus <- function() seq(0.02, 0.98, length.out = 45)
 
@@ -30,14 +31,17 @@ weight_cases_default <- function() {
   list(
     mix = make_weights_normal_mixture(taus, q, 0.45, -1.8, 0.6, 1.5, 0.8),
     mix_membership = make_weights_normal_mixture(taus, q, 0.45, -1.8, 0.6, 1.5, 0.8,
-                                                 include_membership = TRUE),
-    mix_vqtl = make_weights_normal_mixture_vqtl(taus, q, 0.45, -1.8, 0.6, 1.5, 0.8),
+                                                 include_membership = TRUE,
+                                                 density = "model"),
+    mix_vqtl = make_weights_normal_mixture_vqtl(taus, q, 0.45, -1.8, 0.6, 1.5, 0.8,
+                                                density = "model"),
     generic_mixture = make_weights_generic(
       taus, q, mix_cdf, mix_pdf, pm,
       grad_funcs = list(
         gamma = function(x, p) grad_p(x, p) * p$p1 * (1 - p$p1),
         beta_left = make_fd_grad("mu1", mix_cdf),
-        beta_right = make_fd_grad("mu2", mix_cdf))),
+        beta_right = make_fd_grad("mu2", mix_cdf)),
+      density = "model"),
     generic_lognormal = make_weights_generic(
       taus, q, ln_cdf, ln_pdf, pl,
       grad_funcs = list(

@@ -318,7 +318,9 @@ param_gwas <- function(
       p1 = transform_args$p1,
       mu1 = transform_args$mu1, sd1 = transform_args$sd1,
       mu2 = transform_args$mu2, sd2 = transform_args$sd2,
-      include_membership = isTRUE(transform_args$include_membership)
+      include_membership = isTRUE(transform_args$include_membership),
+      density = transform_args$density,
+      stage1_density = transform_args$stage1_density
     )
   }
   K <- ncol(W)
@@ -984,7 +986,7 @@ param_gwas_from_file <- function(
   plugin_R <- NULL
   if (se_mode == "plugin_cor" && !is.null(rtau_file)) {
     message("Loading R_tau file: ", rtau_file)
-    rtau_dt <- data.table::fread(rtau_file)
+    rtau_dt <- .fread_path(rtau_file)
     plugin_R <- as.matrix(rtau_dt)
   }
   

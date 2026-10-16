@@ -133,11 +133,13 @@ COV_MODES_NO_PAYLOAD = (COV_MODE_POOLED, COV_MODE_POOLED_ONLY)
 
 
 def get_memory_mb() -> float:
-    """Get current memory usage in MB."""
+    """Get peak memory usage (max RSS) in MB."""
     try:
         import resource
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-    except:
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # ru_maxrss is in bytes on macOS and in kilobytes on Linux.
+        return rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
+    except Exception:
         return 0.0
 
 
@@ -585,6 +587,20 @@ def find_multiallelic_rsids_from_bgi(bgen_path: str, requested_rsids: Optional[S
         conn.close()
 
 
+def find_multiallelic_rsids(bgen_path: str, bfile, requested_rsids: Optional[Set[str]] = None) -> Set[str]:
+    """Return rsIDs with more than one BGEN record.
+
+    Uses the .bgi index when there is one. Without it, counts rsIDs from the BGEN
+    variant headers, which reads every header once but needs no bgenix.
+    """
+    if os.path.exists(f"{bgen_path}.bgi"):
+        return find_multiallelic_rsids_from_bgi(bgen_path, requested_rsids)
+    log_mem("No .bgi index; counting rsIDs from the BGEN variant headers for the multiallelic filter")
+    counts = Counter(r for r in bfile.rsids() if r)
+    dup = {rsid for rsid, n in counts.items() if n > 1}
+    return dup if requested_rsids is None else dup & set(requested_rsids)
+
+
 def query_bgi_records_for_rsids(bgen_path: str, requested_rsids: Set[str]) -> List[tuple]:
     """Return the .bgi records for a set of rsIDs, in BGEN file order, in one index scan.
 
@@ -892,7 +908,7 @@ def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
 
         excluded_rsids = set()
         if not allow_multiallelic_rsids:
-            excluded_rsids = find_multiallelic_rsids_from_bgi(bgen_path, valid_snps)
+            excluded_rsids = find_multiallelic_rsids(bgen_path, bfile, valid_snps)
             if excluded_rsids:
                 valid_snps = valid_snps - excluded_rsids
                 log_mem(
@@ -907,7 +923,7 @@ def get_variants_bgen(bgen_path: str, sample_path: Optional[str],
         # Return the whole file for iteration
         excluded_rsids = set()
         if not allow_multiallelic_rsids:
-            excluded_rsids = find_multiallelic_rsids_from_bgi(bgen_path, None)
+            excluded_rsids = find_multiallelic_rsids(bgen_path, bfile, None)
             if excluded_rsids:
                 log_mem(f"Excluded {len(excluded_rsids)} rsIDs with multiple BGEN records")
         log_mem("No SNP list provided; streaming full BGEN directly.")

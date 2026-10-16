@@ -30,9 +30,9 @@ and a warning is issued, since that is an assumption rather than a default.}
 delete-one-block jackknife standard error. At least 10 distinct blocks are
 needed for a usable SE.}
 
-\item{trim}{Fraction trimmed from each tail of the per-variant ratio
-contributions before summing, guarding against a handful of extreme variants
-dominating the slope. Default 0.01. Set to 0 for the untrimmed estimator.}
+\item{trim}{Fraction trimmed from each tail of the per-variant contributions
+before summing, guarding against a handful of extreme variants dominating the
+slope. Default 0.01. Set to 0 for the untrimmed estimator.}
 }
 \value{
 A list with \code{r_av}, \code{se} (jackknife, or \code{NA}),

@@ -67,7 +67,9 @@ stage2 <- param_gwas(
   transform_args = list(
     p1 = p1, mu1 = mu1, sd1 = sd1,
     mu2 = mu2, sd2 = sd2,
-    include_membership = TRUE
+    include_membership = TRUE,
+    # Membership W defaults to density = "hybrid", which needs the Stage 1 density.
+    stage1_density = stage1_kde_density(Y, stage1$q_tau)
   ),
   se_mode = "plugin_cor"
 )

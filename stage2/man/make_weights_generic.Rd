@@ -12,7 +12,7 @@ make_weights_generic(
   params,
   grad_funcs,
   tiny = 1e-12,
-  density = c("model", "hybrid", "stage1"),
+  density = NULL,
   stage1_density = NULL,
   stage1_columns = "gamma",
   unit_sum = NULL,
@@ -37,8 +37,10 @@ Can be analytic, or constructed with \code{make_fd_grad()}.}
 \item{tiny}{Small positive floor to stabilize divisions (\eqn{f(q_tau)} clamped).}
 
 \item{density}{Which density divides each column (see
-\code{docs/MIXTURE_WEIGHT_DENSITY.md}): \code{"model"} (default,
-unchanged) divides every column by \code{dist_pdf}; \code{"hybrid"}
+\code{docs/MIXTURE_WEIGHT_DENSITY.md}). The default (\code{NULL}) is
+\code{"hybrid"} when a gradient is named in \code{stage1_columns} (a
+membership column) and \code{"model"} otherwise. \code{"model"} divides
+every column by \code{dist_pdf}; \code{"hybrid"}
 divides the columns named in \code{stage1_columns} (the membership
 derivative of a mixture) by the Stage 1 density and every other column by
 \code{dist_pdf}; \code{"stage1"} divides every column by the Stage 1
@@ -65,7 +67,7 @@ allows for finite-difference gradients (\code{\link{make_fd_grad}}).}
 }
 \value{
 A T x K numeric matrix of weights with columns named by parameter.
-Non-default \code{density} adds the attributes described in
+A non-"model" \code{density} adds the attributes described in
 \code{\link{make_weights_normal_mixture}}.
 }
 \description{

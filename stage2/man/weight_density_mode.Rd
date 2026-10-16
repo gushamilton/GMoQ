@@ -19,9 +19,9 @@ A single string.
 \description{
 Reads the density mode recorded by the mixture and generic weight builders
 (\code{density = "model"}, \code{"hybrid"} or \code{"stage1"}). A matrix
-without the attribute was built with the default parametric model density
-(every builder before this option existed, and the default now), so it
-reports \code{"model"}. A weight-object list is also accepted: its
+without the attribute was built with the parametric model density
+(every builder before this option existed, and any W without a membership
+column), so it reports \code{"model"}. A weight-object list is also accepted: its
 \code{W} attribute is used first, then \code{provenance$density_weight_mode}.
 }
 \examples{

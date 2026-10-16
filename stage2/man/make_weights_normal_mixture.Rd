@@ -14,7 +14,7 @@ make_weights_normal_mixture(
   sd2,
   include_membership = FALSE,
   tiny = 1e-12,
-  density = c("model", "hybrid", "stage1"),
+  density = NULL,
   stage1_density = NULL,
   identity_tol = 1e-08
 )
@@ -35,8 +35,12 @@ make_weights_normal_mixture(
 \item{tiny}{Small positive floor for stabilizing divisions (default: mixture pdf clamped to \code{tiny}).}
 
 \item{density}{Which density divides each column; see
-\code{docs/MIXTURE_WEIGHT_DENSITY.md}. \code{"model"} (default, unchanged
-behaviour): every column is divided by the fitted mixture pdf.
+\code{docs/MIXTURE_WEIGHT_DENSITY.md}. The default (\code{NULL}) is
+\code{"hybrid"} when \code{include_membership = TRUE} and \code{"model"}
+otherwise (since 0.6.0; before that it was always \code{"model"}).
+\code{"model"}: every column is divided by the fitted mixture pdf. In a
+well-separated mixture this attenuates \code{gamma} (by about 30\\% in the
+1000 Genomes example) and leaks it into the component locations.
 \code{"hybrid"}: the component columns stay the component shares
 \eqn{P(k \mid q_\tau)} (they sum to 1) and the \code{"gamma"} column is
 divided by the Stage 1 density \code{stage1_density} instead, because the
@@ -44,7 +48,8 @@ Stage 1 coefficient carries that density's scaling.
 \code{"stage1"}: every column is divided by \code{stage1_density}; this
 breaks \eqn{W_1 + W_2 = 1} and warns (sensitivity only).}
 
-\item{stage1_density}{Required for \code{"hybrid"} and \code{"stage1"}: the
+\item{stage1_density}{Required for \code{"hybrid"} (so by default whenever
+\code{include_membership = TRUE}) and \code{"stage1"}: the
 Stage 1 density \eqn{\hat f(q_\tau)} at \code{taus}. A numeric vector,
 a list with \code{fhat} (and optionally \code{taus}, \code{q_tau}, which
 are checked), or the path of a Stage 1 density JSON
@@ -60,11 +65,11 @@ A numeric matrix (\code{T x K}) with column names:
 \item If \code{include_membership = FALSE}: \code{c("beta_1","beta_2")}
 \item Else: \code{c("gamma","beta_1","beta_2")}
 }
-Under a non-default \code{density} the matrix carries attributes
+Unless \code{density = "model"} the matrix carries attributes
 \code{density_mode}, \code{density_weight_mode},
 \code{stage1_density_columns}, \code{stage1_density} and
 \code{model_density}; read them with \code{\link{weight_density_mode}}.
-The default output carries none, so it is identical to earlier versions.
+A \code{"model"} W carries none, so it is identical to earlier versions.
 }
 \description{
 Constructs a weight matrix \eqn{W} that maps RIF tau-slopes \eqn{b(\tau)}
@@ -90,7 +95,8 @@ W <- make_weights_normal_mixture(
   taus, q_tau,
   p1 = 0.5, mu1 = 1.2, sd1 = 0.45,
   mu2 = 3.0, sd2 = 0.7,
-  include_membership = TRUE
+  include_membership = TRUE,
+  stage1_density = stage1_kde_density(y, q_tau)   # default density = "hybrid"
 )
 dim(W); colnames(W)
 

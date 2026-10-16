@@ -9,27 +9,24 @@ functional_grad(object, f, theta = NULL, eps = 1e-06)
 \arguments{
 \item{object}{A weight object: a list with a matrix \code{W} and the
 baseline parameters, or a bare weight matrix when the family can be
-inferred. The supported families and the baseline-parameter list passed to
-\code{f} are described in the details of
-\code{docs/FUNCTIONAL_GRADIENTS.md}:
-
-\itemize{
-  \item Skew-normal mixture: an object with \code{components} (columns
-    \code{component}, \code{weight}, \code{xi}, \code{omega}, \code{alpha})
-    and \eqn{W} columns \code{gamma}, \code{beta_left}, \code{beta_right};
-    \code{f} receives \code{list(weight, xi, omega, alpha)} as length-two
-    vectors.
-  \item Shifted lognormal: an object with \code{params0 = list(shift, meanlog,
-    sdlog)} and columns \code{additive} and/or \code{multiplicative};
-    \code{f} receives the \code{params0} list.
-  \item Log-scale vQTL: an object with the same \code{params0} and columns
-    \code{meanlog}/\code{sigma2} or \code{b1_mu}/\code{g1_sigma2};
-    \code{f} receives the \code{params0} list.
-  \item Normal mean/variance vQTL: \code{params0 = list(mu, sigma2)} and
-    columns \code{beta_mu}, \code{beta_sigma2}; \code{f} receives
-    \code{list(mu, sd, sigma2)}.
+inferred.  The supported families and the baseline-parameter list passed
+to \code{f} are:
+\describe{
+\item{Skew-normal mixture}{an object with \code{components} (columns
+\code{component}, \code{weight}, \code{xi}, \code{omega},
+\code{alpha}) and \eqn{W} columns \code{gamma}, \code{beta_left},
+\code{beta_right}; \code{f} receives \code{list(weight, xi, omega,
+      alpha)} as length-two vectors.}
+\item{Shifted lognormal}{an object with \code{params0 =
+      list(shift, meanlog, sdlog)} and columns \code{additive} and/or
+\code{multiplicative}; \code{f} receives the \code{params0} list.}
+\item{Log-scale vQTL}{an object with the same \code{params0} and columns
+\code{meanlog}/\code{sigma2} or \code{b1_mu}/\code{g1_sigma2};
+\code{f} receives the \code{params0} list.}
+\item{Normal mean/variance vQTL}{\code{params0 = list(mu, sigma2)} and
+columns \code{beta_mu}, \code{beta_sigma2}; \code{f} receives
+\code{list(mu, sd, sigma2)}.}
 }
-
 An object may instead carry \code{param_map}, a function
 \code{function(theta) -> params}, which overrides the built-in families.}
 
@@ -37,11 +34,11 @@ An object may instead carry \code{param_map}, a function
 (for example the distribution mean, variance, or a tail probability).}
 
 \item{theta}{Optional named vector of Stage 2 parameters at which to take
-the gradient. Defaults to all zeros, that is the fitted baseline. Names
-must match \code{colnames(object$W)}; an unnamed vector is used in the
-W column order.}
+the gradient.  Defaults to all zeros, i.e. the fitted baseline.  Names
+must match \code{colnames(object$W)}; an unnamed vector is used in the W
+column order.}
 
-\item{eps}{Central finite-difference step (default \code{1e-06}).}
+\item{eps}{Central finite-difference step (default \code{1e-6}).}
 }
 \value{
 A named numeric vector, names \code{colnames(object$W)}, giving
@@ -51,7 +48,7 @@ Stage 2 parameters.
 \description{
 Computes the gradient of a smooth functional \eqn{f} of a fitted baseline
 distribution with respect to the Stage 2 parameters \eqn{\theta}, the
-columns of the weight matrix \eqn{W}. The gradient is taken by central
+columns of the weight matrix \eqn{W}.  The gradient is taken by central
 finite differences on the parametric family itself, never by averaging the
 \eqn{\tau} grid; see \code{docs/FUNCTIONAL_GRADIENTS.md} for why that
 distinction matters and for the parameter semantics of each weight family.

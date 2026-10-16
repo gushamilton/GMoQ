@@ -13,7 +13,7 @@ make_weights_normal_mixture_vqtl(
   mu2,
   sd2,
   tiny = 1e-12,
-  density = c("model", "hybrid", "stage1"),
+  density = NULL,
   stage1_density = NULL,
   identity_tol = 1e-08
 )
@@ -32,7 +32,9 @@ make_weights_normal_mixture_vqtl(
 \item{tiny}{Small positive floor to stabilize divisions (mixture pdf clamped to at least \code{tiny}).}
 
 \item{density, stage1_density, identity_tol}{As in
-\code{\link{make_weights_normal_mixture}}. Under \code{"hybrid"} only the
+\code{\link{make_weights_normal_mixture}}. This W always has a membership
+column, so the default is \code{"hybrid"} and \code{stage1_density} is
+required unless \code{density = "model"}. Under \code{"hybrid"} only the
 \code{gamma} column is divided by the Stage 1 density; the mean and sd
 columns (component share times a location or scale score) keep the model
 pdf, so \code{beta_mu1 + beta_mu2 = 1} still holds.}
@@ -40,7 +42,7 @@ pdf, so \code{beta_mu1 + beta_mu2 = 1} still holds.}
 \value{
 A T x 5 numeric matrix \code{W} with columns:
 \code{c("gamma","beta_mu1","beta_mu2","beta_sigma1","beta_sigma2")}.
-Non-default \code{density} adds the attributes described in
+A non-"model" \code{density} adds the attributes described in
 \code{\link{make_weights_normal_mixture}}.
 }
 \description{
@@ -81,7 +83,8 @@ q_tau <- as.numeric(quantile(y, taus, type = 8))
 W <- make_weights_normal_mixture_vqtl(
   taus, q_tau,
   p1 = 0.5, mu1 = 1.2, sd1 = 0.6,
-  mu2 = 3.0, sd2 = 0.9
+  mu2 = 3.0, sd2 = 0.9,
+  stage1_density = stage1_kde_density(y, q_tau)
 )
 head(W)
 }

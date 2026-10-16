@@ -5,10 +5,12 @@ dependencies:
   - python=3.10
   - numpy>=1.24
   - scipy
-  - bgen-reader>=4.0
+  - bgen-reader>=4.0   # tests only: an independent BGEN decoder to check ours against
   - pybind11>=2.11
   - armadillo
+  - cxx-compiler      # a C++ compiler with OpenMP support (Apple clang has none)
+  - llvm-openmp
   - pytest
   - pip
   - pip:
-      - bgen==1.9.7
+      - bgen==1.9.7     # the BGEN reader Stage 1 uses

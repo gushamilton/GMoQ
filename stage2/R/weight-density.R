@@ -7,19 +7,21 @@
 # the coefficient carries fhat's scaling.  Three choices are offered:
 #
 #   "model"   every column divided by the fitted parametric density (the
-#             historical behaviour and the default).  Component-share columns
+#             historical behaviour; the default when W has no membership
+#             column).  Component-share columns
 #             are P(k | q) and sum to 1; the additive column of a shifted
 #             family is exactly 1.
 #   "hybrid"  location (component-share) columns as in "model"; the membership
 #             column(s) (-dF/dgamma, a CDF-level quantity) divided by the
 #             Stage 1 density fhat -- the density the RIF actually used.  The
-#             identities of "model" still hold.
+#             identities of "model" still hold.  The default (since 0.6.0)
+#             whenever W has a membership column.
 #   "stage1"  every column divided by fhat.  Breaks both identities; retained
 #             as a sensitivity analysis only, and warns.
 #
 # See docs/MIXTURE_WEIGHT_DENSITY.md.  The chosen mode is recorded as
-# attributes on the returned matrix (only when it is not the default, so the
-# default output is unchanged); weight_density_mode() reads it back and the
+# attributes on the returned matrix (only when it is not "model", so a
+# membership-free W is unchanged); weight_density_mode() reads it back and the
 # Stage 2 file wrappers can refuse a mismatch via `require_density_mode`.
 # ===========================================================================
 
@@ -35,6 +37,17 @@ WEIGHT_DENSITY_LABELS <- c(
   hybrid = "hybrid_stage1_membership_density",
   stage1 = "stage1_rif_density"
 )
+
+## Resolve a builder's `density` argument. NULL (the default) means "hybrid"
+## when W has a membership column and "model" otherwise.
+.resolve_density_mode <- function(density, has_membership) {
+  if (is.null(density)) return(if (has_membership) "hybrid" else "model")
+  if (!is.character(density) || length(density) != 1L || !(density %in% WEIGHT_DENSITY_MODES)) {
+    stop("`density` must be one of ", paste0('"', WEIGHT_DENSITY_MODES, '"', collapse = ", "),
+         " (or NULL for the default).", call. = FALSE)
+  }
+  density
+}
 
 ## Map a mode or a provenance label onto the canonical mode, or NA.
 .canonical_density_mode <- function(x) {
@@ -134,6 +147,10 @@ read_stage1_density <- function(path) {
     stop("density = \"", density, "\" needs `stage1_density`: the Stage 1 density ",
          "fhat at q_tau (a numeric vector, a list with `fhat`, or the path of a ",
          "Stage 1 density JSON; see stage1_kde_density() and read_stage1_density()).",
+         if (density == "hybrid") paste0(
+           " \"hybrid\" is the default whenever W has a membership column (since 0.6.0): ",
+           "pass stage1_density = stage1_kde_density(y, q_tau) with the phenotype Stage 1 ",
+           "analysed, or density = \"model\" for the previous behaviour.") else "",
          call. = FALSE)
   }
   src <- NULL
@@ -219,9 +236,9 @@ read_stage1_density <- function(path) {
 #'
 #' Reads the density mode recorded by the mixture and generic weight builders
 #' (\code{density = "model"}, \code{"hybrid"} or \code{"stage1"}). A matrix
-#' without the attribute was built with the default parametric model density
-#' (every builder before this option existed, and the default now), so it
-#' reports \code{"model"}. A weight-object list is also accepted: its
+#' without the attribute was built with the parametric model density
+#' (every builder before this option existed, and any W without a membership
+#' column), so it reports \code{"model"}. A weight-object list is also accepted: its
 #' \code{W} attribute is used first, then \code{provenance$density_weight_mode}.
 #'
 #' @param W A weight matrix, or a list with a matrix \code{W}.

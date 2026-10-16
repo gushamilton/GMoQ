@@ -22,15 +22,20 @@
 #' @param include_membership Logical; include a first column \code{"gamma"} if TRUE.
 #' @param tiny Small positive floor for stabilizing divisions (default: mixture pdf clamped to \code{tiny}).
 #' @param density Which density divides each column; see
-#'   \code{docs/MIXTURE_WEIGHT_DENSITY.md}. \code{"model"} (default, unchanged
-#'   behaviour): every column is divided by the fitted mixture pdf.
+#'   \code{docs/MIXTURE_WEIGHT_DENSITY.md}. The default (\code{NULL}) is
+#'   \code{"hybrid"} when \code{include_membership = TRUE} and \code{"model"}
+#'   otherwise (since 0.6.0; before that it was always \code{"model"}).
+#'   \code{"model"}: every column is divided by the fitted mixture pdf. In a
+#'   well-separated mixture this attenuates \code{gamma} (by about 30\% in the
+#'   1000 Genomes example) and leaks it into the component locations.
 #'   \code{"hybrid"}: the component columns stay the component shares
 #'   \eqn{P(k \mid q_\tau)} (they sum to 1) and the \code{"gamma"} column is
 #'   divided by the Stage 1 density \code{stage1_density} instead, because the
 #'   Stage 1 coefficient carries that density's scaling.
 #'   \code{"stage1"}: every column is divided by \code{stage1_density}; this
 #'   breaks \eqn{W_1 + W_2 = 1} and warns (sensitivity only).
-#' @param stage1_density Required for \code{"hybrid"} and \code{"stage1"}: the
+#' @param stage1_density Required for \code{"hybrid"} (so by default whenever
+#'   \code{include_membership = TRUE}) and \code{"stage1"}: the
 #'   Stage 1 density \eqn{\hat f(q_\tau)} at \code{taus}. A numeric vector,
 #'   a list with \code{fhat} (and optionally \code{taus}, \code{q_tau}, which
 #'   are checked), or the path of a Stage 1 density JSON
@@ -44,11 +49,11 @@
 #'     \item If \code{include_membership = FALSE}: \code{c("beta_1","beta_2")}
 #'     \item Else: \code{c("gamma","beta_1","beta_2")}
 #'   }
-#'   Under a non-default \code{density} the matrix carries attributes
+#'   Unless \code{density = "model"} the matrix carries attributes
 #'   \code{density_mode}, \code{density_weight_mode},
 #'   \code{stage1_density_columns}, \code{stage1_density} and
 #'   \code{model_density}; read them with \code{\link{weight_density_mode}}.
-#'   The default output carries none, so it is identical to earlier versions.
+#'   A \code{"model"} W carries none, so it is identical to earlier versions.
 #'
 #' @examples
 #' taus <- seq(0.10, 0.90, by = 0.05)
@@ -58,7 +63,8 @@
 #'   taus, q_tau,
 #'   p1 = 0.5, mu1 = 1.2, sd1 = 0.45,
 #'   mu2 = 3.0, sd2 = 0.7,
-#'   include_membership = TRUE
+#'   include_membership = TRUE,
+#'   stage1_density = stage1_kde_density(y, q_tau)   # default density = "hybrid"
 #' )
 #' dim(W); colnames(W)
 #'
@@ -71,12 +77,12 @@ make_weights_normal_mixture <- function(
   mu2, sd2,
   include_membership = FALSE,
   tiny = 1e-12,
-  density = c("model", "hybrid", "stage1"),
+  density = NULL,
   stage1_density = NULL,
   identity_tol = 1e-8
 ) {
   stopifnot(length(taus) == length(q_tau))
-  density <- match.arg(density)
+  density <- .resolve_density_mode(density, has_membership = isTRUE(include_membership))
   Tt <- length(taus)
 
   F1 <- pnorm(q_tau, mean = mu1, sd = sd1)
@@ -130,8 +136,11 @@ make_weights_normal_mixture <- function(
 #' \deqn{ W_mu(tau) = 1, \quad W_sigma2(tau) = z_tau / (2 * sigma). }
 #'
 #' @param taus Numeric vector of quantile levels (length T).
-#' @param q_tau Numeric vector of baseline quantiles at taus (length T, type=8 recommended).
-#' @param mu Baseline mean of Y.
+#' @param q_tau Numeric vector of baseline quantiles at taus (length T, type=8
+#'   recommended). Only its length is checked: the Normal weights depend on
+#'   \code{taus} and \code{sd} alone. Kept for a common builder interface.
+#' @param mu Baseline mean of Y. Unused, for the same reason; kept for the
+#'   interface.
 #' @param sd Baseline standard deviation of Y.
 #'
 #' @return A T x 2 numeric matrix W with columns:
@@ -206,14 +215,16 @@ make_weights_vqtl <- function(
 #' @param mu2,sd2 Mean and sd of component 2.
 #' @param tiny Small positive floor to stabilize divisions (mixture pdf clamped to at least \code{tiny}).
 #' @param density,stage1_density,identity_tol As in
-#'   \code{\link{make_weights_normal_mixture}}. Under \code{"hybrid"} only the
+#'   \code{\link{make_weights_normal_mixture}}. This W always has a membership
+#'   column, so the default is \code{"hybrid"} and \code{stage1_density} is
+#'   required unless \code{density = "model"}. Under \code{"hybrid"} only the
 #'   \code{gamma} column is divided by the Stage 1 density; the mean and sd
 #'   columns (component share times a location or scale score) keep the model
 #'   pdf, so \code{beta_mu1 + beta_mu2 = 1} still holds.
 #'
 #' @return A T x 5 numeric matrix \code{W} with columns:
 #'   \code{c("gamma","beta_mu1","beta_mu2","beta_sigma1","beta_sigma2")}.
-#'   Non-default \code{density} adds the attributes described in
+#'   A non-"model" \code{density} adds the attributes described in
 #'   \code{\link{make_weights_normal_mixture}}.
 #'
 #' @examples
@@ -224,7 +235,8 @@ make_weights_vqtl <- function(
 #' W <- make_weights_normal_mixture_vqtl(
 #'   taus, q_tau,
 #'   p1 = 0.5, mu1 = 1.2, sd1 = 0.6,
-#'   mu2 = 3.0, sd2 = 0.9
+#'   mu2 = 3.0, sd2 = 0.9,
+#'   stage1_density = stage1_kde_density(y, q_tau)
 #' )
 #' head(W)
 #' @export
@@ -235,12 +247,12 @@ make_weights_normal_mixture_vqtl <- function(
   mu1, sd1,
   mu2, sd2,
   tiny = 1e-12,
-  density = c("model", "hybrid", "stage1"),
+  density = NULL,
   stage1_density = NULL,
   identity_tol = 1e-8
 ) {
   stopifnot(length(taus) == length(q_tau))
-  density <- match.arg(density)
+  density <- .resolve_density_mode(density, has_membership = TRUE)
 
   # Component pdfs and cdfs
   f1 <- dnorm(q_tau, mean = mu1, sd = sd1)
@@ -312,7 +324,9 @@ make_fd_grad <- function(param, dist_cdf, eps = 1e-6) {
 #'
 #' @param taus Numeric vector of quantile levels (length T).
 #' @param q_tau Numeric vector of baseline quantiles at \code{taus} (length T).
-#' @param dist_cdf Function (y, params) -> numeric. CDF of the distribution.
+#' @param dist_cdf Function (y, params) -> numeric. CDF of the distribution. Not
+#'   called by the builder itself (the gradients carry the CDF); kept so the
+#'   family is fully specified and for \code{make_fd_grad()}-style gradients.
 #' @param dist_pdf Function (y, params) -> numeric. PDF of the distribution.
 #' @param params Named list of baseline parameters (e.g., \code{list(mu = 0, sd = 1)}).
 #' @param grad_funcs Named list of gradient functions. Each element is a function
@@ -320,8 +334,10 @@ make_fd_grad <- function(param, dist_cdf, eps = 1e-6) {
 #'   Can be analytic, or constructed with \code{make_fd_grad()}.
 #' @param tiny Small positive floor to stabilize divisions (\eqn{f(q_tau)} clamped).
 #' @param density Which density divides each column (see
-#'   \code{docs/MIXTURE_WEIGHT_DENSITY.md}): \code{"model"} (default,
-#'   unchanged) divides every column by \code{dist_pdf}; \code{"hybrid"}
+#'   \code{docs/MIXTURE_WEIGHT_DENSITY.md}). The default (\code{NULL}) is
+#'   \code{"hybrid"} when a gradient is named in \code{stage1_columns} (a
+#'   membership column) and \code{"model"} otherwise. \code{"model"} divides
+#'   every column by \code{dist_pdf}; \code{"hybrid"}
 #'   divides the columns named in \code{stage1_columns} (the membership
 #'   derivative of a mixture) by the Stage 1 density and every other column by
 #'   \code{dist_pdf}; \code{"stage1"} divides every column by the Stage 1
@@ -343,7 +359,7 @@ make_fd_grad <- function(param, dist_cdf, eps = 1e-6) {
 #'   allows for finite-difference gradients (\code{\link{make_fd_grad}}).
 #'
 #' @return A T x K numeric matrix of weights with columns named by parameter.
-#'   Non-default \code{density} adds the attributes described in
+#'   A non-"model" \code{density} adds the attributes described in
 #'   \code{\link{make_weights_normal_mixture}}.
 #'
 #' @details
@@ -372,14 +388,15 @@ make_weights_generic <- function(
   taus, q_tau, dist_cdf, dist_pdf,
   params, grad_funcs,
   tiny = 1e-12,
-  density = c("model", "hybrid", "stage1"),
+  density = NULL,
   stage1_density = NULL,
   stage1_columns = "gamma",
   unit_sum = NULL,
   identity_tol = 1e-6
 ) {
   stopifnot(length(taus) == length(q_tau))
-  density <- match.arg(density)
+  density <- .resolve_density_mode(
+    density, has_membership = any(names(grad_funcs) %in% stage1_columns))
   Tt <- length(taus)
   f  <- pmax(dist_pdf(q_tau, params), tiny)
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fungwas-stage1"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Fast RIF quantile GWAS with jackknife covariance estimation"
 readme = "README.md"
 license = {text = "MIT"}
@@ -25,5 +25,9 @@ dev = ["pytest", "pytest-cov"]
 [project.scripts]
 fungwas-stage1 = "fungwas_stage1.cli:main"
 
+[tool.setuptools.dynamic]
+version = {attr = "fungwas_stage1.__version__"}
+
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["fungwas_stage1*"]
