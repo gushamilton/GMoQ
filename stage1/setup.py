@@ -44,83 +44,19 @@ def get_armadillo_lib():
             return lib_path
     return None
 
-# Vectorisation flags for the C++ kernel.
+# ISA flags for the C++ kernel. The default is EMPTY: the portable x86-64 SSE2
+# (or arm64) baseline, chosen for portability. The extension is often built once
+# on a shared filesystem and imported on whatever node a job lands on, and a
+# -march=haswell binary SIGILLs on a host without AVX2.
 #
-# The default is EMPTY, i.e. the x86-64 SSE2 baseline, and that is now a
-# deliberate correctness choice rather than a performance one.  Two kernels live
-# in this extension and they want different things:
-#
-#   * The exact kernel (stage1_pybind.cpp) must stay bit-identical to the
-#     historical output that `--exact-kernel` exists to reproduce.  Raising the
-#     baseline lets GCC contract a*b+c into an FMA, which changes float64 results
-#     in the last bits (measured max absolute difference 2.2e-16, max
-#     |delta beta|/SE 4.6e-15).  So its ISA is pinned here.
-#
-#   * The fast kernel (stage1_fast.hpp) needs AVX2 + FMA to be worth anything -
-#     measured 4x on its streaming sweep - so it carries its own ISA: the hot
-#     leaves are compiled twice, once at this baseline and once under
-#     `#pragma GCC target("avx,avx2,fma")`, and dispatched at run time on
-#     __builtin_cpu_supports.  That keeps the binary portable across the mix of
-#     Skylake-SP, Cascade Lake and AMD nodes a BluePebble `short` allocation can
-#     land on, without a -march=native build that could SIGILL on the next one.
-#
-# What raising the baseline is worth FOR THE EXACT KERNEL, measured rather than
-# assumed:
-#
-# An older revision of this comment said raising the ISA "bought nothing", on a
-# microbenchmark of a 500-SNP batch against the then-current kernel.  That measurement no
-# longer holds.  Re-measured end to end on BluePebble (2026-09-16, Xeon Gold 5120, one
-# chr22 testosterone scan = 17,550 variants, N=399,710, T=45, --blocks 1000), building the
-# SAME sources three ways and interleaving the builds in rotating order so that a drift in
-# node load cannot land preferentially on one of them:
-#
-#   kernel seconds, 4 threads (one per physical core), all three builds on one node:
-#     --cov-mode full          SSE2 215.4   AVX2 193.0 (1.12x)   AVX2 -ffp-contract=off 198.5 (1.09x)
-#     --cov-mode pooled-only   SSE2 160.6   AVX2 141.2 (1.14x)   AVX2 -ffp-contract=off 147.9 (1.09x)
-#   wall clock, 4 threads:
-#     --cov-mode full          SSE2 258.9   AVX2 235.2 (1.10x)
-#     --cov-mode pooled-only   SSE2 187.5   AVX2 167.5 (1.12x)
-#   kernel seconds, 8 threads (4 physical cores + SMT siblings), two independent passes:
-#     --cov-mode pooled-only   SSE2 128.2/128.1   AVX2 102.5/105.1 (1.23x)
-#
-# So the gain is real but modest, and it is larger for the pooled-only kernel - which has
-# no block accumulator and is therefore compute-bound rather than L3-bound - than for the
-# block kernel.  GCC 8 still emits mostly SCALAR FMAs (158 of 167) and no zmm registers at
-# all, so the win is the wider ymm loads and the contraction, not vectorised reductions.
-#
-# The old comment's *other* claim was that FMA contraction changes float64 results in the
-# last bits.  That is true of the arithmetic and false of the artefacts: measured on the
-# full chr22 scan above, the AVX2 build's .stage1.tsv.gz, .sigma0.tsv.gz, .cov.ids.tsv.gz
-# and the whole 72,657,000-byte .cov.gz payload (18,164,250 float32 values) are byte-for-byte
-# IDENTICAL to the SSE2 build's once decompressed.  The last-bit float64 differences are
-# some nine orders of magnitude below the %.6g text and float32 binary resolution the
-# outputs are written at, so they cannot survive serialisation.  -ffp-contract=off removes
-# every FMA (objdump: 167 -> 0) while keeping the AVX2 width, and is likewise byte-identical;
-# it is not needed to preserve the outputs, and it gives up about a third of the speedup.
-#
-# The default is nevertheless still EMPTY, i.e. the portable SSE2 baseline, and the reason
-# is now PORTABILITY ALONE rather than results or verification.  Raising the baseline is a
-# build-time choice but the binary outlives the build host: the extension is built once into
-# a package directory on a shared filesystem and then imported by whatever node an
-# allocation lands on.  A -march=haswell binary SIGILLs, with no graceful diagnostic, on any
-# host without AVX2.  Every current BluePebble node has it, but "every current node" is not
-# a property setup.py can check at import time on the machine that will run the code, and a
-# 10-14% saving does not pay for a hard crash on the one node that does not.
-#
-# Turn it on deliberately, per site, when the run hosts are known:
-#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512"  # AVX2+FMA; measured above
-#   FUNGWAS_STAGE1_ARCH="-march=skylake-avx512"                 # Intel-only; GCC 8 emits no zmm
-#   FUNGWAS_STAGE1_ARCH="-march=native"                         # NOT portable, see above
-# Setting the variable to the empty string is an explicit request for the baseline.
-#
-# The fast kernel does not need any of that, because it dispatches its own ISA at
-# run time; the paragraphs above are what the override buys the exact kernel, and
-# the reason the default stays at the portable baseline for both.  Setting the
-# override changes the exact kernel's arithmetic, so a run that must reproduce
-# historical output byte for byte should leave it alone.
-#
-# -ffast-math is deliberately never used.  It is the one flag that WOULD change the
-# artefacts, because it licenses reassociating the reductions rather than contracting them.
+# The fast kernel does not need a flag: its hot loops are compiled twice (baseline
+# and `#pragma GCC target("avx,avx2,fma")`, x86-64 only) and dispatched at run time.
+# FUNGWAS_STAGE1_ARCH raises the baseline for the --exact-kernel path only, for
+# 10-14% (measured; outputs byte-identical at the precision written), e.g.
+#   FUNGWAS_STAGE1_ARCH="-march=haswell -mtune=skylake-avx512" pip install .
+# An empty value is an explicit request for the baseline. -ffast-math is never
+# used: it would reassociate reductions and change the outputs.
+# See docs/STAGE1_FAST_KERNEL.md.
 _DEFAULT_ARCH_FLAGS = ''
 
 

@@ -1,6 +1,6 @@
 Package: fungwasStage2
 Title: Flexible Functional GWAS via RIF Quantile Regression
-Version: 0.6.0
+Version: 0.6.1
 Description: RIF-based quantile GWAS with parametric mapping. Stage 2 of the 
     FungWas pipeline: maps tau-level SNP effects into distributional parameters
     (means, variances, mixture components) with proper standard error estimation.

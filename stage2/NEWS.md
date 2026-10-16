@@ -1,3 +1,17 @@
+# fungwasStage2 0.6.1 (and fungwas-stage1 0.6.1)
+
+* MIT `LICENSE` at the repository root and in `stage1/`.
+* The repository is now the two packages, their tests, CI, user docs and the
+  1000 Genomes example. Simulation campaigns (`sim/`), run records
+  (`experiments/`), the tier 1-4 suites, BluePebble/UK Biobank runners, one-off
+  diagnostics, demonstration scripts, the built pkgdown site and dated audit
+  reports moved to the tag `archive/research-records-20261016`. Links to them
+  from the remaining docs point there. No BluePebble paths remain on `main`.
+* Removed dead code: two C++ files that were never compiled
+  (`stage1/src/stage1_core.cpp`, `stage1_cpp.cpp`), an unreachable branch in
+  the Stage 1 CLI and the unreachable body of `quantile_gwas(covar_mode =
+  "include")`, which still stops (now saying it is not implemented).
+
 # fungwasStage2 0.6.0 (and fungwas-stage1 0.6.0)
 
 Both packages now carry the same version. Stage 1 had been left at 0.1.0.

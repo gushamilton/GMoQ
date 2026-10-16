@@ -1811,7 +1811,7 @@ def main():
                              "inert under 'covariate': a projection is invariant to "
                              "rescaling the column.")
     parser.add_argument('--loco-preds', dest='loco_preds', default=None,
-                        help='REGENIE step1 LOCO predictions (for future use)')
+                        help='REGENIE step 1 LOCO predictions (.loco or a _pred.list); see --loco-mode')
     parser.add_argument('--allow-numpy-fallback', action='store_true',
                         help='Allow the uncompiled NumPy fallback. This can be ~1000x slower and is for debugging only.')
     parser.add_argument('--no-panel-kernel', dest='panel_kernel', action='store_false',
@@ -1965,9 +1965,6 @@ def main():
         # The panel kernel has no multi-phenotype counterpart. Now that it is the
         # default, fall back silently rather than failing a valid --pheno-cols run.
         args.panel_kernel = False
-    if False:
-        raise ValueError("--panel-kernel supports a single phenotype only; "
-                         "drop it or use a single --pheno-col.")
     if args.cov_mode == COV_MODE_POOLED_ONLY and not args.sigma0:
         parser.error(
             "--cov-mode pooled-only needs the Sigma_0 sidecar: it is where "
