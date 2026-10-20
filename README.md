@@ -2,14 +2,14 @@
 
 # G-MoQ: Genomic Method of Quantiles
 
-GWAS on the whole distribution of a phenotype, not just its mean: variance effects (vQTLs),
-mixture membership, and any parametric model you can write as a map from quantiles.
+GWAS on the whole distribution of a continuous phenotype, not just its mean: variance effects (vQTLs),
+GWAS of mixture distributions, the means of the mixture components, and their membership. G-MoQ enables GWAS of any statistics, biological, or evolutionary parametric model you can write in terms of its effects on the quantiles of the phenotype distribution.
 
 ## How it works
 
 Two stages, installed separately:
 
-1. **Stage 1** (Python/C++ package `gmoq`, command `gmoq-stage1`). A quantile GWAS: for every
+1. **Stage 1** (Python/C++ package `gmoq`, command `gmoq-stage1`). An unconditional quantile GWAS: for every
    SNP, the effect on 45 quantiles of the phenotype (unconditional quantile regression via the
    recentered influence function, RIF), plus the covariance of those effects across quantiles.
 2. **Stage 2** (R package `gmoq`). Maps each SNP's 45 quantile effects onto the parameters of a
