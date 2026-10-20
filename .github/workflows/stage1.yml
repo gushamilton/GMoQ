@@ -1,0 +1,48 @@
+name: Stage1
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  stage1-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple Silicon: no AVX2, and Apple clang has no OpenMP.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: gmoq
+          environment-file: stage1/environment.yml
+          miniforge-version: latest
+          auto-activate-base: false
+
+      - name: Build Stage 1 extension
+        working-directory: stage1
+        run: |
+          python setup.py build_ext --inplace
+          pip install -e .
+
+      - name: Verify compiled extension is available
+        working-directory: stage1
+        run: |
+          python - <<'PY'
+          from gmoq import core
+          assert core.HAVE_CPP, "Expected compiled Stage 1 extension to be available in CI"
+          print(core.cpp_ext.__file__)
+          PY
+
+      - name: Run Stage 1 tests
+        working-directory: stage1
+        run: |
+          pytest -q tests/

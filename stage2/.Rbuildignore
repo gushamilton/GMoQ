@@ -1,0 +1,5 @@
+^docs$
+^stage2$
+^tests/out$
+^.*\.Rproj$
+^\.Rproj\.user$

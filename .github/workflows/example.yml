@@ -1,0 +1,53 @@
+name: 1000 Genomes example
+
+# End-to-end check: public 1000 Genomes chr22 genotypes, simulated phenotypes,
+# Stage 1, Stage 2 and the PASS/FAIL recovery and calibration checks.
+# Slow (downloads about 200 MB), so it runs only on request.
+on:
+  workflow_dispatch:
+
+jobs:
+  example:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    env:
+      GMOQ_1KG_DIR: ${{ github.workspace }}/../gmoq_1kg_example
+      THREADS: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: gmoq
+          environment-file: stage1/environment.yml
+          miniforge-version: latest
+          auto-activate-base: false
+
+      - name: Install Stage 1
+        run: pip install ./stage1
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.5.1"
+          use-public-rspm: true
+
+      - name: Install Stage 2
+        run: |
+          Rscript -e 'install.packages(c("Rcpp", "RcppArmadillo", "data.table", "jsonlite"))'
+          R CMD INSTALL stage2
+
+      - name: Install plink2
+        run: conda install -y -c conda-forge -c bioconda plink2
+
+      - name: Download 1000 Genomes chr22
+        run: bash docs/examples/1kg_chr22/00_get_data.sh
+
+      - name: Run the example
+        run: |
+          bash docs/examples/1kg_chr22/run_all.sh | tee example.log
+          grep -q "RECOVERY    PASS" example.log
+          grep -q "CALIBRATION PASS" example.log

@@ -1,0 +1,41 @@
+Package: gmoq
+Title: Distributional GWAS by the Genomic Method of Quantiles
+Version: 0.7.0
+Description: Stage 2 of the Genomic Method of Quantiles (G-MoQ). Maps the
+    per-quantile SNP effects from an unconditional (RIF) quantile GWAS onto the
+    parameters of a distributional model (means, variances, mixture components)
+    by least squares, with standard errors propagated from the Stage 1
+    cross-quantile covariance.
+Authors@R: c(
+    person("Michel", "Nivard", email = "m.g.nivard@bristol.ac.uk", 
+           role = c("aut", "cre")),
+    person("Fergus", "Hamilton", email = "fh6520@bristol.ac.uk", 
+           role = c("aut"))
+    )
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends: R (>= 4.1.0)
+Imports: 
+    stats,
+    utils,
+    Rcpp,
+    data.table
+Suggests: 
+    Matrix,
+    R.utils,
+    bigsnpr,
+    fitdistrplus,
+    ggplot2,
+    jsonlite,
+    knitr,
+    patchwork,
+    rmarkdown,
+    testthat (>= 3.0.0)
+LinkingTo: 
+    Rcpp,
+    RcppArmadillo
+VignetteBuilder: knitr
+URL: https://github.com/gushamilton/GMoQ
+Config/testthat/edition: 3
