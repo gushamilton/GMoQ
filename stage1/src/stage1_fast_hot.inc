@@ -260,18 +260,27 @@ static void GMOQ_FN(pack_chunk)(
     const size_t* __restrict__ cols, const double* __restrict__ gmean, size_t P,
     size_t LD, size_t i0, size_t i1,
     const int32_t* __restrict__ posv,
-    double* __restrict__ tmp, double* __restrict__ Gt
+    double* __restrict__ tmp, double* __restrict__ Gt,
+    const int64_t* __restrict__ rowmap, size_t N_src   // rowmap: sample i -> row of G (or null)
 ) {
     for (size_t p = 0; p < P; p++) {
-        const double* __restrict__ col = G_ptr + cols[p] * N;
         const double gm = gmean[p];
         double* __restrict__ dst = tmp + p;
-        for (size_t i = i0; i < i1; i++) {
-            const double v = col[i];
-            // Mean-centred: a missing dosage is imputed to the mean, so it
-            // contributes exactly zero.  Centring is what keeps the kernel's
-            // cancellation ratio near one (see stage1_fast.hpp, Numerics).
-            dst[(i - i0) * LD] = std::isfinite(v) ? (v - gm) : 0.0;
+        if (rowmap == nullptr) {
+            const double* __restrict__ col = G_ptr + cols[p] * N;
+            for (size_t i = i0; i < i1; i++) {
+                const double v = col[i];
+                // Mean-centred: a missing dosage is imputed to the mean, so it
+                // contributes exactly zero.  Centring is what keeps the kernel's
+                // cancellation ratio near one (see stage1_fast.hpp, Numerics).
+                dst[(i - i0) * LD] = std::isfinite(v) ? (v - gm) : 0.0;
+            }
+        } else {
+            const double* __restrict__ col = G_ptr + cols[p] * N_src;
+            for (size_t i = i0; i < i1; i++) {
+                const double v = col[rowmap[i]];
+                dst[(i - i0) * LD] = std::isfinite(v) ? (v - gm) : 0.0;
+            }
         }
     }
     for (size_t i = i0; i < i1; i++) {

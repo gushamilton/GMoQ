@@ -442,6 +442,8 @@ inline void BlockPlan::set_bins(
         std::memcpy(&RQ2[s * Crow2], &RQ[s * Crow + T], (K + 1) * sizeof(double));
     }
     has_bins = true;
+    // The (RIF | Q | e) sweep operand is not used again once bins are set: free it.
+    std::vector<double>().swap(RQ);
 }
 
 // ---------------------------------------------------------------------------
@@ -524,8 +526,11 @@ inline void run_fast(
     double* cov_ptr,
     double* jk_beta = nullptr,   // (M, T) jackknife beta only, or null
     double* jk_se = nullptr,     // (M, T)
-    double* jk_d = nullptr       // (M,)  sum of block denominators (d_resid)
+    double* jk_d = nullptr,      // (M,)  sum of block denominators (d_resid)
+    const int64_t* rowmap = nullptr,  // sample i -> row of G, when G holds more rows
+    size_t N_src = 0                  // rows of G when rowmap is given
 ) {
+    if (rowmap == nullptr) N_src = N;
     const size_t T = plan.T, K = plan.K;
     const int n_blocks = plan.n_blocks;
     const size_t n_blocks_sz = static_cast<size_t>(n_blocks);
@@ -566,12 +571,19 @@ inline void run_fast(
     // does, so the accept/reject decision and the imputation mean are bit-identical.
     #pragma omp parallel for schedule(static)
     for (int64_t j = 0; j < static_cast<int64_t>(M); j++) {
-        const double* __restrict__ col = G_ptr + static_cast<size_t>(j) * N;
+        const double* __restrict__ col = G_ptr + static_cast<size_t>(j) * N_src;
         size_t n_valid = 0;
         double g_sum = 0.0;
-        for (size_t i = 0; i < N; i++) {
-            const double v = col[i];
-            if (std::isfinite(v)) { g_sum += v; n_valid++; }
+        if (rowmap == nullptr) {
+            for (size_t i = 0; i < N; i++) {
+                const double v = col[i];
+                if (std::isfinite(v)) { g_sum += v; n_valid++; }
+            }
+        } else {
+            for (size_t i = 0; i < N; i++) {
+                const double v = col[rowmap[i]];
+                if (std::isfinite(v)) { g_sum += v; n_valid++; }
+            }
         }
         if (n_valid < 100) continue;
         const double mac = std::min(g_sum, 2.0 * static_cast<double>(n_valid) - g_sum);
@@ -631,11 +643,11 @@ inline void run_fast(
                 if (avx2) {
 #ifdef GMOQ_HAVE_AVX2_CLONE
                     pack_chunk_avx2(G_ptr, N, cols.data(), gmean.data(), P, LD,
-                                    i0, i1, posv, tmp.data(), Gt);
+                                    i0, i1, posv, tmp.data(), Gt, rowmap, N_src);
 #endif
                 } else {
                     pack_chunk_base(G_ptr, N, cols.data(), gmean.data(), P, LD,
-                                    i0, i1, posv, tmp.data(), Gt);
+                                    i0, i1, posv, tmp.data(), Gt, rowmap, N_src);
                 }
             }
         }
@@ -890,13 +902,28 @@ inline py::tuple block_jackknife_fast(
     double min_var,
     int n_threads,
     int panel_width,
-    bool want_raw
+    bool want_raw,
+    py::object rowmap_obj
 ) {
     auto G_buf = G_arr.request();
     if (G_buf.ndim != 2) throw std::runtime_error("G must be 2-D.");
-    const size_t N = static_cast<size_t>(G_buf.shape[0]);
+    const size_t N_src = static_cast<size_t>(G_buf.shape[0]);
     const size_t M = static_cast<size_t>(G_buf.shape[1]);
-    if (N != plan.N) {
+    const size_t N = plan.N;
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> rowmap_arr;
+    const int64_t* rowmap = nullptr;
+    if (!rowmap_obj.is_none()) {
+        rowmap_arr = rowmap_obj.cast<py::array_t<int64_t, py::array::c_style | py::array::forcecast>>();
+        if (rowmap_arr.ndim() != 1 || static_cast<size_t>(rowmap_arr.shape(0)) != N) {
+            throw std::runtime_error("rowmap must have one entry per plan sample.");
+        }
+        rowmap = rowmap_arr.data();
+        for (size_t i = 0; i < N; i++) {
+            if (rowmap[i] < 0 || static_cast<size_t>(rowmap[i]) >= N_src) {
+                throw std::runtime_error("rowmap entry out of range of G's rows.");
+            }
+        }
+    } else if (N_src != N) {
         throw std::runtime_error("G has a different number of rows than the BlockPlan was built for.");
     }
     const size_t T = plan.T;
@@ -921,7 +948,7 @@ inline py::tuple block_jackknife_fast(
         double* dp = d.mutable_data();
         py::gil_scoped_release gil_release;
         run_fast(G_ptr, N, M, plan, min_mac, min_var, n_threads, panel_width,
-                 raw_ptr, nullptr, nullptr, nullptr, bp, sp, dp);
+                 raw_ptr, nullptr, nullptr, nullptr, bp, sp, dp, rowmap, N_src);
     }
     return py::make_tuple(raw_obj, beta, se, d);
 }

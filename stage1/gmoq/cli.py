@@ -1854,9 +1854,20 @@ def sample_match_verdict(match_frac, min_sample_match):
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
                    f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
                    all_betas_list, n_cov_elements, T, sigma0_sd_list=None,
-                   kernel_state=None, pooled_plan_list=None):
-    """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
+                   kernel_state=None, pooled_plan_list=None, rowmap=None):
+    """Run the kernel over one batch and write it out. Returns (compute_s, write_s).
+
+    ``rowmap`` (``--jobs``): ``G_view`` holds every BGEN sample and row
+    ``rowmap[i]`` is this analysis's sample ``i``.  The fast jackknife kernel
+    reads those rows in place; every other path gets them gathered first.
+    """
     jk_list = None
+    fast_jk = (args.cov_mode != COV_MODE_POOLED_ONLY and not use_multi
+               and not args.fused_finalize and args.panel_kernel and not args.exact_kernel
+               and hasattr(_core.cpp_ext, 'stage1_block_jackknife_fast'))
+    if rowmap is not None and not fast_jk:
+        G_view = np.asfortranarray(np.take(G_view, rowmap, axis=0))
+        rowmap = None
     if args.cov_mode == COV_MODE_POOLED_ONLY:
         # No block_ids, no n_blocks, no (n_blocks, panel, 1+T) accumulator: the
         # kernel returns the two things the pooled analysis needs.
@@ -1912,7 +1923,7 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
         if hasattr(_core.cpp_ext, 'stage1_block_jackknife_fast'):
             raw, jk_b, jk_se, jk_d = compute_block_jackknife_panel_fast(
                 G_view, plan, n_threads=args.threads, panel_width=args.panel_width,
-                want_raw=args.cov_mode not in COV_MODES_NO_PAYLOAD,
+                want_raw=args.cov_mode not in COV_MODES_NO_PAYLOAD, rowmap=rowmap,
             )
             stats_list = [raw]
             jk_list = [(jk_b, jk_se, jk_d)]
@@ -2070,7 +2081,163 @@ def compute_chr_pooled_plans(pheno_cols: list[str], y_values_full: dict[str, np.
     return plan_list, Q_chr, q_tau_list
 
 
-def main():
+def _strip_jobs_option(argv: list) -> list:
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a == '--jobs':
+            skip = True
+            continue
+        if a.startswith('--jobs='):
+            continue
+        out.append(a)
+    return out
+
+
+def run_jobs(argv: list, args) -> None:
+    """``--jobs``: decode the BGEN once and feed every batch to several analyses.
+
+    Each line of ``args.jobs`` is one analysis's own options; the command-line
+    options are shared.  One reader decodes each batch for all BGEN samples into
+    a ring of buffers; every job runs the ordinary single-analysis pipeline on
+    those batches (its fast kernel reads its own sample rows in place), so each
+    output is exactly what that job would produce run alone.  A buffer is
+    reused only once every job has released it.
+    """
+    import shlex
+    import threading
+    import queue as _queue
+
+    shared = _strip_jobs_option(argv)
+    with open(args.jobs) as fh:
+        job_lines = [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith('#')]
+    if not job_lines:
+        raise ValueError(f"--jobs file {args.jobs} lists no jobs")
+    for ln in job_lines:
+        toks = shlex.split(ln)
+        for opt in ('--bgen', '--sample', '--snps', '--taus', '--batch-size', '--jobs'):
+            if opt in toks or any(t.startswith(opt + '=') for t in toks):
+                raise ValueError(f"{opt} is shared by all jobs; give it on the command line, "
+                                 f"not in the jobs file (line: {ln!r})")
+    J = len(job_lines)
+    if not args.snps:
+        raise ValueError("--jobs needs --snps (indexed record access)")
+    snp_list = load_snps_list(args.snps)
+    variants, bgen_samples, _handle = get_variants_bgen(
+        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
+        seek_variants=args.seek_variants)
+    reason = native_bgen_decoder_reason(args.bgen, variants)
+    if reason is not None:
+        raise ValueError(f"--jobs needs the native BGEN decoder: {reason}")
+    n_file = len(bgen_samples)
+    per_job_threads = max(1, int(args.threads) // J)
+    log_mem(f"--jobs: {J} analyses share one BGEN pass "
+            f"({per_job_threads} kernel thread(s) each, {args.threads} decode threads)")
+
+    R = 3
+    ring = [np.empty((n_file, args.batch_size), dtype=np.float64, order='F') for _ in range(R)]
+    refs = [0] * R
+    cond = threading.Condition()
+    abort = threading.Event()
+    queues = [_queue.Queue() for _ in range(J)]
+    errors = [None] * J
+    next_slot = [0]
+    reader_alive = threading.Event()
+    reader_alive.set()
+
+    def get_buffer():
+        slot = next_slot[0]
+        with cond:
+            while refs[slot] > 0 and not abort.is_set():
+                cond.wait(0.1)
+        if abort.is_set():
+            raise RuntimeError("a --jobs analysis failed")
+        return ring[slot]
+
+    def make_release(slot):
+        def release():
+            with cond:
+                refs[slot] -= 1
+                cond.notify_all()
+        return release
+
+    def source(j):
+        q = queues[j]
+        done = False
+        try:
+            while True:
+                item = q.get()
+                if item is None:
+                    done = True
+                    return
+                yield item
+        finally:
+            # On early exit (error) keep releasing so the reader never blocks.
+            while not done:
+                item = q.get()
+                if item is None:
+                    break
+                item[4]()
+
+    def run_one(j, line):
+        job_argv = shared + shlex.split(line) + ['--threads', str(per_job_threads)]
+        src = source(j)
+        try:
+            main(job_argv, geno_source=src)
+        except BaseException as exc:
+            errors[j] = exc
+            abort.set()
+            logger.exception(f"--jobs analysis {j + 1} failed: {line}")
+        finally:
+            src.close()
+            # If the generator never started, nothing above drained its queue.
+            while True:
+                try:
+                    item = queues[j].get(timeout=0.05)
+                except _queue.Empty:
+                    if not reader_alive.is_set():
+                        break
+                    continue
+                if item is None:
+                    break
+                item[4]()
+
+    threads = [threading.Thread(target=run_one, args=(j, ln), name=f"job{j + 1}")
+               for j, ln in enumerate(job_lines)]
+    for t in threads:
+        t.start()
+
+    skipped = _SkipCount()
+    try:
+        batches = _decode_batches_native(
+            variants.records, args.bgen, np.arange(n_file), skipped,
+            n_threads=args.threads, batch_size=args.batch_size, get_buffer=get_buffer,
+            coalesce_gap=int(args.bgen_coalesce_gap * (1 << 20)))
+        for batch_info, chrom, k in batches:
+            slot = next_slot[0]
+            with cond:
+                refs[slot] = J
+            release = make_release(slot)
+            for q in queues:
+                q.put((batch_info, chrom, ring[slot], k, release))
+            next_slot[0] = (slot + 1) % R
+    finally:
+        for q in queues:
+            q.put(None)
+        reader_alive.clear()
+        for t in threads:
+            t.join()
+    failed = [(j, e) for j, e in enumerate(errors) if e is not None]
+    if failed:
+        j, e = failed[0]
+        raise RuntimeError(f"{len(failed)} of {J} --jobs analyses failed; first: "
+                           f"line {j + 1}: {e}") from e
+    log_mem(f"--jobs: all {J} analyses finished")
+
+
+def main(argv=None, geno_source=None):
     parser = argparse.ArgumentParser(
         description="G-MoQ Stage 1: Fast RIF quantile GWAS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2080,14 +2247,14 @@ def main():
     # Required arguments
     parser.add_argument('--bgen', required=True,
                         help='Path to BGEN file')
-    parser.add_argument('--pheno', required=True,
+    parser.add_argument('--pheno', required=False,
                         help='Path to phenotype file (space-delimited, with FID IID and phenotype column)')
     parser.add_argument('--pheno-col', dest='pheno_col', required=False,
                         help='Name of the phenotype column to analyze')
     parser.add_argument('--pheno-cols', dest='pheno_cols', default=None,
                         help='Comma-separated phenotype columns to analyze in one pass '
                              '(uses only samples with non-missing values across all phenotypes/covariates)')
-    parser.add_argument('--out', required=True,
+    parser.add_argument('--out', required=False,
                         help='Output prefix (creates {out}.stage1.tsv.gz, {out}.cov.gz)')
     
     # Optional arguments
@@ -2180,6 +2347,14 @@ def main():
                         help='Walk the BGEN record-by-record instead of seeking to .bgi file '
                              'offsets (slower; kept for validation and for BGENs with no index).')
     parser.set_defaults(seek_variants=True)
+    parser.add_argument('--jobs', dest='jobs', default=None,
+                        help='Run several complete analyses in one pass over the BGEN: a text '
+                             'file with one analysis per line, each line holding that '
+                             'analysis\'s own options (e.g. --pheno-col, --keep, --covar, '
+                             '--loco-preds, --out). Options on the command line (--bgen, '
+                             '--sample, --snps, --taus, --threads, ...) are shared by every job. '
+                             'Each record is read and decoded once for all jobs; every job\'s '
+                             'output is identical to running it on its own.')
     parser.add_argument('--bgen-coalesce-gap', dest='bgen_coalesce_gap', type=float, default=1.0,
                         help='Native decoder: read selected BGEN records in sequential windows, '
                              'merging records separated by at most this many MiB (gaps are read '
@@ -2277,7 +2452,19 @@ def main():
                              '(batch_size * n_samples * 8 bytes).')
     parser.set_defaults(pipeline=True)
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if not args.jobs:
+        missing = [o for o, v in (("--pheno", args.pheno), ("--out", args.out)) if not v]
+        if missing:
+            parser.error("the following arguments are required: " + ", ".join(missing))
+    if args.jobs:
+        if geno_source is not None:
+            raise ValueError("--jobs cannot be nested")
+        return run_jobs(sys.argv[1:] if argv is None else list(argv), args)
+    if geno_source is not None:
+        # Batches come from a shared decoder and are processed synchronously, so
+        # the shared buffer can be released as soon as this job has read it.
+        args.pipeline = False
     set_numpy_fallback_allowed(args.allow_numpy_fallback)
     require_cpp_extension("gmoq-stage1 CLI")
     warn_if_no_openmp(args.threads)
@@ -2407,6 +2594,8 @@ def main():
     # field, so each selected variant gets a bounded preamble probe; production 8-bit
     # records still use the native vectorised dosage path after that small check.
     native_reason = None
+    if geno_source is not None:
+        args.bgen_decoder = BGEN_DECODER_BGEN       # this job decodes nothing itself
     if args.bgen_decoder != BGEN_DECODER_BGEN:
         native_reason = native_bgen_decoder_reason(args.bgen, variants)
         if native_reason is not None and args.bgen_decoder == BGEN_DECODER_NATIVE:
@@ -2571,7 +2760,8 @@ def main():
     # Process in batches
     total_snps = 0
     skip_counter = _SkipCount()
-    pipeline = _BatchPipeline(bool(args.pipeline), N_matched, args.batch_size)
+    pipeline = _BatchPipeline(bool(args.pipeline), N_matched,
+                              0 if geno_source is not None else args.batch_size)
     G_batch = pipeline.batch_buffer
     batch_info = []
     
@@ -2652,7 +2842,29 @@ def main():
         
         idx_in_batch = 0
 
-        if use_native_bgen:
+        if geno_source is not None:
+            # Shared decoder (--jobs): every batch holds all BGEN samples; this
+            # job's kernel reads its own rows (bgen_indices) in place.
+            for batch_info, variant_chr, G_all, k, release in geno_source:
+                try:
+                    if loco_predictions is not None and variant_chr != active_chr:
+                        _switch_chromosome(variant_chr)
+                    compute_s, write_s = pipeline.submit(
+                        _process_batch,
+                        G_all[:, :k], RIF_resid_list, Q, block_ids, batch_info,
+                        args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
+                        f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                        sigma0_sd_list, kernel_state, pooled_plan_list,
+                        rowmap=bgen_indices,
+                    )
+                finally:
+                    release()
+                total_compute += compute_s
+                total_write += write_s
+                total_snps += k
+            batch_info = []
+            decoded = ()
+        elif use_native_bgen:
             # Whole batches are decoded in place into the buffer about to be
             # submitted: no per-variant Python on the reader thread, no copy.
             native_batches = _decode_batches_native(

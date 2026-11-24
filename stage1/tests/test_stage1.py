@@ -563,3 +563,80 @@ def test_cpp_jackknife_matches_python_batch():
     np.testing.assert_allclose(d[~np.isnan(d)], rd[~np.isnan(d)], rtol=1e-14)
     raw2, *_ = core.compute_block_jackknife_panel_fast(G, plan, want_raw=False)
     assert raw2 is None
+
+
+def test_block_kernel_rowmap_reads_superset_in_place():
+    rng = np.random.default_rng(31)
+    n_all, m, B = 3000, 7, 25
+    taus = np.linspace(0.1, 0.9, 7)
+    rows = np.sort(rng.choice(n_all, 2200, replace=False))[::-1].copy()   # subset, reversed
+    G_all = rng.binomial(2, 0.3, size=(n_all, m)).astype(float)
+    G_all[rng.random(G_all.shape) < 0.02] = np.nan
+    y = rng.normal(size=len(rows))
+    Q, _ = np.linalg.qr(np.column_stack([np.ones(len(rows)), rng.normal(size=(len(rows), 2))]))
+    bid = rng.integers(0, B, size=len(rows)).astype(np.int32)
+    rif, q, f = core.compute_rif(y, taus)
+    R = rif - Q @ (Q.T @ rif)
+    plan = core.make_block_plan(R, Q, bid, B)
+    plan.set_bins(y, taus, q, f)
+    a = core.compute_block_jackknife_panel_fast(np.asfortranarray(G_all[rows]), plan, want_raw=True)
+    b = core.compute_block_jackknife_panel_fast(G_all, plan, want_raw=True, rowmap=rows)
+    for x, z in zip(a, b):
+        assert np.array_equal(x, z, equal_nan=True)
+
+
+def _write_keep(path, ids):
+    path.write_text("\n".join(f"{s} {s}" for s in ids) + "\n")
+    return str(path)
+
+
+@pytest.mark.parametrize("threads", ["1", "3"])
+def test_jobs_outputs_identical_to_separate_runs(data, monkeypatch, tmp_path, threads):
+    local = _indexed_copy(data, tmp_path)
+    rng = np.random.default_rng(5)
+    samples = [f"S{i:04d}" for i in range(N)]
+    keep_a = _write_keep(tmp_path / "keep_a.txt", [s for s in samples if rng.random() < 0.8])
+    keep_b = _write_keep(tmp_path / "keep_b.txt", [s for s in samples if rng.random() < 0.7])
+    pheno2 = tmp_path / "pheno2.txt"
+    with pheno2.open("w") as fh:
+        fh.write("FID IID y z\n")
+        z = rng.gamma(2.0, size=N)
+        for s, v, w in zip(samples, data["y"], z):
+            fh.write(f"{s} {s} {v:.17g} {'NA' if rng.random() < 0.1 else f'{w:.17g}'}\n")
+    snps = _snps_file(tmp_path)
+    shared = ["--bgen", str(local["bgen"]), "--snps", str(snps), "--taus", TAU_ARG,
+              "--blocks", "20", "--seed", "1", "--batch-size", "2", "--threads", threads]
+    jobs = [
+        f"--pheno {pheno2} --pheno-col y --covar {local['covar']} --keep {keep_a} "
+        f"--loco-preds {local['loco']} --loco-mode covariate --cov-mode pooled --out {tmp_path / 'j1'}",
+        f"--pheno {pheno2} --pheno-col z --covar {local['covar']} --covar-col c1 "
+        f"--keep {keep_b} --cov-mode full --out {tmp_path / 'j2'}",
+        f"--pheno {pheno2} --pheno-col z --cov-mode pooled-only --out {tmp_path / 'j3'}",
+    ]
+    jf = tmp_path / "jobs.txt"
+    jf.write_text("# three analyses\n" + "\n".join(jobs) + "\n")
+    monkeypatch.setattr(sys, "argv", ["gmoq-stage1", *shared, "--jobs", str(jf)])
+    cli.main()
+    import shlex, gzip as _gz, glob, os
+    for j, line in enumerate(jobs, 1):
+        out_sep = tmp_path / f"s{j}"
+        argv = shared + shlex.split(line.replace(f"--out {tmp_path / f'j{j}'}", f"--out {out_sep}"))
+        monkeypatch.setattr(sys, "argv", ["gmoq-stage1", *argv])
+        cli.main()
+        produced = sorted(glob.glob(f"{tmp_path / f'j{j}'}.*"))
+        assert produced
+        for path in produced:
+            suffix = path[len(str(tmp_path / f"j{j}")):]
+            other = f"{out_sep}{suffix}"
+            assert os.path.exists(other), suffix
+            if path.endswith(".gz"):
+                with _gz.open(path, "rb") as a, _gz.open(other, "rb") as b:
+                    assert a.read() == b.read(), suffix
+            elif path.endswith(".json"):
+                import json
+                da, db = json.load(open(path)), json.load(open(other))
+                for d in (da, db):
+                    for key in list(d):
+                        if any(t in key for t in ("time", "date", "path", "out", "command", "host", "seconds", "file")):
+                            d.pop(key)
+                assert da == db, suffix

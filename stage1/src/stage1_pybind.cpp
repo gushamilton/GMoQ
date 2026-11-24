@@ -1700,7 +1700,8 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           "Fast panel kernel + jackknife beta/se/d_resid in C++; raw block stats too if want_raw",
           py::arg("G"), py::arg("plan"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
-          py::arg("n_threads") = 1, py::arg("panel_width") = 0, py::arg("want_raw") = false);
+          py::arg("n_threads") = 1, py::arg("panel_width") = 0, py::arg("want_raw") = false,
+          py::arg("rowmap") = py::none());
 
     m.def("stage1_block_scores_panel_fast", &gmoq_fast::block_scores_fast,
           "Fast panel kernel returning raw (M, n_blocks, 1+T) block statistics",
