@@ -1573,6 +1573,60 @@ def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCoun
         os.close(fd)
 
 
+def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount,
+                           n_threads: int, batch_size: int, get_buffer):
+    """Decode whole batches straight into the pipeline's genotype buffer.
+
+    Yields ``(batch_info, chrom_label, k)`` with the batch's dosages already in
+    ``get_buffer()[:, :k]``, in file order.  Batches never span a chromosome, so
+    a LOCO switch always falls on a batch boundary.  ``get_buffer`` is called
+    once per batch, when the batch is decoded, so it must return the buffer the
+    caller will submit next (the pipeline flips buffers on submit).  Values are
+    exactly those :func:`_decode_variants_native` yields; this just skips the
+    per-variant Python and the column copy.
+    """
+    n_samples, compression, _ = bgen_header_info(bgen_path)
+    sample_idx = np.ascontiguousarray(bgen_indices, dtype=np.int64)
+    offsets = [int(rec[0]) for rec in records]
+    sizes = bgi_record_sizes(bgen_path, offsets)
+    chroms = [normalize_chr_label(rec[1]) for rec in records]
+    batch_size = max(1, int(batch_size))
+    fd = os.open(bgen_path, os.O_RDONLY)
+    try:
+        start = 0
+        n = len(offsets)
+        while start < n:
+            stop = start + 1
+            while stop < n and stop - start < batch_size and chroms[stop] == chroms[start]:
+                stop += 1
+            chunk = offsets[start:stop]
+            out = get_buffer()
+            meta = _core.cpp_ext.bgen_decode_file_block(
+                fd, np.asarray(chunk, dtype=np.int64),
+                np.asarray([sizes[off] for off in chunk], dtype=np.int64),
+                sample_idx, out, compression, n_samples, int(n_threads))
+            keep, batch_info = [], []
+            for j, (status, rsid, chrom, pos, a0, a1, err) in enumerate(meta):
+                if status == _NATIVE_STATUS_NON_BIALLELIC:
+                    skipped.non_biallelic += 1
+                    continue
+                if status != 0:
+                    kind = "unsupported" if status == _NATIVE_STATUS_UNSUPPORTED else "corrupt"
+                    raise ValueError(
+                        f"BGEN record at offset {chunk[j]} is {kind} for the native decoder "
+                        f"({err}); rerun with --bgen-decoder bgen"
+                    )
+                keep.append(j)
+                batch_info.append((rsid, chrom, pos, a0, a1))
+            if len(keep) < len(chunk) and keep:
+                out[:, :len(keep)] = out[:, keep]        # rare: drop non-biallelic columns
+            if keep:
+                yield batch_info, chroms[start], len(keep)
+            start = stop
+    finally:
+        os.close(fd)
+
+
 class _BatchPipeline:
     """Overlap BGEN decoding with the kernel by running batches on a worker thread.
 
@@ -2431,6 +2485,49 @@ def main():
 
     write_cov_payload = args.cov_mode not in COV_MODES_NO_PAYLOAD
 
+    def _switch_chromosome(variant_chr):
+        """Drain the in-flight batch and rebuild RIF/Q (and Sigma_0) for a new LOCO chromosome."""
+        nonlocal total_compute, total_write, pooled_plan_list, Q, q_tau_list, RIF_resid_list
+        nonlocal sigma0_sd_list, sigma0_seconds, active_chr
+        # The RIF/Q the worker reads are about to be replaced, so the
+        # in-flight batch has to finish before they are.
+        compute_s, write_s = pipeline.drain()
+        total_compute += compute_s
+        total_write += write_s
+
+        if args.loco_mode == LOCO_MODE_COVARIATE:
+            log_mem(f"Adding the LOCO prediction for chromosome {variant_chr} "
+                    f"to the residualising basis")
+        else:
+            log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
+        if use_pooled_bin:
+            pooled_plan_list, Q, q_tau_list = compute_chr_pooled_plans(
+                pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                loco_scales, density_method=args.density_method,
+                loco_mode=args.loco_mode, n_threads=args.threads
+            )
+            RIF_resid_list = None
+        else:
+            RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
+                pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                loco_scales, density_method=args.density_method,
+                loco_mode=args.loco_mode
+            )
+        if args.sigma0:
+            t_s0 = time.perf_counter()
+            if use_pooled_bin:
+                for p_idx, plan in enumerate(pooled_plan_list):
+                    sigma0_by_chr[p_idx][variant_chr] = plan.sigma0()
+            else:
+                for p_idx, rif in enumerate(RIF_resid_list):
+                    sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
+            sigma0_sd_list = [
+                np.sqrt(np.diag(sigma0_by_chr[p_idx][variant_chr]))
+                for p_idx in range(len(pheno_cols))
+            ]
+            sigma0_seconds += time.perf_counter() - t_s0
+        active_chr = variant_chr
+
     with ExitStack() as stack:
         f_tsv_list = [stack.enter_context(gzip.open(path, 'wt', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_tsv_list]
         # Under --cov-mode pooled the per-SNP payload is not produced at all, so
@@ -2458,9 +2555,30 @@ def main():
         idx_in_batch = 0
 
         if use_native_bgen:
-            decoded = _decode_variants_native(native_records, args.bgen, bgen_indices,
-                                              skip_counter, n_threads=args.threads,
-                                              block_size=max(args.batch_size, 64))
+            # Whole batches are decoded in place into the buffer about to be
+            # submitted: no per-variant Python on the reader thread, no copy.
+            native_batches = _decode_batches_native(
+                native_records, args.bgen, bgen_indices, skip_counter,
+                n_threads=args.threads, batch_size=args.batch_size,
+                get_buffer=lambda: pipeline.batch_buffer)
+            for batch_info, variant_chr, k in native_batches:
+                if loco_predictions is not None and variant_chr != active_chr:
+                    _switch_chromosome(variant_chr)
+                compute_s, write_s = pipeline.submit(
+                    _process_batch,
+                    pipeline.batch_buffer[:, :k], RIF_resid_list, Q, block_ids, batch_info,
+                    args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
+                    f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                    sigma0_sd_list, kernel_state, pooled_plan_list
+                )
+                total_compute += compute_s
+                total_write += write_s
+                total_snps += k
+                elapsed = time.perf_counter() - t_batches
+                log_mem(f"Processed {total_snps} SNPs ({total_snps/elapsed:.1f} SNPs/s)")
+            batch_info = []
+            G_batch = pipeline.batch_buffer
+            decoded = ()
         else:
             decoded = _decode_variants(variants, args.bgen, bgen_indices, skip_counter)
 
@@ -2481,44 +2599,7 @@ def main():
                     batch_info = []
                     G_batch = pipeline.batch_buffer
 
-                # The RIF/Q the worker reads are about to be replaced, so the
-                # in-flight batch has to finish before they are.
-                compute_s, write_s = pipeline.drain()
-                total_compute += compute_s
-                total_write += write_s
-
-                if args.loco_mode == LOCO_MODE_COVARIATE:
-                    log_mem(f"Adding the LOCO prediction for chromosome {variant_chr} "
-                            f"to the residualising basis")
-                else:
-                    log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
-                if use_pooled_bin:
-                    pooled_plan_list, Q, q_tau_list = compute_chr_pooled_plans(
-                        pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                        loco_scales, density_method=args.density_method,
-                        loco_mode=args.loco_mode, n_threads=args.threads
-                    )
-                    RIF_resid_list = None
-                else:
-                    RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
-                        pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                        loco_scales, density_method=args.density_method,
-                        loco_mode=args.loco_mode
-                    )
-                if args.sigma0:
-                    t_s0 = time.perf_counter()
-                    if use_pooled_bin:
-                        for p_idx, plan in enumerate(pooled_plan_list):
-                            sigma0_by_chr[p_idx][variant_chr] = plan.sigma0()
-                    else:
-                        for p_idx, rif in enumerate(RIF_resid_list):
-                            sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
-                    sigma0_sd_list = [
-                        np.sqrt(np.diag(sigma0_by_chr[p_idx][variant_chr]))
-                        for p_idx in range(len(pheno_cols))
-                    ]
-                    sigma0_seconds += time.perf_counter() - t_s0
-                active_chr = variant_chr
+                _switch_chromosome(variant_chr)
 
             G_batch[:, idx_in_batch] = dosages
             batch_info.append(info)

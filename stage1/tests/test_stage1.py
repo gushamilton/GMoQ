@@ -466,13 +466,21 @@ def test_native_decoder_is_exact_for_hard_calls(data, tmp_path):
         assert np.array_equal(dos, data["G"][:, j])
 
 
-@pytest.mark.parametrize("cov_mode", ["pooled", "pooled-only"])
-def test_cli_native_and_bgen_decoders_agree(data, monkeypatch, tmp_path, cov_mode):
+@pytest.mark.parametrize("cov_mode", ["pooled", "pooled-only", "full"])
+@pytest.mark.parametrize("extra", [[], ["--batch-size", "2"], ["--batch-size", "4", "LOCO"]])
+def test_cli_native_and_bgen_decoders_agree(data, monkeypatch, tmp_path, cov_mode, extra):
     data = _indexed_copy(data, tmp_path)
-    rows_nat = _run(monkeypatch, data, tmp_path / "nat", "--cov-mode", cov_mode,
+    extra = [x for x in extra if x != "LOCO"] + (
+        ["--loco-preds", str(data["loco"]), "--loco-mode", "covariate"] if "LOCO" in extra else [])
+    rows_nat = _run(monkeypatch, data, tmp_path / "nat", "--cov-mode", cov_mode, *extra,
                     "--snps", str(_snps_file(tmp_path)), "--bgen-decoder", "native")
-    rows_bgen = _run(monkeypatch, data, tmp_path / "pkg", "--cov-mode", cov_mode,
+    rows_bgen = _run(monkeypatch, data, tmp_path / "pkg", "--cov-mode", cov_mode, *extra,
                      "--snps", str(_snps_file(tmp_path)), "--bgen-decoder", "bgen")
+    if cov_mode == "full":
+        import gzip as _gz
+        for suffix in (".cov.gz", ".cov.ids.tsv.gz"):
+            with _gz.open(f"{tmp_path / 'nat'}{suffix}", "rb") as a, _gz.open(f"{tmp_path / 'pkg'}{suffix}", "rb") as b:
+                assert a.read() == b.read()
     assert rows_nat == rows_bgen        # hard-call genotypes: identical text output
 
 
