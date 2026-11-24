@@ -390,3 +390,91 @@ def test_pooled_kernels_exact_with_near_constant_column_and_no_intercept():
     scale = np.std(ref_b)
     assert np.max(np.abs(fast_b - ref_b)) < 1e-9 * scale
     assert np.max(np.abs(bin_b - ref_b)) < 1e-9 * scale
+# ---------------------------------------------------------------------------
+# native BGEN decoder
+# ---------------------------------------------------------------------------
+
+def _write_bgen(path, probs_list, bit_depths, compression):
+    from bgen import BgenWriter
+    n = probs_list[0].shape[0]
+    samples = [f"S{i:04d}" for i in range(n)]
+    with BgenWriter(str(path), n_samples=n, samples=samples, compression=compression) as w:
+        for j, (p, b) in enumerate(zip(probs_list, bit_depths)):
+            w.add_variant(varid=f"v{j}", rsid=f"rs{j}", chrom="7", pos=100 * (j + 1),
+                          alleles=["A", "T"], genotypes=p, bit_depth=b)
+    return samples
+
+
+@pytest.mark.parametrize("compression", ["zlib", None])
+def test_native_decoder_matches_bgen_package(tmp_path, compression):
+    if not hasattr(core.cpp_ext, "bgen_decode_block"):
+        pytest.skip("extension built without the native BGEN decoder")
+    rng = np.random.default_rng(7)
+    n = 257
+    bit_depths = [1, 3, 8, 8, 12, 16, 23, 32]
+    probs_list = []
+    for b in bit_depths:
+        p = rng.dirichlet([0.6, 0.8, 1.0], size=n)
+        p[rng.random(n) < 0.05] = np.nan           # missing samples
+        probs_list.append(p)
+    path = tmp_path / "g.bgen"
+    _write_bgen(path, probs_list, bit_depths, compression)
+    _write_bgi(path)
+
+    variants, _, handle = cli.get_variants_bgen(str(path), None, [f"rs{j}" for j in range(len(bit_depths))])
+    assert isinstance(variants, cli.SeekingVariantGenerator)
+    assert cli.native_bgen_decoder_reason(str(path), variants) is None
+
+    idx = rng.permutation(n)[: n - 20]               # subset, out of order
+    ref = {}
+    for v in variants:
+        bits = cli._variant_bit_depth(v, bgen_path=str(path))
+        ref[v.rsid] = (bits, cli.extract_dosage(v, probability_bit_depth=bits)[idx])
+
+    skipped = cli._SkipCount()
+    got = list(cli._decode_variants_native(variants.records, str(path), idx, skipped,
+                                           n_threads=2, block_size=3))
+    assert [g[0][0] for g in got] == sorted(ref, key=lambda r: int(r[2:]))
+    for info, chrom, dos in got:
+        bits, want = ref[info[0]]
+        assert info[1:] == ("7", 100 * (int(info[0][2:]) + 1), "A", "T") and chrom == "7"
+        assert np.array_equal(np.isnan(dos), np.isnan(want))
+        ok = ~np.isnan(want)
+        # bgen returns float32; native is the exact float64 of the stored integers
+        np.testing.assert_allclose(dos[ok], want[ok], rtol=0, atol=1e-6 if bits <= 23 else 2e-6)
+        assert np.all((dos[ok] >= 0) & (dos[ok] <= 2))
+
+
+def _indexed_copy(data, tmp_path):
+    import shutil
+    bgen = tmp_path / "indexed.bgen"
+    shutil.copy(data["bgen"], bgen)
+    _write_bgi(bgen)
+    return dict(data, bgen=bgen)
+
+
+def test_native_decoder_is_exact_for_hard_calls(data, tmp_path):
+    local = _indexed_copy(data, tmp_path)
+    variants, samples, _ = cli.get_variants_bgen(str(local["bgen"]), None, RSIDS)
+    idx = np.arange(len(samples))
+    got = list(cli._decode_variants_native(variants.records, str(local["bgen"]), idx,
+                                           cli._SkipCount(), n_threads=2, block_size=4))
+    assert [g[0][0] for g in got] == RSIDS
+    for j, (_, _, dos) in enumerate(got):
+        assert np.array_equal(dos, data["G"][:, j])
+
+
+@pytest.mark.parametrize("cov_mode", ["pooled", "pooled-only"])
+def test_cli_native_and_bgen_decoders_agree(data, monkeypatch, tmp_path, cov_mode):
+    data = _indexed_copy(data, tmp_path)
+    rows_nat = _run(monkeypatch, data, tmp_path / "nat", "--cov-mode", cov_mode,
+                    "--snps", str(_snps_file(tmp_path)), "--bgen-decoder", "native")
+    rows_bgen = _run(monkeypatch, data, tmp_path / "pkg", "--cov-mode", cov_mode,
+                     "--snps", str(_snps_file(tmp_path)), "--bgen-decoder", "bgen")
+    assert rows_nat == rows_bgen        # hard-call genotypes: identical text output
+
+
+def _snps_file(tmp_path):
+    p = tmp_path / "snps.txt"
+    p.write_text("\n".join(RSIDS + ["rs_multi"]) + "\n")
+    return p

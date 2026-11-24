@@ -1445,6 +1445,109 @@ def _decode_variants(variants, bgen_path, bgen_indices, skipped: _SkipCount):
         yield info, normalize_chr_label(variant.chrom), dosages
 
 
+BGEN_DECODER_AUTO = "auto"
+BGEN_DECODER_NATIVE = "native"
+BGEN_DECODER_BGEN = "bgen"
+BGEN_DECODERS = (BGEN_DECODER_AUTO, BGEN_DECODER_NATIVE, BGEN_DECODER_BGEN)
+
+
+def bgen_header_info(bgen_path: str) -> tuple[int, int, int]:
+    """Return ``(n_samples, compression, layout)`` from a BGEN file header.
+
+    compression: 0 none, 1 zlib, 2 zstd.  layout: 1 or 2.
+    """
+    with open(bgen_path, "rb") as fh:
+        head = fh.read(24)
+        if len(head) < 24:
+            raise ValueError(f"BGEN header is truncated: {bgen_path}")
+        header_len = struct.unpack_from("<I", head, 4)[0]
+        n_samples = struct.unpack_from("<I", head, 12)[0]
+        if header_len < 20:
+            raise ValueError(f"BGEN header block is too short: {bgen_path}")
+        fh.seek(4 + header_len - 4)
+        flags = struct.unpack("<I", fh.read(4))[0]
+    return n_samples, flags & 0x3, (flags >> 2) & 0xF
+
+
+def bgi_record_sizes(bgen_path: str, offsets: List[int]) -> dict:
+    """Map each ``file_start_position`` in ``offsets`` to its ``size_in_bytes`` from the .bgi."""
+    conn = sqlite3.connect(f"{bgen_path}.bgi")
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE TEMP TABLE wanted_offset (pos INTEGER PRIMARY KEY)")
+        cur.executemany("INSERT OR IGNORE INTO wanted_offset (pos) VALUES (?)",
+                        ((int(o),) for o in offsets))
+        rows = cur.execute(
+            "SELECT v.file_start_position, v.size_in_bytes FROM Variant v "
+            "JOIN wanted_offset w ON v.file_start_position = w.pos"
+        ).fetchall()
+    finally:
+        conn.close()
+    sizes = {int(pos): int(size) for pos, size in rows}
+    missing = [o for o in offsets if int(o) not in sizes]
+    if missing:
+        raise ValueError(f"{len(missing)} BGEN records have no size in the .bgi index")
+    return sizes
+
+
+def native_bgen_decoder_reason(bgen_path: str, variants) -> Optional[str]:
+    """Why the native decoder cannot be used for this input, or None if it can."""
+    if not HAVE_CPP or not hasattr(cpp_ext, "bgen_decode_block"):
+        return "the compiled extension has no bgen_decode_block"
+    if not isinstance(variants, SeekingVariantGenerator):
+        return "it needs indexed (.bgi) access to a --snps selection"
+    _, compression, layout = bgen_header_info(bgen_path)
+    if layout != 2:
+        return f"BGEN layout {layout} (only layout 2 is decoded natively)"
+    if compression not in (0, 1):
+        return "zstd compression (only zlib and uncompressed are decoded natively)"
+    return None
+
+
+_NATIVE_STATUS_NON_BIALLELIC = 1
+_NATIVE_STATUS_UNSUPPORTED = 2
+
+
+def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCount,
+                            n_threads: int = 1, block_size: int = 256):
+    """Native counterpart of :func:`_decode_variants`: same tuples, same order.
+
+    Each block of records is read with one ``pread`` per record on this (the
+    reader) thread, then inflated and decoded in parallel in C++ with the GIL
+    released.  Dosages are the exact float64 allele-1 expected count
+    ``(2*v0 + v1) / (2^B - 1)``; the ``bgen`` path returns float32, so values
+    differ from it by up to ~3e-7.  Records the native decoder does not handle
+    (phased, non-diploid) raise rather than being silently dropped.
+    """
+    n_samples, compression, _ = bgen_header_info(bgen_path)
+    sample_idx = np.ascontiguousarray(bgen_indices, dtype=np.int64)
+    offsets = [int(rec[0]) for rec in records]
+    sizes = bgi_record_sizes(bgen_path, offsets)
+    block_size = max(1, int(block_size))
+    out = np.empty((len(sample_idx), block_size), dtype=np.float64, order="F")
+    fd = os.open(bgen_path, os.O_RDONLY)
+    try:
+        for start in range(0, len(offsets), block_size):
+            chunk = offsets[start:start + block_size]
+            raw = [os.pread(fd, sizes[off], off) for off in chunk]
+            meta = cpp_ext.bgen_decode_block(raw, sample_idx, out, compression,
+                                             n_samples, int(n_threads))
+            for j, (status, rsid, chrom, pos, a0, a1, err) in enumerate(meta):
+                if status == _NATIVE_STATUS_NON_BIALLELIC:
+                    skipped.non_biallelic += 1
+                    continue
+                if status != 0:
+                    kind = "unsupported" if status == _NATIVE_STATUS_UNSUPPORTED else "corrupt"
+                    raise ValueError(
+                        f"BGEN record at offset {chunk[j]} is {kind} for the native decoder "
+                        f"({err}); rerun with --bgen-decoder bgen"
+                    )
+                info = (rsid, chrom, pos, a0, a1)
+                yield info, normalize_chr_label(chrom), out[:, j]
+    finally:
+        os.close(fd)
+
+
 class _BatchPipeline:
     """Overlap BGEN decoding with the kernel by running batches on a worker thread.
 
@@ -1898,6 +2001,15 @@ def main():
                         help='Walk the BGEN record-by-record instead of seeking to .bgi file '
                              'offsets (slower; kept for validation and for BGENs with no index).')
     parser.set_defaults(seek_variants=True)
+    parser.add_argument('--bgen-decoder', dest='bgen_decoder', choices=list(BGEN_DECODERS),
+                        default=BGEN_DECODER_AUTO,
+                        help="How BGEN records are decoded. 'native' reads each selected "
+                             "record directly and inflates/decodes blocks of them in "
+                             "parallel in C++ (layout 2, zlib or uncompressed, unphased "
+                             "diploid), giving exact float64 dosages. 'bgen' uses the bgen "
+                             "package one record at a time (float32 dosages, the behaviour "
+                             "of earlier releases). 'auto' (default) uses native whenever "
+                             "the input supports it.")
     parser.add_argument('--allow-multiallelic-rsids', action='store_true',
                         help='Allow rsIDs that map to multiple BGEN records. By default these are excluded using the .bgi index.')
     
@@ -2109,6 +2221,17 @@ def main():
     # bgen does not expose bit depth on its Python variant object.  It is a per-record
     # field, so each selected variant gets a bounded preamble probe; production 8-bit
     # records still use the native vectorised dosage path after that small check.
+    native_reason = None
+    if args.bgen_decoder != BGEN_DECODER_BGEN:
+        native_reason = native_bgen_decoder_reason(args.bgen, variants)
+        if native_reason is not None and args.bgen_decoder == BGEN_DECODER_NATIVE:
+            raise ValueError(f"--bgen-decoder native is unavailable: {native_reason}")
+    use_native_bgen = args.bgen_decoder != BGEN_DECODER_BGEN and native_reason is None
+    if use_native_bgen:
+        log_mem("Decoding BGEN records natively (parallel zlib + exact float64 dosages)")
+    elif args.bgen_decoder == BGEN_DECODER_AUTO:
+        log_mem(f"Decoding BGEN records with the bgen package: {native_reason}")
+    native_records = variants.records if use_native_bgen else None
     variants = iter(variants)
     
     # Match samples
@@ -2301,7 +2424,12 @@ def main():
         
         idx_in_batch = 0
 
-        decoded = _decode_variants(variants, args.bgen, bgen_indices, skip_counter)
+        if use_native_bgen:
+            decoded = _decode_variants_native(native_records, args.bgen, bgen_indices,
+                                              skip_counter, n_threads=args.threads,
+                                              block_size=max(args.batch_size, 64))
+        else:
+            decoded = _decode_variants(variants, args.bgen, bgen_indices, skip_counter)
 
         for info, variant_chr, dosages in decoded:
             if loco_predictions is not None and variant_chr != active_chr:

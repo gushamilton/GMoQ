@@ -18,6 +18,7 @@ namespace py = pybind11;
 
 #include "stage1_fast.hpp"
 #include "stage1_pooled_fast.hpp"
+#include "stage1_bgen_decode.hpp"
 
 namespace {
 
@@ -1596,6 +1597,14 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    m.def("bgen_decode_block", &gmoq_bgen::decode_block,
+          "Decode raw BGEN layout-2 records (list of bytes) into out[:, :len(records)]:\n"
+          "exact float64 allele-1 dosage (2*P11 + P12) for the samples in sample_idx,\n"
+          "NaN where missing. Returns (status, rsid, chrom, pos, allele0, allele1, error)\n"
+          "per record; status 0 ok, 1 non-biallelic, 2 unsupported, 3 corrupt.",
+          py::arg("records"), py::arg("sample_idx"), py::arg("out"),
+          py::arg("compression"), py::arg("n_samples"), py::arg("n_threads") = 1);
 
     py::class_<gmoq_pooled::PooledBinPlan>(m, "PooledBinPlan",
           "O(N) bin-prefix plan for pooled Stage 1: assigns each sample to one\n"

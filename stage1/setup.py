@@ -96,13 +96,14 @@ ext_modules = [
     Extension(
         'gmoq._stage1_cpp',
         sources=['src/stage1_pybind.cpp'],
-        depends=['src/stage1_fast.hpp', 'src/stage1_fast_hot.inc', 'src/stage1_pooled_fast.hpp'],
+        depends=['src/stage1_fast.hpp', 'src/stage1_fast_hot.inc', 'src/stage1_pooled_fast.hpp',
+                 'src/stage1_bgen_decode.hpp'],
         include_dirs=[get_pybind_include()] + ([_arma[0]] if _arma else []),
         library_dirs=[_arma[1]] if _arma else [],
         # An explicit rpath: on macOS setuptools' runtime_library_dirs emits -L only,
         # which leaves @rpath/libarmadillo unresolvable outside conda.
         extra_link_args=['-Wl,-rpath,' + _arma[1]] if _arma else [],
-        libraries=['armadillo'],
+        libraries=['armadillo', 'z'],
         # OpenMP flags are added by BuildExt once a probe compile shows which work.
         extra_compile_args=['-std=c++14', '-O3', '-fPIC'] + _arch_flags,
         language='c++'
