@@ -21,6 +21,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <zlib.h>
+#ifdef GMOQ_HAVE_LIBDEFLATE
+#include <libdeflate.h>
+#endif
 #include <unistd.h>
 #include <cerrno>
 
@@ -83,6 +86,36 @@ private:
     bool ok_ = true;
 };
 
+// zlib-stream inflater: libdeflate when built with it (one decompressor per
+// thread), zlib otherwise.  Both are exact; libdeflate is ~2x faster.
+struct Inflater {
+#ifdef GMOQ_HAVE_LIBDEFLATE
+    libdeflate_decompressor* d = libdeflate_alloc_decompressor();
+    ~Inflater() { if (d) libdeflate_free_decompressor(d); }
+#endif
+    // Returns true iff exactly dst_len bytes were produced.
+    bool inflate(const uint8_t* src, size_t src_len, uint8_t* dst, size_t dst_len) {
+#ifdef GMOQ_HAVE_LIBDEFLATE
+        if (d != nullptr) {
+            size_t got = 0;
+            const libdeflate_result r = libdeflate_zlib_decompress(d, src, src_len, dst, dst_len, &got);
+            return r == LIBDEFLATE_SUCCESS && got == dst_len;
+        }
+#endif
+        uLongf dest_len = static_cast<uLongf>(dst_len);
+        const int rc = uncompress(dst, &dest_len, src, static_cast<uLong>(src_len));
+        return rc == Z_OK && dest_len == dst_len;
+    }
+};
+
+inline bool built_with_libdeflate() {
+#ifdef GMOQ_HAVE_LIBDEFLATE
+    return true;
+#else
+    return false;
+#endif
+}
+
 // Read B bits (B <= 32) starting at bit `bit` of a buffer padded by >= 8 bytes.
 inline uint64_t read_bits(const uint8_t* buf, uint64_t bit, uint32_t B) {
     uint64_t word;
@@ -93,7 +126,7 @@ inline uint64_t read_bits(const uint8_t* buf, uint64_t bit, uint32_t B) {
 // Decode one record into column `out` (length n_out) for samples `idx`.
 inline void decode_record(const uint8_t* rec, size_t rec_len, int compression,
                           uint32_t n_samples_file, const int64_t* idx, int64_t n_out,
-                          double* out, std::vector<uint8_t>& scratch, RecordMeta& meta) {
+                          double* out, std::vector<uint8_t>& scratch, Inflater& inf, RecordMeta& meta) {
     Cursor c(rec, rec_len);
     c.str16();                       // variant id
     meta.rsid = c.str16();
@@ -121,9 +154,7 @@ inline void decode_record(const uint8_t* rec, size_t rec_len, int compression,
         if (C < 4) { meta.status = REC_CORRUPT; meta.error = "short zlib block"; return; }
         const uint32_t D = c.read<uint32_t>();
         scratch.resize(static_cast<size_t>(D) + 8);
-        uLongf dest_len = D;
-        const int rc = uncompress(scratch.data(), &dest_len, c.here(), C - 4);
-        if (rc != Z_OK || dest_len != D) {
+        if (!inf.inflate(c.here(), C - 4, scratch.data(), D)) {
             meta.status = REC_CORRUPT; meta.error = "zlib inflate failed"; return;
         }
         data_len = D;
@@ -248,12 +279,13 @@ inline py::list decode_block(py::list records,
 #endif
         {
             std::vector<uint8_t> scratch;
+            Inflater inf;
 #ifdef _OPENMP
 #pragma omp for schedule(dynamic, 1)
 #endif
             for (int64_t r = 0; r < n_rec; ++r) {
                 decode_record(ptr[r], len[r], compression, n_samples_file, idx, n_out,
-                              out_ptr + static_cast<size_t>(r) * n_out, scratch, meta[r]);
+                              out_ptr + static_cast<size_t>(r) * n_out, scratch, inf, meta[r]);
             }
         }
     }
@@ -289,6 +321,7 @@ inline py::list decode_file_block(int fd,
 #endif
         {
             std::vector<uint8_t> raw, scratch;
+            Inflater inf;
 #ifdef _OPENMP
 #pragma omp for schedule(dynamic, 1)
 #endif
@@ -310,7 +343,7 @@ inline py::list decode_file_block(int fd,
                     meta[r].status = REC_CORRUPT; meta[r].error = "short read"; continue;
                 }
                 decode_record(raw.data(), raw.size(), compression, n_samples_file, idx, n_out,
-                              out_ptr + static_cast<size_t>(r) * n_out, scratch, meta[r]);
+                              out_ptr + static_cast<size_t>(r) * n_out, scratch, inf, meta[r]);
             }
         }
     }

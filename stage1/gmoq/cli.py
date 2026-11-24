@@ -58,6 +58,7 @@ from .core import (
     compute_block_finalize_panel,
     compute_pooled_panel,
     jackknife_beta_se_batch,
+    compute_block_jackknife_panel_fast,
     make_pooled_bin_plan,
     compute_pooled_binned,
     compute_block_finalize_panel_fast,
@@ -1263,8 +1264,13 @@ def _triu_indices_cached(n_taus: int):
 
 
 def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
-                      f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
-    """Write one processed batch to the stage1 outputs."""
+                      f_cov_scale_list, all_betas_list, n_cov_elements, n_taus, jk_list=None):
+    """Write one processed batch to the stage1 outputs.
+
+    ``jk_list`` carries ``(beta, se, d_resid)`` per phenotype already formed by the
+    kernel (NaN rows are skipped); ``stats_list`` is then needed only for the
+    per-SNP covariance payload and may hold None when that is not written.
+    """
     triu = _triu_indices_cached(n_taus)
     want_cov = args.cov_mode not in COV_MODES_NO_PAYLOAD
     for p_idx, stats in enumerate(stats_list):
@@ -1276,10 +1282,15 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
 
         # beta/se/d_resid for the whole batch in one vectorised pass; the T x T
         # jackknife covariance is only formed when its payload is written.
-        betas_b, ses_b, d_b = jackknife_beta_se_batch(stats, args.blocks)
+        if jk_list is not None:
+            betas_b, ses_b, d_b = jk_list[p_idx]
+            skip = np.isnan(d_b)
+        else:
+            betas_b, ses_b, d_b = jackknife_beta_se_batch(stats, args.blocks)
+            skip = np.isnan(np.asarray(stats)[:, 0, 0])
         lines = []
-        for j, (snp_stats, info) in enumerate(zip(stats, batch_info)):
-            if np.isnan(snp_stats[0, 0]):
+        for j, info in enumerate(batch_info):
+            if skip[j]:
                 continue
 
             beta, se = betas_b[j], ses_b[j]
@@ -1300,7 +1311,7 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 # payload is never formed.
                 continue
 
-            _, _, Sigma = compute_covariance_from_blocks(snp_stats, args.blocks)
+            _, _, Sigma = compute_covariance_from_blocks(stats[j], args.blocks)
             cov_upper = Sigma[triu]
             if args.cov_dtype == 'int8':
                 scale = np.max(np.abs(cov_upper)) / 127.0
@@ -1574,7 +1585,8 @@ def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCoun
 
 
 def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount,
-                           n_threads: int, batch_size: int, get_buffer):
+                           n_threads: int, batch_size: int, get_buffer,
+                           io_threads: int = 16, read_ahead: int = 2):
     """Decode whole batches straight into the pipeline's genotype buffer.
 
     Yields ``(batch_info, chrom_label, k)`` with the batch's dosages already in
@@ -1591,20 +1603,43 @@ def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount
     sizes = bgi_record_sizes(bgen_path, offsets)
     chroms = [normalize_chr_label(rec[1]) for rec in records]
     batch_size = max(1, int(batch_size))
+    # Batch boundaries: at most batch_size records, never across a chromosome.
+    n = len(offsets)
+    spans = []
+    start = 0
+    while start < n:
+        stop = start + 1
+        while stop < n and stop - start < batch_size and chroms[stop] == chroms[start]:
+            stop += 1
+        spans.append((start, stop))
+        start = stop
+
+    # Read-ahead: io_threads preads in flight (os.pread releases the GIL) for the
+    # next `read_ahead` batches while the current one decodes.  On a network
+    # filesystem a sparse record selection is latency-bound, not bandwidth-bound.
+    from concurrent.futures import ThreadPoolExecutor
     fd = os.open(bgen_path, os.O_RDONLY)
+    pool = ThreadPoolExecutor(max_workers=max(1, int(io_threads)),
+                              thread_name_prefix="bgen-read")
+
+    def _read(off):
+        return os.pread(fd, sizes[off], off)
+
+    def _fetch(span):
+        return [pool.submit(_read, off) for off in offsets[span[0]:span[1]]]
+
     try:
-        start = 0
-        n = len(offsets)
-        while start < n:
-            stop = start + 1
-            while stop < n and stop - start < batch_size and chroms[stop] == chroms[start]:
-                stop += 1
+        pending = [_fetch(sp) for sp in spans[:max(1, int(read_ahead))]]
+        for b_idx, (start, stop) in enumerate(spans):
+            futures = pending.pop(0)
+            nxt = b_idx + len(pending) + 1
+            if nxt < len(spans):
+                pending.append(_fetch(spans[nxt]))
+            raw = [fut.result() for fut in futures]
             chunk = offsets[start:stop]
             out = get_buffer()
-            meta = _core.cpp_ext.bgen_decode_file_block(
-                fd, np.asarray(chunk, dtype=np.int64),
-                np.asarray([sizes[off] for off in chunk], dtype=np.int64),
-                sample_idx, out, compression, n_samples, int(n_threads))
+            meta = _core.cpp_ext.bgen_decode_block(raw, sample_idx, out, compression,
+                                                   n_samples, int(n_threads))
             keep, batch_info = [], []
             for j, (status, rsid, chrom, pos, a0, a1, err) in enumerate(meta):
                 if status == _NATIVE_STATUS_NON_BIALLELIC:
@@ -1622,8 +1657,8 @@ def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount
                 out[:, :len(keep)] = out[:, keep]        # rare: drop non-biallelic columns
             if keep:
                 yield batch_info, chroms[start], len(keep)
-            start = stop
     finally:
+        pool.shutdown(wait=True, cancel_futures=True)
         os.close(fd)
 
 
@@ -1773,6 +1808,7 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
                    all_betas_list, n_cov_elements, T, sigma0_sd_list=None,
                    kernel_state=None, pooled_plan_list=None):
     """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
+    jk_list = None
     if args.cov_mode == COV_MODE_POOLED_ONLY:
         # No block_ids, no n_blocks, no (n_blocks, panel, 1+T) accumulator: the
         # kernel returns the two things the pooled analysis needs.
@@ -1825,12 +1861,20 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
         if kernel_state is None:
             kernel_state = {}
         plan = _get_block_plan(kernel_state, RIF_resid_list[0], Q, block_ids, args)
-        stats_list = [
-            compute_block_scores_panel_fast(
-                G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
-                n_threads=args.threads, panel_width=args.panel_width, plan=plan,
+        if hasattr(_core.cpp_ext, 'stage1_block_jackknife_fast'):
+            raw, jk_b, jk_se, jk_d = compute_block_jackknife_panel_fast(
+                G_view, plan, n_threads=args.threads, panel_width=args.panel_width,
+                want_raw=args.cov_mode not in COV_MODES_NO_PAYLOAD,
             )
-        ]
+            stats_list = [raw]
+            jk_list = [(jk_b, jk_se, jk_d)]
+        else:
+            stats_list = [
+                compute_block_scores_panel_fast(
+                    G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
+                    n_threads=args.threads, panel_width=args.panel_width, plan=plan,
+                )
+            ]
         fused_list = None
     else:
         scores = compute_block_scores_panel if args.panel_kernel else compute_block_scores
@@ -1854,7 +1898,7 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
     else:
         write_stats_batch(
             stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
-            f_cov_scale_list, all_betas_list, n_cov_elements, T
+            f_cov_scale_list, all_betas_list, n_cov_elements, T, jk_list=jk_list
         )
     write_s = time.perf_counter() - t_write
     return compute_s, write_s
@@ -2088,6 +2132,9 @@ def main():
                         help='Walk the BGEN record-by-record instead of seeking to .bgi file '
                              'offsets (slower; kept for validation and for BGENs with no index).')
     parser.set_defaults(seek_variants=True)
+    parser.add_argument('--bgen-io-threads', dest='bgen_io_threads', type=int, default=16,
+                        help='Concurrent BGEN record reads kept in flight by the native '
+                             'decoder (read-ahead; helps on network filesystems). Default 16.')
     parser.add_argument('--bgen-decoder', dest='bgen_decoder', choices=list(BGEN_DECODERS),
                         default=BGEN_DECODER_AUTO,
                         help="How BGEN records are decoded. 'native' reads each selected "
@@ -2560,7 +2607,8 @@ def main():
             native_batches = _decode_batches_native(
                 native_records, args.bgen, bgen_indices, skip_counter,
                 n_threads=args.threads, batch_size=args.batch_size,
-                get_buffer=lambda: pipeline.batch_buffer)
+                get_buffer=lambda: pipeline.batch_buffer,
+                io_threads=args.bgen_io_threads)
             for batch_info, variant_chr, k in native_batches:
                 if loco_predictions is not None and variant_chr != active_chr:
                     _switch_chromosome(variant_chr)

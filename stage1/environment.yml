@@ -9,6 +9,7 @@ dependencies:
   - pybind11>=2.11
   - armadillo
   - zlib              # native BGEN decoder (zlib.h + libz)
+  - libdeflate        # optional, ~2x faster inflate in the native BGEN decoder
   - cxx-compiler      # a C++ compiler with OpenMP support (Apple clang has none)
   - llvm-openmp
   - pytest

@@ -461,6 +461,50 @@ inline double wall_now() {
 #endif
 }
 
+// Jackknife beta and se only (no T x T covariance): the same definition as
+// core.jackknife_beta_se_batch -- leave-one-block-out betas, 0 where a block's
+// complement has a non-positive denominator, se^2 = (B-1)/B * sum (jk - mean)^2.
+inline void jackknife_beta_se(const double* __restrict__ sp, size_t B, size_t T,
+                              double* __restrict__ beta, double* __restrict__ se,
+                              double* __restrict__ d_out, double* __restrict__ ntot,
+                              double* __restrict__ mean, double* __restrict__ ss) {
+    const size_t oc = 1 + T;
+    double D = 0.0;
+    for (size_t t = 0; t < T; t++) ntot[t] = 0.0;
+    for (size_t b = 0; b < B; b++) {
+        const double* r = sp + b * oc;
+        D += r[0];
+        for (size_t t = 0; t < T; t++) ntot[t] += r[1 + t];
+    }
+    *d_out = D;
+    if (!(D > 0.0)) return;   // caller pre-filled NaN
+    for (size_t t = 0; t < T; t++) { beta[t] = ntot[t] / D; mean[t] = 0.0; ss[t] = 0.0; }
+    for (size_t b = 0; b < B; b++) {
+        const double* r = sp + b * oc;
+        const double den = D - r[0];
+        if (!(den > 0.0)) continue;
+        const double inv = 1.0 / den;
+        for (size_t t = 0; t < T; t++) mean[t] += (ntot[t] - r[1 + t]) * inv;
+    }
+    const double invB = 1.0 / static_cast<double>(B);
+    for (size_t t = 0; t < T; t++) mean[t] *= invB;
+    for (size_t b = 0; b < B; b++) {
+        const double* r = sp + b * oc;
+        const double den = D - r[0];
+        if (den > 0.0) {
+            const double inv = 1.0 / den;
+            for (size_t t = 0; t < T; t++) {
+                const double v = (ntot[t] - r[1 + t]) * inv - mean[t];
+                ss[t] += v * v;
+            }
+        } else {
+            for (size_t t = 0; t < T; t++) ss[t] += mean[t] * mean[t];
+        }
+    }
+    const double f = static_cast<double>(B - 1) / static_cast<double>(B);
+    for (size_t t = 0; t < T; t++) se[t] = std::sqrt(f * ss[t]);
+}
+
 // ---------------------------------------------------------------------------
 // Driver.  ``raw_out`` (M, n_blocks, 1+T) and the (betas, se, cov) triple are
 // alternatives: exactly one set is non-null.
@@ -477,7 +521,10 @@ inline void run_fast(
     double* raw_out,
     double* betas_ptr,
     double* se_ptr,
-    double* cov_ptr
+    double* cov_ptr,
+    double* jk_beta = nullptr,   // (M, T) jackknife beta only, or null
+    double* jk_se = nullptr,     // (M, T)
+    double* jk_d = nullptr       // (M,)  sum of block denominators (d_resid)
 ) {
     const size_t T = plan.T, K = plan.K;
     const int n_blocks = plan.n_blocks;
@@ -724,6 +771,11 @@ inline void run_fast(
                     if (!(g2[jj] >= min_var)) continue;
                     const size_t j = cols[p0 + jj];
                     const double* sp = buf.data() + jj * n_blocks_sz * out_cols;
+                    if (jk_beta != nullptr) {
+                        jackknife_beta_se(sp, n_blocks_sz, T, jk_beta + j * T, jk_se + j * T,
+                                          jk_d + j, ntot.data(), mean.data(), jk.data());
+                        if (raw_out == nullptr) continue;
+                    }
                     if (raw_out != nullptr) {
                         std::memcpy(raw_out + j * n_blocks_sz * out_cols, sp,
                                     n_blocks_sz * out_cols * sizeof(double));
@@ -827,6 +879,51 @@ inline py::array_t<double> block_scores_fast(
                  result_ptr, nullptr, nullptr, nullptr);
     }
     return result;
+}
+
+// Block kernel + jackknife beta/se in C++: returns (raw or None, beta (M,T),
+// se (M,T), d_resid (M,)), NaN for SNPs that fail the MAC/variance filters.
+inline py::tuple block_jackknife_fast(
+    py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
+    const BlockPlan& plan,
+    double min_mac,
+    double min_var,
+    int n_threads,
+    int panel_width,
+    bool want_raw
+) {
+    auto G_buf = G_arr.request();
+    if (G_buf.ndim != 2) throw std::runtime_error("G must be 2-D.");
+    const size_t N = static_cast<size_t>(G_buf.shape[0]);
+    const size_t M = static_cast<size_t>(G_buf.shape[1]);
+    if (N != plan.N) {
+        throw std::runtime_error("G has a different number of rows than the BlockPlan was built for.");
+    }
+    const size_t T = plan.T;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    py::array_t<double> beta({M, T}), se({M, T}), d(std::vector<size_t>{M});
+    std::fill(beta.mutable_data(), beta.mutable_data() + M * T, nan);
+    std::fill(se.mutable_data(), se.mutable_data() + M * T, nan);
+    std::fill(d.mutable_data(), d.mutable_data() + M, nan);
+    py::object raw_obj = py::none();
+    double* raw_ptr = nullptr;
+    if (want_raw) {
+        std::vector<size_t> shape = {M, static_cast<size_t>(plan.n_blocks), 1 + T};
+        py::array_t<double> raw(shape);
+        raw_ptr = raw.mutable_data();
+        std::fill(raw_ptr, raw_ptr + M * static_cast<size_t>(plan.n_blocks) * (1 + T), nan);
+        raw_obj = raw;
+    }
+    if (M > 0) {
+        const double* G_ptr = static_cast<const double*>(G_buf.ptr);
+        double* bp = beta.mutable_data();
+        double* sp = se.mutable_data();
+        double* dp = d.mutable_data();
+        py::gil_scoped_release gil_release;
+        run_fast(G_ptr, N, M, plan, min_mac, min_var, n_threads, panel_width,
+                 raw_ptr, nullptr, nullptr, nullptr, bp, sp, dp);
+    }
+    return py::make_tuple(raw_obj, beta, se, d);
 }
 
 }  // namespace gmoq_fast

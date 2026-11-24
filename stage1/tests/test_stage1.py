@@ -539,3 +539,26 @@ def test_block_kernel_bins_match_dense(case):
     ok = ~np.isnan(ref)
     scale = np.nanmax(np.abs(ref), axis=(0, 1), keepdims=True)
     np.testing.assert_allclose((got / scale)[ok], (ref / scale)[ok], rtol=0, atol=1e-11)
+
+
+def test_cpp_jackknife_matches_python_batch():
+    rng = np.random.default_rng(21)
+    n, m, B = 2000, 9, 30
+    taus = np.linspace(0.1, 0.9, 7)
+    y = rng.normal(size=n)
+    Q, _ = np.linalg.qr(np.column_stack([np.ones(n), rng.normal(size=(n, 2))]))
+    G = rng.binomial(2, 0.3, size=(n, m)).astype(float)
+    G[:, 4] = 0.0                                          # filtered
+    bid = rng.integers(0, B, size=n).astype(np.int32)
+    rif, q, f = core.compute_rif(y, taus)
+    R = rif - Q @ (Q.T @ rif)
+    plan = core.make_block_plan(R, Q, bid, B)
+    plan.set_bins(y, taus, q, f)
+    raw, beta, se, d = core.compute_block_jackknife_panel_fast(G, plan, want_raw=True)
+    rb, rs, rd = core.jackknife_beta_se_batch(raw, B)
+    assert np.isnan(d[4]) and np.all(np.isnan(beta[4]))
+    np.testing.assert_allclose(beta, rb, rtol=1e-13, equal_nan=True)
+    np.testing.assert_allclose(se, rs, rtol=1e-11, equal_nan=True)
+    np.testing.assert_allclose(d[~np.isnan(d)], rd[~np.isnan(d)], rtol=1e-14)
+    raw2, *_ = core.compute_block_jackknife_panel_fast(G, plan, want_raw=False)
+    assert raw2 is None

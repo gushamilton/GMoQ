@@ -690,6 +690,22 @@ def compute_block_scores_panel_fast(G: np.ndarray, Y_resid: np.ndarray, Q: np.nd
     )
 
 
+def compute_block_jackknife_panel_fast(G: np.ndarray, plan, min_mac: float = 5.0,
+                                      min_var: float = 1e-8, n_threads: int = 1,
+                                      panel_width: int = 0, want_raw: bool = False):
+    """Fast block kernel with the jackknife ``beta``/``se``/``d_resid`` formed in C++.
+
+    Returns ``(raw, beta (M, T), se (M, T), d_resid (M,))``; ``raw`` is the
+    ``(M, n_blocks, 1+T)`` block statistics when ``want_raw`` (needed only for
+    the per-SNP covariance payload), else None.  Same definitions as
+    :func:`jackknife_beta_se_batch`, to rounding.
+    """
+    require_cpp_extension("Fast panel block-score kernel")
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    return cpp_ext.stage1_block_jackknife_fast(G_f, plan, min_mac, min_var, n_threads,
+                                               panel_width, bool(want_raw))
+
+
 def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
                            block_ids: np.ndarray, n_blocks: int,
                            min_mac: float = 5.0, min_var: float = 1e-8,
