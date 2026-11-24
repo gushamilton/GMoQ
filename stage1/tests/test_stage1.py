@@ -480,3 +480,17 @@ def _snps_file(tmp_path):
     p = tmp_path / "snps.txt"
     p.write_text("\n".join(RSIDS + ["rs_multi"]) + "\n")
     return p
+
+
+def test_batch_jackknife_matches_per_snp_reference():
+    rng = np.random.default_rng(11)
+    M, B, T = 7, 50, 9
+    stats = rng.normal(size=(M, B, 1 + T))
+    stats[:, :, 0] = rng.uniform(1.0, 2.0, size=(M, B))
+    stats[3, :, 0] = 0.0                                  # D_total == 0 -> NaN
+    beta, se, d = core.jackknife_beta_se_batch(stats, B)
+    for j in range(M):
+        rb, rs, _ = core.compute_covariance_from_blocks(stats[j], B)
+        assert np.array_equal(beta[j], rb, equal_nan=True)
+        np.testing.assert_allclose(se[j], rs, rtol=1e-13, equal_nan=True)
+        assert d[j] == np.sum(stats[j, :, 0])

@@ -914,6 +914,36 @@ def compute_covariance_from_blocks(stats: np.ndarray, n_blocks: int) -> Tuple[np
     return beta, se, Sigma
 
 
+def jackknife_beta_se_batch(stats: np.ndarray, n_blocks: int
+                            ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Jackknife ``beta`` and ``se`` for a whole batch, without the T x T covariance.
+
+    ``stats`` is ``(M, n_blocks, 1+T)``.  Returns ``beta (M, T)``, ``se (M, T)``
+    and ``d_resid (M,)``.  ``beta``, ``d_resid`` and every leave-one-out beta use
+    the same reductions as :func:`compute_covariance_from_blocks`; ``se`` is the
+    square root of the same diagonal, summed directly instead of read off a
+    ``centered.T @ centered`` product, so it can differ in the last bit.  SNPs whose
+    ``D_total <= 0`` get NaN, as there.
+    """
+    stats = np.asarray(stats, dtype=np.float64)
+    D_k = stats[:, :, 0]
+    N_k = stats[:, :, 1:]
+    D_total = np.sum(D_k, axis=1)
+    N_total = np.sum(N_k, axis=1)
+    denom = D_total[:, None] - D_k
+    usable = denom > 0
+    jk = np.zeros_like(N_k)
+    np.divide(N_total[:, None, :] - N_k, denom[:, :, None], out=jk, where=usable[:, :, None])
+    centered = jk - np.mean(jk, axis=1, keepdims=True)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        beta = N_total / D_total[:, None]
+        se = np.sqrt(((n_blocks - 1) / n_blocks) * np.einsum('mbt,mbt->mt', centered, centered))
+    bad = ~(D_total > 0)
+    beta[bad] = np.nan
+    se[bad] = np.nan
+    return beta, se, D_total
+
+
 def run_stage1(G: np.ndarray, Y: np.ndarray, 
                taus: np.ndarray,
                covariates: Optional[np.ndarray] = None,

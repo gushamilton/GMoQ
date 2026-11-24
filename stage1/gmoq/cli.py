@@ -57,6 +57,7 @@ from .core import (
     compute_block_scores_panel,
     compute_block_finalize_panel,
     compute_pooled_panel,
+    jackknife_beta_se_batch,
     make_pooled_bin_plan,
     compute_pooled_binned,
     compute_block_finalize_panel_fast,
@@ -729,7 +730,7 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
         except (ValueError, KeyError, TypeError):
             dropped["with a non-numeric or empty phenotype"] += 1
             continue
-        if np.any(np.isnan(pheno_vals)):
+        if any(v != v for v in pheno_vals):          # NaN; avoids a numpy call per row
             dropped["with a missing (NA) phenotype"] += 1
             continue
 
@@ -743,7 +744,7 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
             except (ValueError, KeyError, TypeError):
                 dropped["with a non-numeric or empty covariate"] += 1
                 continue
-            if np.any(np.isnan(x_vals)):
+            if any(v != v for v in x_vals):
                 dropped["with a missing (NA) covariate"] += 1
                 continue
             for c, v in zip(covar_cols, x_vals):
@@ -1263,26 +1264,33 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
         f_cov_scale = f_cov_scale_list[p_idx]
         all_betas = all_betas_list[p_idx]
 
-        for snp_stats, info in zip(stats, batch_info):
+        # beta/se/d_resid for the whole batch in one vectorised pass; the T x T
+        # jackknife covariance is only formed when its payload is written.
+        betas_b, ses_b, d_b = jackknife_beta_se_batch(stats, args.blocks)
+        lines = []
+        for j, (snp_stats, info) in enumerate(zip(stats, batch_info)):
             if np.isnan(snp_stats[0, 0]):
                 continue
 
-            beta, se, Sigma = compute_covariance_from_blocks(snp_stats, args.blocks)
+            beta, se = betas_b[j], ses_b[j]
+            row = [str(x) for x in info]
+            for b, s in zip(beta.tolist(), se.tolist()):
+                row.append(f'{b:.6g}')
+                row.append(f'{s:.6g}')
             # Exactly the denominator the jackknife divides by, summed over blocks.
-            d_resid = float(np.sum(snp_stats[:, 0]))
+            row.append(f'{float(d_b[j]):.9g}')
+            lines.append('\t'.join(row) + '\n')
 
-            row = list(info)
-            for b, s in zip(beta, se):
-                row.extend([f'{b:.6g}', f'{s:.6g}'])
-            row.append(f'{d_resid:.9g}')
-            f_tsv.write('\t'.join(map(str, row)) + '\n')
+            if args.output_rtau:
+                all_betas.append(beta)
 
             if not want_cov:
                 # --cov-mode pooled: Stage 2's production path reads only the
                 # pooled Sigma_0 sidecar, so the per-SNP jackknife covariance
-                # payload is computed but never written.
+                # payload is never formed.
                 continue
 
+            _, _, Sigma = compute_covariance_from_blocks(snp_stats, args.blocks)
             cov_upper = Sigma[triu]
             if args.cov_dtype == 'int8':
                 scale = np.max(np.abs(cov_upper)) / 127.0
@@ -1298,9 +1306,8 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 # make n individual float conversions per variant.
                 f_cov.write(cov_upper.astype('<f4', copy=False).tobytes())
             f_cov_ids.write('\t'.join(map(str, info)) + '\n')
-
-            if args.output_rtau:
-                all_betas.append(beta)
+        if lines:
+            f_tsv.write(''.join(lines))
 
 
 def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
