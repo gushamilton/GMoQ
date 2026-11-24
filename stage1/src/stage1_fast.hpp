@@ -88,6 +88,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <numeric>
 #include <vector>
 
 #ifdef _OPENMP
@@ -193,6 +194,30 @@ struct BlockPlan {
     // Consequence: one plan serves one kernel call at a time.  The CLI's batch
     // pipeline runs a single batch at a time; concurrent callers need a plan each.
     mutable Scratch gt_buf, w_buf, u_buf, s2_buf, v_buf;
+
+    // Optional bin-prefix data (set_bins).  RIF[i,t] = c_t - 1{y_i <= q_t}/f_t,
+    // so each sample falls in one quantile bin, and the O(N P T) cross-product
+    // W_b[p][t] = sum_{i in b} gc_ip RIF_resid[i,t] is recovered exactly from
+    // per-(block, bin) genotype sums plus the U_b the sweep already forms:
+    //
+    //   W_b[p][t] = c_t * sum_{i in b} gc_ip
+    //             - (1/f_t) * sum_{i in b, bin_i <= t} gc_ip
+    //             - sum_k U_b[p][k] * (Q^T RIF)[k][t]
+    //
+    // The sweep then runs over [Q | e] only (K+1 columns instead of T+K+1).
+    bool has_bins = false;
+    size_t Crow2 = 0;
+    std::vector<double> RQ2;           // (N, Crow2) [Q | e | 0 pad], sorted order
+    std::vector<uint16_t> bin_sorted;  // (N,) bin of each sorted sample, in [0, T]
+    std::vector<size_t> tau_ord;       // sorted-q position -> tau index
+    std::vector<double> c_sorted;      // q + tau/f, sorted-q order
+    std::vector<double> inv_f_sorted;  // 1/f, sorted-q order
+    std::vector<double> QtR_tk;        // (T, K): (Q^T RIF)[k][t] stored [t*K + k]
+
+    void set_bins(py::array_t<double, py::array::c_style | py::array::forcecast> y_arr,
+                  py::array_t<double, py::array::c_style | py::array::forcecast> taus_arr,
+                  py::array_t<double, py::array::c_style | py::array::forcecast> q_arr,
+                  py::array_t<double, py::array::c_style | py::array::forcecast> f_arr);
 
     size_t n_buckets() const { return static_cast<size_t>(n_blocks) + 1; }
 
@@ -345,6 +370,82 @@ inline BlockPlan::BlockPlan(
     }  // gil_release
 }
 
+inline void BlockPlan::set_bins(
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> taus_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> q_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> f_arr
+) {
+    if (y_arr.ndim() != 1 || static_cast<size_t>(y_arr.shape(0)) != N) {
+        throw std::runtime_error("set_bins: y must have N entries.");
+    }
+    if (taus_arr.shape(0) != static_cast<py::ssize_t>(T) || q_arr.shape(0) != static_cast<py::ssize_t>(T) ||
+        f_arr.shape(0) != static_cast<py::ssize_t>(T)) {
+        throw std::runtime_error("set_bins: taus, q_tau and fhat must have T entries.");
+    }
+    if (T >= 65535) throw std::runtime_error("set_bins requires T < 65535.");
+    const double* y = y_arr.data();
+    const double* taus = taus_arr.data();
+    const double* q = q_arr.data();
+    const double* f = f_arr.data();
+
+    tau_ord.resize(T);
+    std::iota(tau_ord.begin(), tau_ord.end(), size_t{0});
+    std::stable_sort(tau_ord.begin(), tau_ord.end(),
+                     [&](size_t a, size_t b) { return q[a] < q[b]; });
+    std::vector<double> q_sorted(T);
+    c_sorted.resize(T);
+    inv_f_sorted.resize(T);
+    for (size_t st = 0; st < T; st++) {
+        const size_t t = tau_ord[st];
+        if (!(f[t] > 0.0) || !std::isfinite(f[t])) throw std::runtime_error("set_bins: fhat must be positive.");
+        q_sorted[st] = q[t];
+        c_sorted[st] = q[t] + taus[t] / f[t];
+        inv_f_sorted[st] = 1.0 / f[t];
+    }
+
+    // Bins in sorted-sample order: y_i <= q_sorted[st]  <=>  bin_i <= st.
+    bin_sorted.assign(N, 0);
+    for (size_t s = 0; s < N; s++) {
+        const double yi = y[static_cast<size_t>(order[s])];
+        bin_sorted[s] = static_cast<uint16_t>(
+            std::lower_bound(q_sorted.begin(), q_sorted.end(), yi) - q_sorted.begin());
+    }
+
+    // Q^T RIF without the N x T RIF: per-bin sums of Q rows, then prefix sums.
+    std::vector<double> qbin((T + 1) * K, 0.0), w(K, 0.0), wc(K, 0.0);
+    for (size_t s = 0; s < N; s++) {
+        const double* qr = &RQ[s * Crow + T];
+        double* qb = &qbin[static_cast<size_t>(bin_sorted[s]) * K];
+        for (size_t k = 0; k < K; k++) {
+            qb[k] += qr[k];
+            const double x = qr[k], yv = w[k], tt = yv + x;   // Neumaier, as for e
+            wc[k] += (std::abs(yv) >= std::abs(x)) ? ((yv - tt) + x) : ((x - tt) + yv);
+            w[k] = tt;
+        }
+    }
+    for (size_t k = 0; k < K; k++) w[k] += wc[k];
+    QtR_tk.assign(T * K, 0.0);
+    std::vector<double> run(K, 0.0);
+    for (size_t st = 0; st < T; st++) {
+        for (size_t k = 0; k < K; k++) run[k] += qbin[st * K + k];
+        const size_t t = tau_ord[st];
+        for (size_t k = 0; k < K; k++) {
+            QtR_tk[t * K + k] = c_sorted[st] * w[k] - run[k] * inv_f_sorted[st];
+        }
+    }
+
+    // Slim sweep operand [Q | e | 0 pad].
+    Crow2 = ((K + 1 + CBLK - 1) / CBLK) * CBLK;
+    RQ2.assign(N * Crow2, 0.0);
+    for (size_t s = 0; s < N; s++) {
+        std::memcpy(&RQ2[s * Crow2], &RQ[s * Crow + T], (K + 1) * sizeof(double));
+    }
+    has_bins = true;
+    // The (RIF | Q | e) sweep operand is not used again once bins are set: free it.
+    std::vector<double>().swap(RQ);
+}
+
 // ---------------------------------------------------------------------------
 // Per-pass wall clock of the last run_fast call, for profiling only.  Not part
 // of the numerical contract.
@@ -360,6 +461,50 @@ inline double wall_now() {
 #else
     return 0.0;
 #endif
+}
+
+// Jackknife beta and se only (no T x T covariance): the same definition as
+// core.jackknife_beta_se_batch -- leave-one-block-out betas, 0 where a block's
+// complement has a non-positive denominator, se^2 = (B-1)/B * sum (jk - mean)^2.
+inline void jackknife_beta_se(const double* __restrict__ sp, size_t B, size_t T,
+                              double* __restrict__ beta, double* __restrict__ se,
+                              double* __restrict__ d_out, double* __restrict__ ntot,
+                              double* __restrict__ mean, double* __restrict__ ss) {
+    const size_t oc = 1 + T;
+    double D = 0.0;
+    for (size_t t = 0; t < T; t++) ntot[t] = 0.0;
+    for (size_t b = 0; b < B; b++) {
+        const double* r = sp + b * oc;
+        D += r[0];
+        for (size_t t = 0; t < T; t++) ntot[t] += r[1 + t];
+    }
+    *d_out = D;
+    if (!(D > 0.0)) return;   // caller pre-filled NaN
+    for (size_t t = 0; t < T; t++) { beta[t] = ntot[t] / D; mean[t] = 0.0; ss[t] = 0.0; }
+    for (size_t b = 0; b < B; b++) {
+        const double* r = sp + b * oc;
+        const double den = D - r[0];
+        if (!(den > 0.0)) continue;
+        const double inv = 1.0 / den;
+        for (size_t t = 0; t < T; t++) mean[t] += (ntot[t] - r[1 + t]) * inv;
+    }
+    const double invB = 1.0 / static_cast<double>(B);
+    for (size_t t = 0; t < T; t++) mean[t] *= invB;
+    for (size_t b = 0; b < B; b++) {
+        const double* r = sp + b * oc;
+        const double den = D - r[0];
+        if (den > 0.0) {
+            const double inv = 1.0 / den;
+            for (size_t t = 0; t < T; t++) {
+                const double v = (ntot[t] - r[1 + t]) * inv - mean[t];
+                ss[t] += v * v;
+            }
+        } else {
+            for (size_t t = 0; t < T; t++) ss[t] += mean[t] * mean[t];
+        }
+    }
+    const double f = static_cast<double>(B - 1) / static_cast<double>(B);
+    for (size_t t = 0; t < T; t++) se[t] = std::sqrt(f * ss[t]);
 }
 
 // ---------------------------------------------------------------------------
@@ -378,8 +523,14 @@ inline void run_fast(
     double* raw_out,
     double* betas_ptr,
     double* se_ptr,
-    double* cov_ptr
+    double* cov_ptr,
+    double* jk_beta = nullptr,   // (M, T) jackknife beta only, or null
+    double* jk_se = nullptr,     // (M, T)
+    double* jk_d = nullptr,      // (M,)  sum of block denominators (d_resid)
+    const int64_t* rowmap = nullptr,  // sample i -> row of G, when G holds more rows
+    size_t N_src = 0                  // rows of G when rowmap is given
 ) {
+    if (rowmap == nullptr) N_src = N;
     const size_t T = plan.T, K = plan.K;
     const int n_blocks = plan.n_blocks;
     const size_t n_blocks_sz = static_cast<size_t>(n_blocks);
@@ -396,8 +547,10 @@ inline void run_fast(
     if (n_threads > 0) omp_set_num_threads(n_threads);
 #endif
 
-    const double* __restrict__ RQ = plan.RQ.data();
-    const size_t Crow = plan.Crow;
+    const bool bins = plan.has_bins;
+    const double* __restrict__ RQ = bins ? plan.RQ2.data() : plan.RQ.data();
+    const size_t Crow = bins ? plan.Crow2 : plan.Crow;
+    const size_t T_sweep = bins ? 0 : T;   // the sweep forms W only without bins
     const double* __restrict__ S_all = plan.S.data();
     const double* __restrict__ A_all = plan.A.data();
     const double* __restrict__ E_all = plan.E.data();
@@ -418,12 +571,19 @@ inline void run_fast(
     // does, so the accept/reject decision and the imputation mean are bit-identical.
     #pragma omp parallel for schedule(static)
     for (int64_t j = 0; j < static_cast<int64_t>(M); j++) {
-        const double* __restrict__ col = G_ptr + static_cast<size_t>(j) * N;
+        const double* __restrict__ col = G_ptr + static_cast<size_t>(j) * N_src;
         size_t n_valid = 0;
         double g_sum = 0.0;
-        for (size_t i = 0; i < N; i++) {
-            const double v = col[i];
-            if (std::isfinite(v)) { g_sum += v; n_valid++; }
+        if (rowmap == nullptr) {
+            for (size_t i = 0; i < N; i++) {
+                const double v = col[i];
+                if (std::isfinite(v)) { g_sum += v; n_valid++; }
+            }
+        } else {
+            for (size_t i = 0; i < N; i++) {
+                const double v = col[rowmap[i]];
+                if (std::isfinite(v)) { g_sum += v; n_valid++; }
+            }
         }
         if (n_valid < 100) continue;
         const double mac = std::min(g_sum, 2.0 * static_cast<double>(n_valid) - g_sum);
@@ -483,11 +643,11 @@ inline void run_fast(
                 if (avx2) {
 #ifdef GMOQ_HAVE_AVX2_CLONE
                     pack_chunk_avx2(G_ptr, N, cols.data(), gmean.data(), P, LD,
-                                    i0, i1, posv, tmp.data(), Gt);
+                                    i0, i1, posv, tmp.data(), Gt, rowmap, N_src);
 #endif
                 } else {
                     pack_chunk_base(G_ptr, N, cols.data(), gmean.data(), P, LD,
-                                    i0, i1, posv, tmp.data(), Gt);
+                                    i0, i1, posv, tmp.data(), Gt, rowmap, N_src);
                 }
             }
         }
@@ -507,9 +667,15 @@ inline void run_fast(
         size_t STILE = stile_bytes / ((Crow + static_cast<size_t>(PBLK)) * sizeof(double));
         if (STILE < 8) STILE = 8;
 
+        const uint16_t* __restrict__ binv = bins ? plan.bin_sorted.data() : nullptr;
+        const size_t* tord = bins ? plan.tau_ord.data() : nullptr;
+        const double* __restrict__ cs = bins ? plan.c_sorted.data() : nullptr;
+        const double* __restrict__ ifs = bins ? plan.inv_f_sorted.data() : nullptr;
+        const double* __restrict__ QtR = bins ? plan.QtR_tk.data() : nullptr;
         #pragma omp parallel
         {
             std::vector<double> accm(Crow * static_cast<size_t>(PBLK), 0.0);
+            std::vector<double> hacc(bins ? (T + 1) * LD : 0), tot(bins ? LD : 0), cum(bins ? LD : 0);
             #pragma omp for schedule(static)
             for (int64_t b = 0; b < static_cast<int64_t>(NB); b++) {
                 const size_t bb = static_cast<size_t>(b);
@@ -518,15 +684,43 @@ inline void run_fast(
                 double* ubp = U + bb * P * K;
                 double* vbp = V + bb * P;
                 double* s2p = S2 + bb * P;
-                double* Wbp = (bb < n_blocks_sz) ? W + bb * P * T : nullptr;
+                double* Wbp = (!bins && bb < n_blocks_sz) ? W + bb * P * T : nullptr;
+                // Bins are only needed for real blocks (the out-of-range bucket has no W).
+                const bool do_bins = bins && bb < n_blocks_sz;
+                if (do_bins) std::fill(hacc.begin(), hacc.end(), 0.0);
                 if (avx2) {
 #ifdef GMOQ_HAVE_AVX2_CLONE
-                    sweep_block_avx2(Gt, LD, RQ, Crow, T, K, s0, s1, P, Ppad,
-                                     Wbp, ubp, vbp, s2p, accm.data(), STILE);
+                    sweep_block_avx2(Gt, LD, RQ, Crow, T_sweep, K, s0, s1, P, Ppad,
+                                     Wbp, ubp, vbp, s2p, accm.data(), STILE,
+                                     do_bins ? binv : nullptr, do_bins ? hacc.data() : nullptr);
 #endif
                 } else {
-                    sweep_block_base(Gt, LD, RQ, Crow, T, K, s0, s1, P, Ppad,
-                                     Wbp, ubp, vbp, s2p, accm.data(), STILE);
+                    sweep_block_base(Gt, LD, RQ, Crow, T_sweep, K, s0, s1, P, Ppad,
+                                     Wbp, ubp, vbp, s2p, accm.data(), STILE,
+                                     do_bins ? binv : nullptr, do_bins ? hacc.data() : nullptr);
+                }
+                if (do_bins) {
+                    // W from the per-(block, bin) sums of the packed (centred) genotypes.
+                    std::fill(tot.begin(), tot.end(), 0.0);
+                    for (size_t st = 0; st <= T; st++) {
+                        const double* __restrict__ h = hacc.data() + st * LD;
+                        for (size_t p = 0; p < LD; p++) tot[p] += h[p];
+                    }
+                    std::fill(cum.begin(), cum.end(), 0.0);
+                    double* __restrict__ Wb = W + bb * P * T;
+                    const double* __restrict__ Ub = U + bb * P * K;
+                    for (size_t st = 0; st < T; st++) {
+                        const double* __restrict__ h = hacc.data() + st * LD;
+                        for (size_t p = 0; p < LD; p++) cum[p] += h[p];
+                        const size_t t = tord[st];
+                        const double* __restrict__ qr = QtR + t * K;
+                        for (size_t p = 0; p < P; p++) {
+                            const double* __restrict__ up = Ub + p * K;
+                            double proj = 0.0;
+                            for (size_t k = 0; k < K; k++) proj += up[k] * qr[k];
+                            Wb[p * T + t] = cs[st] * tot[p] - cum[p] * ifs[st] - proj;
+                        }
+                    }
                 }
             }
         }
@@ -578,6 +772,11 @@ inline void run_fast(
                     if (!(g2[jj] >= min_var)) continue;
                     const size_t j = cols[p0 + jj];
                     const double* sp = buf.data() + jj * n_blocks_sz * out_cols;
+                    if (jk_beta != nullptr) {
+                        jackknife_beta_se(sp, n_blocks_sz, T, jk_beta + j * T, jk_se + j * T,
+                                          jk_d + j, ntot.data(), mean.data(), jk.data());
+                        if (raw_out == nullptr) continue;
+                    }
                     if (raw_out != nullptr) {
                         std::memcpy(raw_out + j * n_blocks_sz * out_cols, sp,
                                     n_blocks_sz * out_cols * sizeof(double));
@@ -681,6 +880,66 @@ inline py::array_t<double> block_scores_fast(
                  result_ptr, nullptr, nullptr, nullptr);
     }
     return result;
+}
+
+// Block kernel + jackknife beta/se in C++: returns (raw or None, beta (M,T),
+// se (M,T), d_resid (M,)), NaN for SNPs that fail the MAC/variance filters.
+inline py::tuple block_jackknife_fast(
+    py::array_t<double, py::array::f_style | py::array::forcecast> G_arr,
+    const BlockPlan& plan,
+    double min_mac,
+    double min_var,
+    int n_threads,
+    int panel_width,
+    bool want_raw,
+    py::object rowmap_obj
+) {
+    auto G_buf = G_arr.request();
+    if (G_buf.ndim != 2) throw std::runtime_error("G must be 2-D.");
+    const size_t N_src = static_cast<size_t>(G_buf.shape[0]);
+    const size_t M = static_cast<size_t>(G_buf.shape[1]);
+    const size_t N = plan.N;
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> rowmap_arr;
+    const int64_t* rowmap = nullptr;
+    if (!rowmap_obj.is_none()) {
+        rowmap_arr = rowmap_obj.cast<py::array_t<int64_t, py::array::c_style | py::array::forcecast>>();
+        if (rowmap_arr.ndim() != 1 || static_cast<size_t>(rowmap_arr.shape(0)) != N) {
+            throw std::runtime_error("rowmap must have one entry per plan sample.");
+        }
+        rowmap = rowmap_arr.data();
+        for (size_t i = 0; i < N; i++) {
+            if (rowmap[i] < 0 || static_cast<size_t>(rowmap[i]) >= N_src) {
+                throw std::runtime_error("rowmap entry out of range of G's rows.");
+            }
+        }
+    } else if (N_src != N) {
+        throw std::runtime_error("G has a different number of rows than the BlockPlan was built for.");
+    }
+    const size_t T = plan.T;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    py::array_t<double> beta({M, T}), se({M, T}), d(std::vector<size_t>{M});
+    std::fill(beta.mutable_data(), beta.mutable_data() + M * T, nan);
+    std::fill(se.mutable_data(), se.mutable_data() + M * T, nan);
+    std::fill(d.mutable_data(), d.mutable_data() + M, nan);
+    py::object raw_obj = py::none();
+    double* raw_ptr = nullptr;
+    if (want_raw) {
+        std::vector<size_t> shape = {M, static_cast<size_t>(plan.n_blocks), 1 + T};
+        py::array_t<double> raw(shape);
+        raw_ptr = raw.mutable_data();
+        std::fill(raw_ptr, raw_ptr + M * static_cast<size_t>(plan.n_blocks) * (1 + T), nan);
+        raw_obj = raw;
+    }
+    if (M > 0) {
+        const double* G_ptr = static_cast<const double*>(G_buf.ptr);
+        double* bp = beta.mutable_data();
+        double* sp = se.mutable_data();
+        double* dp = d.mutable_data();
+        py::gil_scoped_release gil_release;
+        run_fast(G_ptr, N, M, plan, min_mac, min_var, n_threads, panel_width,
+                 raw_ptr, nullptr, nullptr, nullptr, bp, sp, dp, rowmap, N_src);
+    }
+    return py::make_tuple(raw_obj, beta, se, d);
 }
 
 }  // namespace gmoq_fast

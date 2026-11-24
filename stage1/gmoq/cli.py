@@ -46,6 +46,7 @@ from typing import Optional, List, Set
 
 import numpy as np
 
+from . import core as _core
 from .core import (
     compute_rif,
     compute_rif_nuisance,
@@ -56,6 +57,8 @@ from .core import (
     compute_block_scores_panel,
     compute_block_finalize_panel,
     compute_pooled_panel,
+    jackknife_beta_se_batch,
+    compute_block_jackknife_panel_fast,
     make_pooled_bin_plan,
     compute_pooled_binned,
     compute_block_finalize_panel_fast,
@@ -728,7 +731,7 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
         except (ValueError, KeyError, TypeError):
             dropped["with a non-numeric or empty phenotype"] += 1
             continue
-        if np.any(np.isnan(pheno_vals)):
+        if any(v != v for v in pheno_vals):          # NaN; avoids a numpy call per row
             dropped["with a missing (NA) phenotype"] += 1
             continue
 
@@ -742,7 +745,7 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
             except (ValueError, KeyError, TypeError):
                 dropped["with a non-numeric or empty covariate"] += 1
                 continue
-            if np.any(np.isnan(x_vals)):
+            if any(v != v for v in x_vals):
                 dropped["with a missing (NA) covariate"] += 1
                 continue
             for c, v in zip(covar_cols, x_vals):
@@ -775,6 +778,12 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
     return sample_ids, sample_aliases, y_values, X, list(covar_cols)
 
 
+# id(RIF_resid) -> (y, taus, q_tau, fhat) for the bin-prefix block kernel.  The
+# block-plan cache holds a reference to the RIF_resid it was built from, which
+# keeps the id valid for as long as the entry is used.
+_RIF_NUISANCE: dict = {}
+
+
 def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_cols: list[str],
                         X: np.ndarray, taus: np.ndarray,
                         density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
@@ -789,10 +798,14 @@ def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_col
         log_mem(f"Computing RIF matrix for {col}...")
         t_rif = time.perf_counter()
         y = np.asarray(y_values[col], dtype=np.float64)
-        rif, q_tau, _ = compute_rif(y, taus, density_method=density_method)
+        rif, q_tau, fhat = compute_rif(y, taus, density_method=density_method)
         log_mem(f"RIF build for {col}: {time.perf_counter() - t_rif:.2f}s")
-        rif_resid_list.append(rif - Q @ (Q.T @ rif))
+        rif_resid = rif - Q @ (Q.T @ rif)
+        rif_resid_list.append(rif_resid)
         q_tau_list.append(q_tau)
+        # The fast block kernel can rebuild the RIF cross-products exactly from
+        # (y, q_tau, fhat); keyed on the residual array's identity.
+        _RIF_NUISANCE[id(rif_resid)] = (y, np.asarray(taus, dtype=np.float64), q_tau, fhat)
 
     return rif_resid_list, Q, q_tau_list
 
@@ -1251,8 +1264,13 @@ def _triu_indices_cached(n_taus: int):
 
 
 def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
-                      f_cov_scale_list, all_betas_list, n_cov_elements, n_taus):
-    """Write one processed batch to the stage1 outputs."""
+                      f_cov_scale_list, all_betas_list, n_cov_elements, n_taus, jk_list=None):
+    """Write one processed batch to the stage1 outputs.
+
+    ``jk_list`` carries ``(beta, se, d_resid)`` per phenotype already formed by the
+    kernel (NaN rows are skipped); ``stats_list`` is then needed only for the
+    per-SNP covariance payload and may hold None when that is not written.
+    """
     triu = _triu_indices_cached(n_taus)
     want_cov = args.cov_mode not in COV_MODES_NO_PAYLOAD
     for p_idx, stats in enumerate(stats_list):
@@ -1262,26 +1280,38 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
         f_cov_scale = f_cov_scale_list[p_idx]
         all_betas = all_betas_list[p_idx]
 
-        for snp_stats, info in zip(stats, batch_info):
-            if np.isnan(snp_stats[0, 0]):
+        # beta/se/d_resid for the whole batch in one vectorised pass; the T x T
+        # jackknife covariance is only formed when its payload is written.
+        if jk_list is not None:
+            betas_b, ses_b, d_b = jk_list[p_idx]
+            skip = np.isnan(d_b)
+        else:
+            betas_b, ses_b, d_b = jackknife_beta_se_batch(stats, args.blocks)
+            skip = np.isnan(np.asarray(stats)[:, 0, 0])
+        lines = []
+        for j, info in enumerate(batch_info):
+            if skip[j]:
                 continue
 
-            beta, se, Sigma = compute_covariance_from_blocks(snp_stats, args.blocks)
+            beta, se = betas_b[j], ses_b[j]
+            row = [str(x) for x in info]
+            for b, s in zip(beta.tolist(), se.tolist()):
+                row.append(f'{b:.6g}')
+                row.append(f'{s:.6g}')
             # Exactly the denominator the jackknife divides by, summed over blocks.
-            d_resid = float(np.sum(snp_stats[:, 0]))
+            row.append(f'{float(d_b[j]):.9g}')
+            lines.append('\t'.join(row) + '\n')
 
-            row = list(info)
-            for b, s in zip(beta, se):
-                row.extend([f'{b:.6g}', f'{s:.6g}'])
-            row.append(f'{d_resid:.9g}')
-            f_tsv.write('\t'.join(map(str, row)) + '\n')
+            if args.output_rtau:
+                all_betas.append(beta)
 
             if not want_cov:
                 # --cov-mode pooled: Stage 2's production path reads only the
                 # pooled Sigma_0 sidecar, so the per-SNP jackknife covariance
-                # payload is computed but never written.
+                # payload is never formed.
                 continue
 
+            _, _, Sigma = compute_covariance_from_blocks(stats[j], args.blocks)
             cov_upper = Sigma[triu]
             if args.cov_dtype == 'int8':
                 scale = np.max(np.abs(cov_upper)) / 127.0
@@ -1297,9 +1327,8 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
                 # make n individual float conversions per variant.
                 f_cov.write(cov_upper.astype('<f4', copy=False).tobytes())
             f_cov_ids.write('\t'.join(map(str, info)) + '\n')
-
-            if args.output_rtau:
-                all_betas.append(beta)
+        if lines:
+            f_tsv.write(''.join(lines))
 
 
 def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
@@ -1445,6 +1474,242 @@ def _decode_variants(variants, bgen_path, bgen_indices, skipped: _SkipCount):
         yield info, normalize_chr_label(variant.chrom), dosages
 
 
+# Per-SNP output is written with gzip level 6 (the gzip CLI default), not
+# Python's 9: same content, ~2% larger, about 4x less compression CPU.
+OUTPUT_GZIP_LEVEL = 6
+
+BGEN_DECODER_AUTO = "auto"
+BGEN_DECODER_NATIVE = "native"
+BGEN_DECODER_BGEN = "bgen"
+BGEN_DECODERS = (BGEN_DECODER_AUTO, BGEN_DECODER_NATIVE, BGEN_DECODER_BGEN)
+
+
+def bgen_header_info(bgen_path: str) -> tuple[int, int, int]:
+    """Return ``(n_samples, compression, layout)`` from a BGEN file header.
+
+    compression: 0 none, 1 zlib, 2 zstd.  layout: 1 or 2.
+    """
+    with open(bgen_path, "rb") as fh:
+        head = fh.read(24)
+        if len(head) < 24:
+            raise ValueError(f"BGEN header is truncated: {bgen_path}")
+        header_len = struct.unpack_from("<I", head, 4)[0]
+        n_samples = struct.unpack_from("<I", head, 12)[0]
+        if header_len < 20:
+            raise ValueError(f"BGEN header block is too short: {bgen_path}")
+        fh.seek(4 + header_len - 4)
+        flags = struct.unpack("<I", fh.read(4))[0]
+    return n_samples, flags & 0x3, (flags >> 2) & 0xF
+
+
+def bgi_record_sizes(bgen_path: str, offsets: List[int]) -> dict:
+    """Map each ``file_start_position`` in ``offsets`` to its ``size_in_bytes`` from the .bgi."""
+    conn = sqlite3.connect(f"{bgen_path}.bgi")
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE TEMP TABLE wanted_offset (pos INTEGER PRIMARY KEY)")
+        cur.executemany("INSERT OR IGNORE INTO wanted_offset (pos) VALUES (?)",
+                        ((int(o),) for o in offsets))
+        rows = cur.execute(
+            "SELECT v.file_start_position, v.size_in_bytes FROM Variant v "
+            "JOIN wanted_offset w ON v.file_start_position = w.pos"
+        ).fetchall()
+    finally:
+        conn.close()
+    sizes = {int(pos): int(size) for pos, size in rows}
+    missing = [o for o in offsets if int(o) not in sizes]
+    if missing:
+        raise ValueError(f"{len(missing)} BGEN records have no size in the .bgi index")
+    return sizes
+
+
+def native_bgen_decoder_reason(bgen_path: str, variants) -> Optional[str]:
+    """Why the native decoder cannot be used for this input, or None if it can."""
+    if not _core.HAVE_CPP or not hasattr(_core.cpp_ext, "bgen_decode_file_block"):
+        return "the compiled extension has no native BGEN decoder"
+    if not isinstance(variants, SeekingVariantGenerator):
+        return "it needs indexed (.bgi) access to a --snps selection"
+    _, compression, layout = bgen_header_info(bgen_path)
+    if layout != 2:
+        return f"BGEN layout {layout} (only layout 2 is decoded natively)"
+    if compression not in (0, 1):
+        return "zstd compression (only zlib and uncompressed are decoded natively)"
+    return None
+
+
+_NATIVE_STATUS_NON_BIALLELIC = 1
+_NATIVE_STATUS_UNSUPPORTED = 2
+
+
+def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCount,
+                            n_threads: int = 1, block_size: int = 256):
+    """Native counterpart of :func:`_decode_variants`: same tuples, same order.
+
+    Each block of records is read (one ``pread`` per record, n_threads in
+    flight), inflated and decoded in parallel in C++ with the GIL released.  Dosages are the exact float64 allele-1 expected count
+    ``(2*v0 + v1) / (2^B - 1)``; the ``bgen`` path returns float32, so values
+    differ from it by up to ~3e-7.  Records the native decoder does not handle
+    (phased, non-diploid) raise rather than being silently dropped.
+
+    Each yielded dosage array is a view into a block buffer that is reused for
+    the next block: copy it before advancing the generator (the batch loop does).
+    """
+    n_samples, compression, _ = bgen_header_info(bgen_path)
+    sample_idx = np.ascontiguousarray(bgen_indices, dtype=np.int64)
+    offsets = [int(rec[0]) for rec in records]
+    sizes = bgi_record_sizes(bgen_path, offsets)
+    block_size = max(1, int(block_size))
+    out = np.empty((len(sample_idx), block_size), dtype=np.float64, order="F")
+    fd = os.open(bgen_path, os.O_RDONLY)
+    try:
+        for start in range(0, len(offsets), block_size):
+            chunk = offsets[start:start + block_size]
+            meta = _core.cpp_ext.bgen_decode_file_block(
+                fd, np.asarray(chunk, dtype=np.int64),
+                np.asarray([sizes[off] for off in chunk], dtype=np.int64),
+                sample_idx, out, compression, n_samples, int(n_threads))
+            for j, (status, rsid, chrom, pos, a0, a1, err) in enumerate(meta):
+                if status == _NATIVE_STATUS_NON_BIALLELIC:
+                    skipped.non_biallelic += 1
+                    continue
+                if status != 0:
+                    kind = "unsupported" if status == _NATIVE_STATUS_UNSUPPORTED else "corrupt"
+                    raise ValueError(
+                        f"BGEN record at offset {chunk[j]} is {kind} for the native decoder "
+                        f"({err}); rerun with --bgen-decoder bgen"
+                    )
+                info = (rsid, chrom, pos, a0, a1)
+                yield info, normalize_chr_label(chrom), out[:, j]
+    finally:
+        os.close(fd)
+
+
+def _coalesced_record_reader(fd, offsets, sizes, max_gap: int, max_window: int,
+                             queue_records: int):
+    """Yield each record's bytes, in order, from large sequential window reads.
+
+    Records whose gap to the previous one is at most ``max_gap`` bytes are read in
+    one ``pread`` of up to ``max_window`` bytes (gaps included) and sliced out.  A
+    single background thread does the reading so it overlaps decoding.  On
+    network filesystems this is much faster than one read per record: measured
+    on BluePebble's NFS, 0.88 ms/record (1 MiB gap, 1 thread) against 1.41 for
+    single-record reads and 2.1-2.3 with 8-16 concurrent readers.
+    """
+    import queue
+    import threading
+
+    q = queue.Queue(maxsize=max(1, int(queue_records)))
+    stop = threading.Event()
+
+    def produce():
+        try:
+            n = len(offsets)
+            i = 0
+            while i < n and not stop.is_set():
+                start = offsets[i]
+                end = start + sizes[offsets[i]]
+                j = i + 1
+                while j < n:
+                    o = offsets[j]
+                    e = o + sizes[o]
+                    if o < start or o - end > max_gap or e - start > max_window:
+                        break
+                    end = max(end, e)
+                    j += 1
+                buf = os.pread(fd, end - start, start)
+                if len(buf) != end - start:
+                    raise OSError(f"short read at BGEN offset {start}")
+                mv = memoryview(buf)
+                for k in range(i, j):
+                    o = offsets[k] - start
+                    q.put(bytes(mv[o:o + sizes[offsets[k]]]))
+                    if stop.is_set():
+                        return
+                i = j
+        except BaseException as exc:          # surfaced on the consumer side
+            q.put(exc)
+
+    t = threading.Thread(target=produce, name="bgen-read", daemon=True)
+    t.start()
+    try:
+        for _ in range(len(offsets)):
+            item = q.get()
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stop.set()
+        while t.is_alive():                   # unblock a producer waiting on a full queue
+            try:
+                q.get_nowait()
+            except Exception:
+                pass
+            t.join(timeout=0.05)
+
+
+def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount,
+                           n_threads: int, batch_size: int, get_buffer,
+                           coalesce_gap: int = 1 << 20, max_window: int = 32 << 20):
+    """Decode whole batches straight into the pipeline's genotype buffer.
+
+    Yields ``(batch_info, chrom_label, k)`` with the batch's dosages already in
+    ``get_buffer()[:, :k]``, in file order.  Batches never span a chromosome, so
+    a LOCO switch always falls on a batch boundary.  ``get_buffer`` is called
+    once per batch, when the batch is decoded, so it must return the buffer the
+    caller will submit next (the pipeline flips buffers on submit).  Values are
+    exactly those :func:`_decode_variants_native` yields; this just skips the
+    per-variant Python and the column copy.
+    """
+    n_samples, compression, _ = bgen_header_info(bgen_path)
+    sample_idx = np.ascontiguousarray(bgen_indices, dtype=np.int64)
+    offsets = [int(rec[0]) for rec in records]
+    sizes = bgi_record_sizes(bgen_path, offsets)
+    chroms = [normalize_chr_label(rec[1]) for rec in records]
+    batch_size = max(1, int(batch_size))
+    # Batch boundaries: at most batch_size records, never across a chromosome.
+    n = len(offsets)
+    spans = []
+    start = 0
+    while start < n:
+        stop = start + 1
+        while stop < n and stop - start < batch_size and chroms[stop] == chroms[start]:
+            stop += 1
+        spans.append((start, stop))
+        start = stop
+
+    fd = os.open(bgen_path, os.O_RDONLY)
+    reader = _coalesced_record_reader(fd, offsets, sizes, max_gap=int(coalesce_gap),
+                                      max_window=int(max_window),
+                                      queue_records=3 * batch_size)
+    try:
+        for start, stop in spans:
+            raw = [next(reader) for _ in range(stop - start)]
+            chunk = offsets[start:stop]
+            out = get_buffer()
+            meta = _core.cpp_ext.bgen_decode_block(raw, sample_idx, out, compression,
+                                                   n_samples, int(n_threads))
+            keep, batch_info = [], []
+            for j, (status, rsid, chrom, pos, a0, a1, err) in enumerate(meta):
+                if status == _NATIVE_STATUS_NON_BIALLELIC:
+                    skipped.non_biallelic += 1
+                    continue
+                if status != 0:
+                    kind = "unsupported" if status == _NATIVE_STATUS_UNSUPPORTED else "corrupt"
+                    raise ValueError(
+                        f"BGEN record at offset {chunk[j]} is {kind} for the native decoder "
+                        f"({err}); rerun with --bgen-decoder bgen"
+                    )
+                keep.append(j)
+                batch_info.append((rsid, chrom, pos, a0, a1))
+            if len(keep) < len(chunk) and keep:
+                out[:, :len(keep)] = out[:, keep]        # rare: drop non-biallelic columns
+            if keep:
+                yield batch_info, chroms[start], len(keep)
+    finally:
+        reader.close()
+        os.close(fd)
+
+
 class _BatchPipeline:
     """Overlap BGEN decoding with the kernel by running batches on a worker thread.
 
@@ -1521,6 +1786,9 @@ def _get_block_plan(kernel_state, RIF_resid, Q, block_ids, args):
             and kernel_state.get('plan') is not None):
         return kernel_state['plan']
     plan = make_block_plan(RIF_resid, Q, block_ids, args.blocks, n_threads=args.threads)
+    nuisance = _RIF_NUISANCE.get(id(RIF_resid))
+    if getattr(args, 'bin_kernel', True) and nuisance is not None and hasattr(plan, 'set_bins'):
+        plan.set_bins(*nuisance)
     kernel_state['rif'] = RIF_resid
     kernel_state['q'] = Q
     kernel_state['plan'] = plan
@@ -1586,8 +1854,20 @@ def sample_match_verdict(match_frac, min_sample_match):
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
                    f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
                    all_betas_list, n_cov_elements, T, sigma0_sd_list=None,
-                   kernel_state=None, pooled_plan_list=None):
-    """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
+                   kernel_state=None, pooled_plan_list=None, rowmap=None):
+    """Run the kernel over one batch and write it out. Returns (compute_s, write_s).
+
+    ``rowmap`` (``--jobs``): ``G_view`` holds every BGEN sample and row
+    ``rowmap[i]`` is this analysis's sample ``i``.  The fast jackknife kernel
+    reads those rows in place; every other path gets them gathered first.
+    """
+    jk_list = None
+    fast_jk = (args.cov_mode != COV_MODE_POOLED_ONLY and not use_multi
+               and not args.fused_finalize and args.panel_kernel and not args.exact_kernel
+               and hasattr(_core.cpp_ext, 'stage1_block_jackknife_fast'))
+    if rowmap is not None and not fast_jk:
+        G_view = np.asfortranarray(np.take(G_view, rowmap, axis=0))
+        rowmap = None
     if args.cov_mode == COV_MODE_POOLED_ONLY:
         # No block_ids, no n_blocks, no (n_blocks, panel, 1+T) accumulator: the
         # kernel returns the two things the pooled analysis needs.
@@ -1640,12 +1920,20 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
         if kernel_state is None:
             kernel_state = {}
         plan = _get_block_plan(kernel_state, RIF_resid_list[0], Q, block_ids, args)
-        stats_list = [
-            compute_block_scores_panel_fast(
-                G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
-                n_threads=args.threads, panel_width=args.panel_width, plan=plan,
+        if hasattr(_core.cpp_ext, 'stage1_block_jackknife_fast'):
+            raw, jk_b, jk_se, jk_d = compute_block_jackknife_panel_fast(
+                G_view, plan, n_threads=args.threads, panel_width=args.panel_width,
+                want_raw=args.cov_mode not in COV_MODES_NO_PAYLOAD, rowmap=rowmap,
             )
-        ]
+            stats_list = [raw]
+            jk_list = [(jk_b, jk_se, jk_d)]
+        else:
+            stats_list = [
+                compute_block_scores_panel_fast(
+                    G_view, RIF_resid_list[0], Q, block_ids, args.blocks,
+                    n_threads=args.threads, panel_width=args.panel_width, plan=plan,
+                )
+            ]
         fused_list = None
     else:
         scores = compute_block_scores_panel if args.panel_kernel else compute_block_scores
@@ -1669,7 +1957,7 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
     else:
         write_stats_batch(
             stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
-            f_cov_scale_list, all_betas_list, n_cov_elements, T
+            f_cov_scale_list, all_betas_list, n_cov_elements, T, jk_list=jk_list
         )
     write_s = time.perf_counter() - t_write
     return compute_s, write_s
@@ -1793,7 +2081,163 @@ def compute_chr_pooled_plans(pheno_cols: list[str], y_values_full: dict[str, np.
     return plan_list, Q_chr, q_tau_list
 
 
-def main():
+def _strip_jobs_option(argv: list) -> list:
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a == '--jobs':
+            skip = True
+            continue
+        if a.startswith('--jobs='):
+            continue
+        out.append(a)
+    return out
+
+
+def run_jobs(argv: list, args) -> None:
+    """``--jobs``: decode the BGEN once and feed every batch to several analyses.
+
+    Each line of ``args.jobs`` is one analysis's own options; the command-line
+    options are shared.  One reader decodes each batch for all BGEN samples into
+    a ring of buffers; every job runs the ordinary single-analysis pipeline on
+    those batches (its fast kernel reads its own sample rows in place), so each
+    output is exactly what that job would produce run alone.  A buffer is
+    reused only once every job has released it.
+    """
+    import shlex
+    import threading
+    import queue as _queue
+
+    shared = _strip_jobs_option(argv)
+    with open(args.jobs) as fh:
+        job_lines = [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith('#')]
+    if not job_lines:
+        raise ValueError(f"--jobs file {args.jobs} lists no jobs")
+    for ln in job_lines:
+        toks = shlex.split(ln)
+        for opt in ('--bgen', '--sample', '--snps', '--taus', '--batch-size', '--jobs'):
+            if opt in toks or any(t.startswith(opt + '=') for t in toks):
+                raise ValueError(f"{opt} is shared by all jobs; give it on the command line, "
+                                 f"not in the jobs file (line: {ln!r})")
+    J = len(job_lines)
+    if not args.snps:
+        raise ValueError("--jobs needs --snps (indexed record access)")
+    snp_list = load_snps_list(args.snps)
+    variants, bgen_samples, _handle = get_variants_bgen(
+        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
+        seek_variants=args.seek_variants)
+    reason = native_bgen_decoder_reason(args.bgen, variants)
+    if reason is not None:
+        raise ValueError(f"--jobs needs the native BGEN decoder: {reason}")
+    n_file = len(bgen_samples)
+    per_job_threads = max(1, int(args.threads) // J)
+    log_mem(f"--jobs: {J} analyses share one BGEN pass "
+            f"({per_job_threads} kernel thread(s) each, {args.threads} decode threads)")
+
+    R = 3
+    ring = [np.empty((n_file, args.batch_size), dtype=np.float64, order='F') for _ in range(R)]
+    refs = [0] * R
+    cond = threading.Condition()
+    abort = threading.Event()
+    queues = [_queue.Queue() for _ in range(J)]
+    errors = [None] * J
+    next_slot = [0]
+    reader_alive = threading.Event()
+    reader_alive.set()
+
+    def get_buffer():
+        slot = next_slot[0]
+        with cond:
+            while refs[slot] > 0 and not abort.is_set():
+                cond.wait(0.1)
+        if abort.is_set():
+            raise RuntimeError("a --jobs analysis failed")
+        return ring[slot]
+
+    def make_release(slot):
+        def release():
+            with cond:
+                refs[slot] -= 1
+                cond.notify_all()
+        return release
+
+    def source(j):
+        q = queues[j]
+        done = False
+        try:
+            while True:
+                item = q.get()
+                if item is None:
+                    done = True
+                    return
+                yield item
+        finally:
+            # On early exit (error) keep releasing so the reader never blocks.
+            while not done:
+                item = q.get()
+                if item is None:
+                    break
+                item[4]()
+
+    def run_one(j, line):
+        job_argv = shared + shlex.split(line) + ['--threads', str(per_job_threads)]
+        src = source(j)
+        try:
+            main(job_argv, geno_source=src)
+        except BaseException as exc:
+            errors[j] = exc
+            abort.set()
+            logger.exception(f"--jobs analysis {j + 1} failed: {line}")
+        finally:
+            src.close()
+            # If the generator never started, nothing above drained its queue.
+            while True:
+                try:
+                    item = queues[j].get(timeout=0.05)
+                except _queue.Empty:
+                    if not reader_alive.is_set():
+                        break
+                    continue
+                if item is None:
+                    break
+                item[4]()
+
+    threads = [threading.Thread(target=run_one, args=(j, ln), name=f"job{j + 1}")
+               for j, ln in enumerate(job_lines)]
+    for t in threads:
+        t.start()
+
+    skipped = _SkipCount()
+    try:
+        batches = _decode_batches_native(
+            variants.records, args.bgen, np.arange(n_file), skipped,
+            n_threads=args.threads, batch_size=args.batch_size, get_buffer=get_buffer,
+            coalesce_gap=int(args.bgen_coalesce_gap * (1 << 20)))
+        for batch_info, chrom, k in batches:
+            slot = next_slot[0]
+            with cond:
+                refs[slot] = J
+            release = make_release(slot)
+            for q in queues:
+                q.put((batch_info, chrom, ring[slot], k, release))
+            next_slot[0] = (slot + 1) % R
+    finally:
+        for q in queues:
+            q.put(None)
+        reader_alive.clear()
+        for t in threads:
+            t.join()
+    failed = [(j, e) for j, e in enumerate(errors) if e is not None]
+    if failed:
+        j, e = failed[0]
+        raise RuntimeError(f"{len(failed)} of {J} --jobs analyses failed; first: "
+                           f"line {j + 1}: {e}") from e
+    log_mem(f"--jobs: all {J} analyses finished")
+
+
+def main(argv=None, geno_source=None):
     parser = argparse.ArgumentParser(
         description="G-MoQ Stage 1: Fast RIF quantile GWAS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1803,14 +2247,14 @@ def main():
     # Required arguments
     parser.add_argument('--bgen', required=True,
                         help='Path to BGEN file')
-    parser.add_argument('--pheno', required=True,
+    parser.add_argument('--pheno', required=False,
                         help='Path to phenotype file (space-delimited, with FID IID and phenotype column)')
     parser.add_argument('--pheno-col', dest='pheno_col', required=False,
                         help='Name of the phenotype column to analyze')
     parser.add_argument('--pheno-cols', dest='pheno_cols', default=None,
                         help='Comma-separated phenotype columns to analyze in one pass '
                              '(uses only samples with non-missing values across all phenotypes/covariates)')
-    parser.add_argument('--out', required=True,
+    parser.add_argument('--out', required=False,
                         help='Output prefix (creates {out}.stage1.tsv.gz, {out}.cov.gz)')
     
     # Optional arguments
@@ -1872,6 +2316,11 @@ def main():
                              'matrix is streamed once per panel instead of once per SNP. '
                              'Bit-identical output; single phenotype only.')
     parser.set_defaults(panel_kernel=True)
+    parser.add_argument('--no-bin-kernel', dest='bin_kernel', action='store_false',
+                        help='Form the block kernel\'s RIF cross-products with the dense '
+                             'O(N*T) sweep instead of the exact O(N) bin-prefix form '
+                             '(results agree to rounding; for A/B checks).')
+    parser.set_defaults(bin_kernel=True)
     parser.add_argument('--panel-size', dest='panel_size', type=int, default=16,
                         help='Number of SNPs per panel for the exact panel kernel '
                              '(--exact-kernel; default: 16). Ignored by the default fast '
@@ -1898,6 +2347,29 @@ def main():
                         help='Walk the BGEN record-by-record instead of seeking to .bgi file '
                              'offsets (slower; kept for validation and for BGENs with no index).')
     parser.set_defaults(seek_variants=True)
+    parser.add_argument('--jobs', dest='jobs', default=None,
+                        help='Run several complete analyses in one pass over the BGEN: a text '
+                             'file with one analysis per line, each line holding that '
+                             'analysis\'s own options (e.g. --pheno-col, --keep, --covar, '
+                             '--loco-preds, --out). Options on the command line (--bgen, '
+                             '--sample, --snps, --taus, --threads, ...) are shared by every job. '
+                             'Each record is read and decoded once for all jobs; every job\'s '
+                             'output is identical to running it on its own.')
+    parser.add_argument('--bgen-coalesce-gap', dest='bgen_coalesce_gap', type=float, default=1.0,
+                        help='Native decoder: read selected BGEN records in sequential windows, '
+                             'merging records separated by at most this many MiB (gaps are read '
+                             'and discarded). 0 reads each record on its own. Default 1.0, '
+                             'tuned on an NFS mount where large sequential reads are ~8x '
+                             'faster than small random ones.')
+    parser.add_argument('--bgen-decoder', dest='bgen_decoder', choices=list(BGEN_DECODERS),
+                        default=BGEN_DECODER_AUTO,
+                        help="How BGEN records are decoded. 'native' reads each selected "
+                             "record directly and inflates/decodes blocks of them in "
+                             "parallel in C++ (layout 2, zlib or uncompressed, unphased "
+                             "diploid), giving exact float64 dosages. 'bgen' uses the bgen "
+                             "package one record at a time (float32 dosages, the behaviour "
+                             "of earlier releases). 'auto' (default) uses native whenever "
+                             "the input supports it.")
     parser.add_argument('--allow-multiallelic-rsids', action='store_true',
                         help='Allow rsIDs that map to multiple BGEN records. By default these are excluded using the .bgi index.')
     
@@ -1980,7 +2452,19 @@ def main():
                              '(batch_size * n_samples * 8 bytes).')
     parser.set_defaults(pipeline=True)
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if not args.jobs:
+        missing = [o for o, v in (("--pheno", args.pheno), ("--out", args.out)) if not v]
+        if missing:
+            parser.error("the following arguments are required: " + ", ".join(missing))
+    if args.jobs:
+        if geno_source is not None:
+            raise ValueError("--jobs cannot be nested")
+        return run_jobs(sys.argv[1:] if argv is None else list(argv), args)
+    if geno_source is not None:
+        # Batches come from a shared decoder and are processed synchronously, so
+        # the shared buffer can be released as soon as this job has read it.
+        args.pipeline = False
     set_numpy_fallback_allowed(args.allow_numpy_fallback)
     require_cpp_extension("gmoq-stage1 CLI")
     warn_if_no_openmp(args.threads)
@@ -2109,6 +2593,19 @@ def main():
     # bgen does not expose bit depth on its Python variant object.  It is a per-record
     # field, so each selected variant gets a bounded preamble probe; production 8-bit
     # records still use the native vectorised dosage path after that small check.
+    native_reason = None
+    if geno_source is not None:
+        args.bgen_decoder = BGEN_DECODER_BGEN       # this job decodes nothing itself
+    if args.bgen_decoder != BGEN_DECODER_BGEN:
+        native_reason = native_bgen_decoder_reason(args.bgen, variants)
+        if native_reason is not None and args.bgen_decoder == BGEN_DECODER_NATIVE:
+            raise ValueError(f"--bgen-decoder native is unavailable: {native_reason}")
+    use_native_bgen = args.bgen_decoder != BGEN_DECODER_BGEN and native_reason is None
+    if use_native_bgen:
+        log_mem("Decoding BGEN records natively (parallel zlib + exact float64 dosages)")
+    elif args.bgen_decoder == BGEN_DECODER_AUTO:
+        log_mem(f"Decoding BGEN records with the bgen package: {native_reason}")
+    native_records = variants.records if use_native_bgen else None
     variants = iter(variants)
     
     # Match samples
@@ -2263,7 +2760,8 @@ def main():
     # Process in batches
     total_snps = 0
     skip_counter = _SkipCount()
-    pipeline = _BatchPipeline(bool(args.pipeline), N_matched, args.batch_size)
+    pipeline = _BatchPipeline(bool(args.pipeline), N_matched,
+                              0 if geno_source is not None else args.batch_size)
     G_batch = pipeline.batch_buffer
     batch_info = []
     
@@ -2275,22 +2773,65 @@ def main():
 
     write_cov_payload = args.cov_mode not in COV_MODES_NO_PAYLOAD
 
+    def _switch_chromosome(variant_chr):
+        """Drain the in-flight batch and rebuild RIF/Q (and Sigma_0) for a new LOCO chromosome."""
+        nonlocal total_compute, total_write, pooled_plan_list, Q, q_tau_list, RIF_resid_list
+        nonlocal sigma0_sd_list, sigma0_seconds, active_chr
+        # The RIF/Q the worker reads are about to be replaced, so the
+        # in-flight batch has to finish before they are.
+        compute_s, write_s = pipeline.drain()
+        total_compute += compute_s
+        total_write += write_s
+
+        if args.loco_mode == LOCO_MODE_COVARIATE:
+            log_mem(f"Adding the LOCO prediction for chromosome {variant_chr} "
+                    f"to the residualising basis")
+        else:
+            log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
+        if use_pooled_bin:
+            pooled_plan_list, Q, q_tau_list = compute_chr_pooled_plans(
+                pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                loco_scales, density_method=args.density_method,
+                loco_mode=args.loco_mode, n_threads=args.threads
+            )
+            RIF_resid_list = None
+        else:
+            RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
+                pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                loco_scales, density_method=args.density_method,
+                loco_mode=args.loco_mode
+            )
+        if args.sigma0:
+            t_s0 = time.perf_counter()
+            if use_pooled_bin:
+                for p_idx, plan in enumerate(pooled_plan_list):
+                    sigma0_by_chr[p_idx][variant_chr] = plan.sigma0()
+            else:
+                for p_idx, rif in enumerate(RIF_resid_list):
+                    sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
+            sigma0_sd_list = [
+                np.sqrt(np.diag(sigma0_by_chr[p_idx][variant_chr]))
+                for p_idx in range(len(pheno_cols))
+            ]
+            sigma0_seconds += time.perf_counter() - t_s0
+        active_chr = variant_chr
+
     with ExitStack() as stack:
-        f_tsv_list = [stack.enter_context(gzip.open(path, 'wt')) for path in out_tsv_list]
+        f_tsv_list = [stack.enter_context(gzip.open(path, 'wt', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_tsv_list]
         # Under --cov-mode pooled the per-SNP payload is not produced at all, so
         # its files are never created rather than created empty: an empty
         # .cov.gz would look to Stage 2 like a truncated jackknife payload.
         f_cov_list = (
-            [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_list]
+            [stack.enter_context(gzip.open(path, 'wb', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_cov_list]
             if write_cov_payload else [None for _ in out_cov_list]
         )
         f_cov_scale_list = (
-            [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_scale_list]
+            [stack.enter_context(gzip.open(path, 'wb', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_cov_scale_list]
             if (write_cov_payload and args.cov_dtype == 'int8')
             else [None for _ in out_cov_scale_list]
         )
         f_cov_ids_list = (
-            [stack.enter_context(gzip.open(path, 'wt')) for path in out_cov_ids_list]
+            [stack.enter_context(gzip.open(path, 'wt', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_cov_ids_list]
             if write_cov_payload else [None for _ in out_cov_ids_list]
         )
         for f_tsv in f_tsv_list:
@@ -2301,7 +2842,56 @@ def main():
         
         idx_in_batch = 0
 
-        decoded = _decode_variants(variants, args.bgen, bgen_indices, skip_counter)
+        if geno_source is not None:
+            # Shared decoder (--jobs): every batch holds all BGEN samples; this
+            # job's kernel reads its own rows (bgen_indices) in place.
+            for batch_info, variant_chr, G_all, k, release in geno_source:
+                try:
+                    if loco_predictions is not None and variant_chr != active_chr:
+                        _switch_chromosome(variant_chr)
+                    compute_s, write_s = pipeline.submit(
+                        _process_batch,
+                        G_all[:, :k], RIF_resid_list, Q, block_ids, batch_info,
+                        args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
+                        f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                        sigma0_sd_list, kernel_state, pooled_plan_list,
+                        rowmap=bgen_indices,
+                    )
+                finally:
+                    release()
+                total_compute += compute_s
+                total_write += write_s
+                total_snps += k
+            batch_info = []
+            decoded = ()
+        elif use_native_bgen:
+            # Whole batches are decoded in place into the buffer about to be
+            # submitted: no per-variant Python on the reader thread, no copy.
+            native_batches = _decode_batches_native(
+                native_records, args.bgen, bgen_indices, skip_counter,
+                n_threads=args.threads, batch_size=args.batch_size,
+                get_buffer=lambda: pipeline.batch_buffer,
+                coalesce_gap=int(args.bgen_coalesce_gap * (1 << 20)))
+            for batch_info, variant_chr, k in native_batches:
+                if loco_predictions is not None and variant_chr != active_chr:
+                    _switch_chromosome(variant_chr)
+                compute_s, write_s = pipeline.submit(
+                    _process_batch,
+                    pipeline.batch_buffer[:, :k], RIF_resid_list, Q, block_ids, batch_info,
+                    args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
+                    f_cov_scale_list, all_betas_list, n_cov_elements, T,
+                    sigma0_sd_list, kernel_state, pooled_plan_list
+                )
+                total_compute += compute_s
+                total_write += write_s
+                total_snps += k
+                elapsed = time.perf_counter() - t_batches
+                log_mem(f"Processed {total_snps} SNPs ({total_snps/elapsed:.1f} SNPs/s)")
+            batch_info = []
+            G_batch = pipeline.batch_buffer
+            decoded = ()
+        else:
+            decoded = _decode_variants(variants, args.bgen, bgen_indices, skip_counter)
 
         for info, variant_chr, dosages in decoded:
             if loco_predictions is not None and variant_chr != active_chr:
@@ -2320,44 +2910,7 @@ def main():
                     batch_info = []
                     G_batch = pipeline.batch_buffer
 
-                # The RIF/Q the worker reads are about to be replaced, so the
-                # in-flight batch has to finish before they are.
-                compute_s, write_s = pipeline.drain()
-                total_compute += compute_s
-                total_write += write_s
-
-                if args.loco_mode == LOCO_MODE_COVARIATE:
-                    log_mem(f"Adding the LOCO prediction for chromosome {variant_chr} "
-                            f"to the residualising basis")
-                else:
-                    log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
-                if use_pooled_bin:
-                    pooled_plan_list, Q, q_tau_list = compute_chr_pooled_plans(
-                        pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                        loco_scales, density_method=args.density_method,
-                        loco_mode=args.loco_mode, n_threads=args.threads
-                    )
-                    RIF_resid_list = None
-                else:
-                    RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
-                        pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                        loco_scales, density_method=args.density_method,
-                        loco_mode=args.loco_mode
-                    )
-                if args.sigma0:
-                    t_s0 = time.perf_counter()
-                    if use_pooled_bin:
-                        for p_idx, plan in enumerate(pooled_plan_list):
-                            sigma0_by_chr[p_idx][variant_chr] = plan.sigma0()
-                    else:
-                        for p_idx, rif in enumerate(RIF_resid_list):
-                            sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
-                    sigma0_sd_list = [
-                        np.sqrt(np.diag(sigma0_by_chr[p_idx][variant_chr]))
-                        for p_idx in range(len(pheno_cols))
-                    ]
-                    sigma0_seconds += time.perf_counter() - t_s0
-                active_chr = variant_chr
+                _switch_chromosome(variant_chr)
 
             G_batch[:, idx_in_batch] = dosages
             batch_info.append(info)

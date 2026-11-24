@@ -690,6 +690,27 @@ def compute_block_scores_panel_fast(G: np.ndarray, Y_resid: np.ndarray, Q: np.nd
     )
 
 
+def compute_block_jackknife_panel_fast(G: np.ndarray, plan, min_mac: float = 5.0,
+                                      min_var: float = 1e-8, n_threads: int = 1,
+                                      panel_width: int = 0, want_raw: bool = False,
+                                      rowmap: Optional[np.ndarray] = None):
+    """Fast block kernel with the jackknife ``beta``/``se``/``d_resid`` formed in C++.
+
+    Returns ``(raw, beta (M, T), se (M, T), d_resid (M,))``; ``raw`` is the
+    ``(M, n_blocks, 1+T)`` block statistics when ``want_raw`` (needed only for
+    the per-SNP covariance payload), else None.  Same definitions as
+    :func:`jackknife_beta_se_batch`, to rounding.
+
+    ``rowmap`` (optional) gives, for each of the plan's samples, its row in ``G``,
+    so a ``G`` decoded for a superset of samples is read in place, without a copy.
+    """
+    require_cpp_extension("Fast panel block-score kernel")
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    rm = None if rowmap is None else np.ascontiguousarray(rowmap, dtype=np.int64)
+    return cpp_ext.stage1_block_jackknife_fast(G_f, plan, min_mac, min_var, n_threads,
+                                               panel_width, bool(want_raw), rm)
+
+
 def compute_block_finalize(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
                            block_ids: np.ndarray, n_blocks: int,
                            min_mac: float = 5.0, min_var: float = 1e-8,
@@ -912,6 +933,36 @@ def compute_covariance_from_blocks(stats: np.ndarray, n_blocks: int) -> Tuple[np
     se = np.sqrt(np.diag(Sigma))
     
     return beta, se, Sigma
+
+
+def jackknife_beta_se_batch(stats: np.ndarray, n_blocks: int
+                            ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Jackknife ``beta`` and ``se`` for a whole batch, without the T x T covariance.
+
+    ``stats`` is ``(M, n_blocks, 1+T)``.  Returns ``beta (M, T)``, ``se (M, T)``
+    and ``d_resid (M,)``.  ``beta``, ``d_resid`` and every leave-one-out beta use
+    the same reductions as :func:`compute_covariance_from_blocks`; ``se`` is the
+    square root of the same diagonal, summed directly instead of read off a
+    ``centered.T @ centered`` product, so it can differ in the last bit.  SNPs whose
+    ``D_total <= 0`` get NaN, as there.
+    """
+    stats = np.asarray(stats, dtype=np.float64)
+    D_k = stats[:, :, 0]
+    N_k = stats[:, :, 1:]
+    D_total = np.sum(D_k, axis=1)
+    N_total = np.sum(N_k, axis=1)
+    denom = D_total[:, None] - D_k
+    usable = denom > 0
+    jk = np.zeros_like(N_k)
+    np.divide(N_total[:, None, :] - N_k, denom[:, :, None], out=jk, where=usable[:, :, None])
+    centered = jk - np.mean(jk, axis=1, keepdims=True)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        beta = N_total / D_total[:, None]
+        se = np.sqrt(((n_blocks - 1) / n_blocks) * np.einsum('mbt,mbt->mt', centered, centered))
+    bad = ~(D_total > 0)
+    beta[bad] = np.nan
+    se[bad] = np.nan
+    return beta, se, D_total
 
 
 def run_stage1(G: np.ndarray, Y: np.ndarray, 

@@ -18,6 +18,7 @@ namespace py = pybind11;
 
 #include "stage1_fast.hpp"
 #include "stage1_pooled_fast.hpp"
+#include "stage1_bgen_decode.hpp"
 
 namespace {
 
@@ -1597,6 +1598,24 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1, py::arg("panel_size") = 16);
 
+    m.def("bgen_decode_block", &gmoq_bgen::decode_block,
+          "Decode raw BGEN layout-2 records (list of bytes) into out[:, :len(records)]:\n"
+          "exact float64 allele-1 dosage (2*P11 + P12) for the samples in sample_idx,\n"
+          "NaN where missing. Returns (status, rsid, chrom, pos, allele0, allele1, error)\n"
+          "per record; status 0 ok, 1 non-biallelic, 2 unsupported, 3 corrupt.",
+          py::arg("records"), py::arg("sample_idx"), py::arg("out"),
+          py::arg("compression"), py::arg("n_samples"), py::arg("n_threads") = 1);
+
+    m.def("bgen_built_with_libdeflate", &gmoq_bgen::built_with_libdeflate,
+          "True if the native BGEN decoder inflates with libdeflate (else zlib).");
+
+    m.def("bgen_decode_file_block", &gmoq_bgen::decode_file_block,
+          "As bgen_decode_block, but each worker preads its records from fd at the\n"
+          "given .bgi offsets/sizes, keeping n_threads reads in flight.",
+          py::arg("fd"), py::arg("offsets"), py::arg("sizes"), py::arg("sample_idx"),
+          py::arg("out"), py::arg("compression"), py::arg("n_samples"),
+          py::arg("n_threads") = 1);
+
     py::class_<gmoq_pooled::PooledBinPlan>(m, "PooledBinPlan",
           "O(N) bin-prefix plan for pooled Stage 1: assigns each sample to one\n"
           "quantile bin and precomputes Q^T RIF and Sigma_0 without allocating\n"
@@ -1654,6 +1673,11 @@ PYBIND11_MODULE(_stage1_cpp, m) {
                       py::array_t<int32_t>, int, int>(),
              py::arg("RIF_resid"), py::arg("Q"), py::arg("block_ids"),
              py::arg("n_blocks"), py::arg("n_threads") = 1)
+        .def("set_bins", &gmoq_fast::BlockPlan::set_bins,
+             "Switch the kernel to the exact bin-prefix form of the RIF cross-products\n"
+             "(y, taus, q_tau, fhat as used to build RIF).",
+             py::arg("y"), py::arg("taus"), py::arg("q_tau"), py::arg("fhat"))
+        .def_readonly("has_bins", &gmoq_fast::BlockPlan::has_bins)
         .def_readonly("N", &gmoq_fast::BlockPlan::N)
         .def_readonly("T", &gmoq_fast::BlockPlan::T)
         .def_readonly("K", &gmoq_fast::BlockPlan::K)
@@ -1671,6 +1695,13 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           },
           "Per-pass wall clock of the last fast-kernel call: "
           "(mac_filter, alloc, pack_tile, sweep, qtg, correct_finalize). Profiling only.");
+
+    m.def("stage1_block_jackknife_fast", &gmoq_fast::block_jackknife_fast,
+          "Fast panel kernel + jackknife beta/se/d_resid in C++; raw block stats too if want_raw",
+          py::arg("G"), py::arg("plan"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_width") = 0, py::arg("want_raw") = false,
+          py::arg("rowmap") = py::none());
 
     m.def("stage1_block_scores_panel_fast", &gmoq_fast::block_scores_fast,
           "Fast panel kernel returning raw (M, n_blocks, 1+T) block statistics",

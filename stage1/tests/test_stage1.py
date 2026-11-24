@@ -390,3 +390,253 @@ def test_pooled_kernels_exact_with_near_constant_column_and_no_intercept():
     scale = np.std(ref_b)
     assert np.max(np.abs(fast_b - ref_b)) < 1e-9 * scale
     assert np.max(np.abs(bin_b - ref_b)) < 1e-9 * scale
+# ---------------------------------------------------------------------------
+# native BGEN decoder
+# ---------------------------------------------------------------------------
+
+def _write_bgen(path, probs_list, bit_depths, compression):
+    from bgen import BgenWriter
+    n = probs_list[0].shape[0]
+    samples = [f"S{i:04d}" for i in range(n)]
+    with BgenWriter(str(path), n_samples=n, samples=samples, compression=compression) as w:
+        for j, (p, b) in enumerate(zip(probs_list, bit_depths)):
+            w.add_variant(varid=f"v{j}", rsid=f"rs{j}", chrom="7", pos=100 * (j + 1),
+                          alleles=["A", "T"], genotypes=p, bit_depth=b)
+    return samples
+
+
+@pytest.mark.parametrize("compression", ["zlib", None])
+def test_native_decoder_matches_bgen_package(tmp_path, compression):
+    if not hasattr(core.cpp_ext, "bgen_decode_block"):
+        pytest.skip("extension built without the native BGEN decoder")
+    rng = np.random.default_rng(7)
+    n = 257
+    bit_depths = [1, 3, 8, 8, 12, 16, 23, 32]
+    probs_list = []
+    for b in bit_depths:
+        p = rng.dirichlet([0.6, 0.8, 1.0], size=n)
+        p[rng.random(n) < 0.05] = np.nan           # missing samples
+        probs_list.append(p)
+    path = tmp_path / "g.bgen"
+    _write_bgen(path, probs_list, bit_depths, compression)      # BgenWriter writes the .bgi too
+
+    variants, _, handle = cli.get_variants_bgen(str(path), None, [f"rs{j}" for j in range(len(bit_depths))])
+    assert isinstance(variants, cli.SeekingVariantGenerator)
+    assert cli.native_bgen_decoder_reason(str(path), variants) is None
+
+    idx = rng.permutation(n)[: n - 20]               # subset, out of order
+    ref = {}
+    for v in variants:
+        bits = cli._variant_bit_depth(v, bgen_path=str(path))
+        ref[v.rsid] = (bits, cli.extract_dosage(v, probability_bit_depth=bits)[idx])
+
+    skipped = cli._SkipCount()
+    # Yielded columns are views into a reused block buffer: copy before the next item.
+    got = [(i, c, d.copy()) for i, c, d in
+           cli._decode_variants_native(variants.records, str(path), idx, skipped,
+                                       n_threads=2, block_size=3)]
+    assert [g[0][0] for g in got] == sorted(ref, key=lambda r: int(r[2:]))
+    for info, chrom, dos in got:
+        bits, want = ref[info[0]]
+        assert info[1:] == ("7", 100 * (int(info[0][2:]) + 1), "A", "T") and chrom == "7"
+        assert np.array_equal(np.isnan(dos), np.isnan(want))
+        ok = ~np.isnan(want)
+        # bgen returns float32; native is the exact float64 of the stored integers
+        np.testing.assert_allclose(dos[ok], want[ok], rtol=0, atol=1e-6 if bits <= 23 else 2e-6)
+        assert np.all((dos[ok] >= 0) & (dos[ok] <= 2))
+
+
+def _indexed_copy(data, tmp_path):
+    import shutil
+    bgen = tmp_path / "indexed.bgen"
+    shutil.copy(data["bgen"], bgen)
+    _write_bgi(bgen)
+    return dict(data, bgen=bgen)
+
+
+def test_native_decoder_is_exact_for_hard_calls(data, tmp_path):
+    local = _indexed_copy(data, tmp_path)
+    variants, samples, _ = cli.get_variants_bgen(str(local["bgen"]), None, RSIDS)
+    idx = np.arange(len(samples))
+    got = [(i, c, d.copy()) for i, c, d in
+           cli._decode_variants_native(variants.records, str(local["bgen"]), idx,
+                                       cli._SkipCount(), n_threads=2, block_size=4)]
+    assert [g[0][0] for g in got] == RSIDS
+    for j, (_, _, dos) in enumerate(got):
+        assert np.array_equal(dos, data["G"][:, j])
+
+
+@pytest.mark.parametrize("cov_mode", ["pooled", "pooled-only", "full"])
+@pytest.mark.parametrize("extra", [[], ["--batch-size", "2"], ["--batch-size", "4", "LOCO"],
+                                   ["--bgen-coalesce-gap", "0"], ["--bgen-coalesce-gap", "0.0002"]])
+def test_cli_native_and_bgen_decoders_agree(data, monkeypatch, tmp_path, cov_mode, extra):
+    data = _indexed_copy(data, tmp_path)
+    extra = [x for x in extra if x != "LOCO"] + (
+        ["--loco-preds", str(data["loco"]), "--loco-mode", "covariate"] if "LOCO" in extra else [])
+    rows_nat = _run(monkeypatch, data, tmp_path / "nat", "--cov-mode", cov_mode, *extra,
+                    "--snps", str(_snps_file(tmp_path)), "--bgen-decoder", "native")
+    rows_bgen = _run(monkeypatch, data, tmp_path / "pkg", "--cov-mode", cov_mode, *extra,
+                     "--snps", str(_snps_file(tmp_path)), "--bgen-decoder", "bgen")
+    if cov_mode == "full":
+        import gzip as _gz
+        for suffix in (".cov.gz", ".cov.ids.tsv.gz"):
+            with _gz.open(f"{tmp_path / 'nat'}{suffix}", "rb") as a, _gz.open(f"{tmp_path / 'pkg'}{suffix}", "rb") as b:
+                assert a.read() == b.read()
+    assert rows_nat == rows_bgen        # hard-call genotypes: identical text output
+
+
+def _snps_file(tmp_path):
+    p = tmp_path / "snps.txt"
+    p.write_text("\n".join(RSIDS + ["rs_multi"]) + "\n")
+    return p
+
+
+def test_batch_jackknife_matches_per_snp_reference():
+    rng = np.random.default_rng(11)
+    M, B, T = 7, 50, 9
+    stats = rng.normal(size=(M, B, 1 + T))
+    stats[:, :, 0] = rng.uniform(1.0, 2.0, size=(M, B))
+    stats[3, :, 0] = 0.0                                  # D_total == 0 -> NaN
+    beta, se, d = core.jackknife_beta_se_batch(stats, B)
+    for j in range(M):
+        rb, rs, _ = core.compute_covariance_from_blocks(stats[j], B)
+        assert np.array_equal(beta[j], rb, equal_nan=True)
+        np.testing.assert_allclose(se[j], rs, rtol=1e-13, equal_nan=True)
+        assert d[j] == np.sum(stats[j, :, 0])
+
+
+@pytest.mark.parametrize("case", ["cov", "int_only", "tied", "unsorted", "no_int"])
+def test_block_kernel_bins_match_dense(case):
+    rng = np.random.default_rng({"cov": 1, "int_only": 2, "tied": 3, "unsorted": 4, "no_int": 5}[case])
+    n, m, B = 2500, 13, 40
+    taus = np.linspace(0.05, 0.95, 15)
+    if case == "unsorted":
+        taus = taus[rng.permutation(len(taus))]
+    y = rng.normal(size=n)
+    if case == "tied":
+        y = np.round(2 * y)
+    if case == "int_only":
+        X = np.ones((n, 1))
+    elif case == "no_int":
+        X = rng.normal(size=(n, 3))
+    else:
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 4))])
+    Q, _ = np.linalg.qr(X)
+    G = rng.binomial(2, 0.3, size=(n, m)).astype(float)
+    G[rng.random(G.shape) < 0.02] = np.nan
+    G[:, 0] = 0.0
+    block_ids = rng.integers(0, B, size=n).astype(np.int32)
+    rif, q_tau, fhat = core.compute_rif(y, taus)
+    rif_resid = rif - Q @ (Q.T @ rif)
+
+    dense = core.make_block_plan(rif_resid, Q, block_ids, B, n_threads=2)
+    binned = core.make_block_plan(rif_resid, Q, block_ids, B, n_threads=2)
+    binned.set_bins(y, taus, q_tau, fhat)
+    assert binned.has_bins and not dense.has_bins
+    ref = core.compute_block_scores_panel_fast(G, rif_resid, Q, block_ids, B, n_threads=2, plan=dense)
+    got = core.compute_block_scores_panel_fast(G, rif_resid, Q, block_ids, B, n_threads=2, plan=binned)
+    ref, got = np.asarray(ref), np.asarray(got)
+    assert np.array_equal(np.isnan(ref), np.isnan(got))
+    ok = ~np.isnan(ref)
+    scale = np.nanmax(np.abs(ref), axis=(0, 1), keepdims=True)
+    np.testing.assert_allclose((got / scale)[ok], (ref / scale)[ok], rtol=0, atol=1e-11)
+
+
+def test_cpp_jackknife_matches_python_batch():
+    rng = np.random.default_rng(21)
+    n, m, B = 2000, 9, 30
+    taus = np.linspace(0.1, 0.9, 7)
+    y = rng.normal(size=n)
+    Q, _ = np.linalg.qr(np.column_stack([np.ones(n), rng.normal(size=(n, 2))]))
+    G = rng.binomial(2, 0.3, size=(n, m)).astype(float)
+    G[:, 4] = 0.0                                          # filtered
+    bid = rng.integers(0, B, size=n).astype(np.int32)
+    rif, q, f = core.compute_rif(y, taus)
+    R = rif - Q @ (Q.T @ rif)
+    plan = core.make_block_plan(R, Q, bid, B)
+    plan.set_bins(y, taus, q, f)
+    raw, beta, se, d = core.compute_block_jackknife_panel_fast(G, plan, want_raw=True)
+    rb, rs, rd = core.jackknife_beta_se_batch(raw, B)
+    assert np.isnan(d[4]) and np.all(np.isnan(beta[4]))
+    np.testing.assert_allclose(beta, rb, rtol=1e-13, equal_nan=True)
+    np.testing.assert_allclose(se, rs, rtol=1e-11, equal_nan=True)
+    np.testing.assert_allclose(d[~np.isnan(d)], rd[~np.isnan(d)], rtol=1e-14)
+    raw2, *_ = core.compute_block_jackknife_panel_fast(G, plan, want_raw=False)
+    assert raw2 is None
+
+
+def test_block_kernel_rowmap_reads_superset_in_place():
+    rng = np.random.default_rng(31)
+    n_all, m, B = 3000, 7, 25
+    taus = np.linspace(0.1, 0.9, 7)
+    rows = np.sort(rng.choice(n_all, 2200, replace=False))[::-1].copy()   # subset, reversed
+    G_all = rng.binomial(2, 0.3, size=(n_all, m)).astype(float)
+    G_all[rng.random(G_all.shape) < 0.02] = np.nan
+    y = rng.normal(size=len(rows))
+    Q, _ = np.linalg.qr(np.column_stack([np.ones(len(rows)), rng.normal(size=(len(rows), 2))]))
+    bid = rng.integers(0, B, size=len(rows)).astype(np.int32)
+    rif, q, f = core.compute_rif(y, taus)
+    R = rif - Q @ (Q.T @ rif)
+    plan = core.make_block_plan(R, Q, bid, B)
+    plan.set_bins(y, taus, q, f)
+    a = core.compute_block_jackknife_panel_fast(np.asfortranarray(G_all[rows]), plan, want_raw=True)
+    b = core.compute_block_jackknife_panel_fast(G_all, plan, want_raw=True, rowmap=rows)
+    for x, z in zip(a, b):
+        assert np.array_equal(x, z, equal_nan=True)
+
+
+def _write_keep(path, ids):
+    path.write_text("\n".join(f"{s} {s}" for s in ids) + "\n")
+    return str(path)
+
+
+@pytest.mark.parametrize("threads", ["1", "3"])
+def test_jobs_outputs_identical_to_separate_runs(data, monkeypatch, tmp_path, threads):
+    local = _indexed_copy(data, tmp_path)
+    rng = np.random.default_rng(5)
+    samples = [f"S{i:04d}" for i in range(N)]
+    keep_a = _write_keep(tmp_path / "keep_a.txt", [s for s in samples if rng.random() < 0.8])
+    keep_b = _write_keep(tmp_path / "keep_b.txt", [s for s in samples if rng.random() < 0.7])
+    pheno2 = tmp_path / "pheno2.txt"
+    with pheno2.open("w") as fh:
+        fh.write("FID IID y z\n")
+        z = rng.gamma(2.0, size=N)
+        for s, v, w in zip(samples, data["y"], z):
+            fh.write(f"{s} {s} {v:.17g} {'NA' if rng.random() < 0.1 else f'{w:.17g}'}\n")
+    snps = _snps_file(tmp_path)
+    shared = ["--bgen", str(local["bgen"]), "--snps", str(snps), "--taus", TAU_ARG,
+              "--blocks", "20", "--seed", "1", "--batch-size", "2", "--threads", threads]
+    jobs = [
+        f"--pheno {pheno2} --pheno-col y --covar {local['covar']} --keep {keep_a} "
+        f"--loco-preds {local['loco']} --loco-mode covariate --cov-mode pooled --out {tmp_path / 'j1'}",
+        f"--pheno {pheno2} --pheno-col z --covar {local['covar']} --covar-col c1 "
+        f"--keep {keep_b} --cov-mode full --out {tmp_path / 'j2'}",
+        f"--pheno {pheno2} --pheno-col z --cov-mode pooled-only --out {tmp_path / 'j3'}",
+    ]
+    jf = tmp_path / "jobs.txt"
+    jf.write_text("# three analyses\n" + "\n".join(jobs) + "\n")
+    monkeypatch.setattr(sys, "argv", ["gmoq-stage1", *shared, "--jobs", str(jf)])
+    cli.main()
+    import shlex, gzip as _gz, glob, os
+    for j, line in enumerate(jobs, 1):
+        out_sep = tmp_path / f"s{j}"
+        argv = shared + shlex.split(line.replace(f"--out {tmp_path / f'j{j}'}", f"--out {out_sep}"))
+        monkeypatch.setattr(sys, "argv", ["gmoq-stage1", *argv])
+        cli.main()
+        produced = sorted(glob.glob(f"{tmp_path / f'j{j}'}.*"))
+        assert produced
+        for path in produced:
+            suffix = path[len(str(tmp_path / f"j{j}")):]
+            other = f"{out_sep}{suffix}"
+            assert os.path.exists(other), suffix
+            if path.endswith(".gz"):
+                with _gz.open(path, "rb") as a, _gz.open(other, "rb") as b:
+                    assert a.read() == b.read(), suffix
+            elif path.endswith(".json"):
+                import json
+                da, db = json.load(open(path)), json.load(open(other))
+                for d in (da, db):
+                    for key in list(d):
+                        if any(t in key for t in ("time", "date", "path", "out", "command", "host", "seconds", "file")):
+                            d.pop(key)
+                assert da == db, suffix

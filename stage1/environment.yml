@@ -8,6 +8,8 @@ dependencies:
   - bgen-reader>=4.0   # tests only: an independent BGEN decoder to check ours against
   - pybind11>=2.11
   - armadillo
+  - zlib              # native BGEN decoder (zlib.h + libz)
+  - libdeflate        # optional, ~2x faster inflate in the native BGEN decoder
   - cxx-compiler      # a C++ compiler with OpenMP support (Apple clang has none)
   - llvm-openmp
   - pytest

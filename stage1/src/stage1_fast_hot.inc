@@ -47,7 +47,9 @@ static void GMOQ_FN(sweep_block)(
     double* __restrict__ vb,      // P   (cross product against the e column)
     double* __restrict__ s2b,     // P
     double* __restrict__ accm,    // Crow * PBLK running accumulator
-    size_t STILE                  // samples per L1-resident slice
+    size_t STILE,                 // samples per L1-resident slice
+    const uint16_t* __restrict__ binv = nullptr,  // bin of each sorted sample (bins mode)
+    double* __restrict__ hacc = nullptr           // (T+1, LD) per-bin genotype sums, or null
 ) {
     const size_t C = T + K + 1;   // RIF | Q | e
 
@@ -59,9 +61,22 @@ static void GMOQ_FN(sweep_block)(
         for (size_t t0 = s0; t0 < s1; t0 += STILE) {
             const size_t t1 = std::min(s1, t0 + STILE);
 
-            for (size_t s = t0; s < t1; s++) {
-                const double* __restrict__ g = Gt + s * LD + pb;
-                for (size_t j = 0; j < static_cast<size_t>(PBLK); j++) st[j] += g[j] * g[j];
+            if (hacc == nullptr) {
+                for (size_t s = t0; s < t1; s++) {
+                    const double* __restrict__ g = Gt + s * LD + pb;
+                    for (size_t j = 0; j < static_cast<size_t>(PBLK); j++) st[j] += g[j] * g[j];
+                }
+            } else {
+                // Same pass, also summing each genotype into its quantile bin
+                // (ascending s, the order the separate bins pass used).
+                for (size_t s = t0; s < t1; s++) {
+                    const double* __restrict__ g = Gt + s * LD + pb;
+                    double* __restrict__ h = hacc + static_cast<size_t>(binv[s]) * LD + pb;
+                    for (size_t j = 0; j < static_cast<size_t>(PBLK); j++) {
+                        st[j] += g[j] * g[j];
+                        h[j] += g[j];
+                    }
+                }
             }
 
             for (size_t cb = 0; cb < C; cb += CBLK) {
@@ -260,18 +275,27 @@ static void GMOQ_FN(pack_chunk)(
     const size_t* __restrict__ cols, const double* __restrict__ gmean, size_t P,
     size_t LD, size_t i0, size_t i1,
     const int32_t* __restrict__ posv,
-    double* __restrict__ tmp, double* __restrict__ Gt
+    double* __restrict__ tmp, double* __restrict__ Gt,
+    const int64_t* __restrict__ rowmap, size_t N_src   // rowmap: sample i -> row of G (or null)
 ) {
     for (size_t p = 0; p < P; p++) {
-        const double* __restrict__ col = G_ptr + cols[p] * N;
         const double gm = gmean[p];
         double* __restrict__ dst = tmp + p;
-        for (size_t i = i0; i < i1; i++) {
-            const double v = col[i];
-            // Mean-centred: a missing dosage is imputed to the mean, so it
-            // contributes exactly zero.  Centring is what keeps the kernel's
-            // cancellation ratio near one (see stage1_fast.hpp, Numerics).
-            dst[(i - i0) * LD] = std::isfinite(v) ? (v - gm) : 0.0;
+        if (rowmap == nullptr) {
+            const double* __restrict__ col = G_ptr + cols[p] * N;
+            for (size_t i = i0; i < i1; i++) {
+                const double v = col[i];
+                // Mean-centred: a missing dosage is imputed to the mean, so it
+                // contributes exactly zero.  Centring is what keeps the kernel's
+                // cancellation ratio near one (see stage1_fast.hpp, Numerics).
+                dst[(i - i0) * LD] = std::isfinite(v) ? (v - gm) : 0.0;
+            }
+        } else {
+            const double* __restrict__ col = G_ptr + cols[p] * N_src;
+            for (size_t i = i0; i < i1; i++) {
+                const double v = col[rowmap[i]];
+                dst[(i - i0) * LD] = std::isfinite(v) ? (v - gm) : 0.0;
+            }
         }
     }
     for (size_t i = i0; i < i1; i++) {

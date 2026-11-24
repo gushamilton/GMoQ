@@ -92,17 +92,57 @@ def resolve_arch_flags(env=None):
 _arch_flags = resolve_arch_flags()
 _arma = find_armadillo()
 
+
+def find_libdeflate():
+    """(include_dir, lib_dir) of libdeflate if installed, else None.
+
+    Optional: the native BGEN decoder inflates with libdeflate when it is there
+    (about twice zlib's speed, same bytes out) and with zlib otherwise.
+    GMOQ_NO_LIBDEFLATE=1 forces zlib.
+    """
+    if os.environ.get('GMOQ_NO_LIBDEFLATE'):
+        return None
+    for prefix in (os.environ.get('LIBDEFLATE_DIR'), os.environ.get('CONDA_PREFIX'),
+                   _brew_prefix('libdeflate'), '/opt/homebrew', '/usr/local', '/usr'):
+        if not prefix:
+            continue
+        inc = os.path.join(prefix, 'include')
+        if not os.path.exists(os.path.join(inc, 'libdeflate.h')):
+            continue
+        for libdir in (os.path.join(prefix, 'lib'), os.path.join(prefix, 'lib64'),
+                       '/usr/lib/x86_64-linux-gnu', '/usr/lib/aarch64-linux-gnu'):
+            if os.path.isdir(libdir) and any(f.startswith('libdeflate.') for f in os.listdir(libdir)):
+                return inc, libdir
+    return None
+
+
+_deflate = find_libdeflate()
+_inc_dirs = [get_pybind_include()] + ([_arma[0]] if _arma else [])
+_lib_dirs = [_arma[1]] if _arma else []
+_link_args = ['-Wl,-rpath,' + _arma[1]] if _arma else []
+_libs = ['armadillo', 'z']
+_macros = []
+if _deflate:
+    _inc_dirs.append(_deflate[0])
+    if _deflate[1] not in _lib_dirs:
+        _lib_dirs.append(_deflate[1])
+        _link_args.append('-Wl,-rpath,' + _deflate[1])
+    _libs.append('deflate')
+    _macros.append(('GMOQ_HAVE_LIBDEFLATE', '1'))
+
 ext_modules = [
     Extension(
         'gmoq._stage1_cpp',
         sources=['src/stage1_pybind.cpp'],
-        depends=['src/stage1_fast.hpp', 'src/stage1_fast_hot.inc', 'src/stage1_pooled_fast.hpp'],
-        include_dirs=[get_pybind_include()] + ([_arma[0]] if _arma else []),
-        library_dirs=[_arma[1]] if _arma else [],
+        depends=['src/stage1_fast.hpp', 'src/stage1_fast_hot.inc', 'src/stage1_pooled_fast.hpp',
+                 'src/stage1_bgen_decode.hpp'],
+        include_dirs=_inc_dirs,
+        library_dirs=_lib_dirs,
         # An explicit rpath: on macOS setuptools' runtime_library_dirs emits -L only,
         # which leaves @rpath/libarmadillo unresolvable outside conda.
-        extra_link_args=['-Wl,-rpath,' + _arma[1]] if _arma else [],
-        libraries=['armadillo'],
+        extra_link_args=_link_args,
+        libraries=_libs,
+        define_macros=_macros,
         # OpenMP flags are added by BuildExt once a probe compile shows which work.
         extra_compile_args=['-std=c++14', '-O3', '-fPIC'] + _arch_flags,
         language='c++'
