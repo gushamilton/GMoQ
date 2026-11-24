@@ -21,6 +21,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <zlib.h>
+#include <unistd.h>
+#include <cerrno>
 
 #include <cstdint>
 #include <cstring>
@@ -178,34 +180,52 @@ inline void decode_record(const uint8_t* rec, size_t rec_len, int compression,
     meta.status = REC_OK;
 }
 
-// Decode a block of raw records into out[:, 0:len(records)] (Fortran order).
+inline py::array_t<double> checked_out(py::array out_any, int64_t n_out, int64_t n_rec) {
+    // Taken as a plain array and checked, never converted: a silent copy would
+    // swallow every write.
+    if (!py::isinstance<py::array_t<double>>(out_any)) {
+        throw std::runtime_error("bgen decode: out must be a float64 array");
+    }
+    auto out = py::reinterpret_borrow<py::array_t<double>>(out_any);
+    if (out.ndim() != 2 || out.shape(0) != n_out || out.shape(1) < n_rec) {
+        throw std::runtime_error("bgen decode: out must be (len(sample_idx), >= n_records)");
+    }
+    if (!out.writeable()) throw std::runtime_error("bgen decode: out must be writeable");
+    if (out.strides(0) != static_cast<py::ssize_t>(sizeof(double)) ||
+        (out.shape(1) > 1 && out.strides(1) != static_cast<py::ssize_t>(sizeof(double) * n_out))) {
+        throw std::runtime_error("bgen decode: out must be a contiguous Fortran-order float64 array");
+    }
+    return out;
+}
+
+inline void check_sample_idx(const int64_t* idx, int64_t n_out, uint32_t n_samples_file) {
+    for (int64_t m = 0; m < n_out; ++m) {
+        if (idx[m] < 0 || idx[m] >= static_cast<int64_t>(n_samples_file)) {
+            throw std::runtime_error("bgen decode: sample index out of range");
+        }
+    }
+}
+
+inline py::list meta_list(const std::vector<RecordMeta>& meta) {
+    py::list result;
+    for (const RecordMeta& m : meta) {
+        result.append(py::make_tuple(static_cast<int>(m.status), m.rsid, m.chrom, m.pos,
+                                     m.allele0, m.allele1, m.error));
+    }
+    return result;
+}
+
+// Decode a block of raw records (list of bytes) into out[:, 0:len(records)] (Fortran order).
 // Returns a list of (status, rsid, chrom, pos, allele0, allele1, error) tuples.
 inline py::list decode_block(py::list records,
                              py::array_t<int64_t, py::array::c_style | py::array::forcecast> sample_idx,
                              py::array out_any,
                              int compression, uint32_t n_samples_file, int n_threads) {
-    // Taken as a plain array and checked, never converted: a silent copy would
-    // swallow every write.
-    if (!py::isinstance<py::array_t<double>>(out_any)) {
-        throw std::runtime_error("decode_block: out must be a float64 array");
-    }
-    auto out = py::reinterpret_borrow<py::array_t<double>>(out_any);
     const int64_t n_rec = static_cast<int64_t>(records.size());
     const int64_t n_out = sample_idx.shape(0);
-    if (out.ndim() != 2 || out.shape(0) != n_out || out.shape(1) < n_rec) {
-        throw std::runtime_error("decode_block: out must be (len(sample_idx), >= n_records)");
-    }
-    if (!out.writeable()) throw std::runtime_error("decode_block: out must be writeable");
-    if (out.strides(0) != static_cast<py::ssize_t>(sizeof(double)) ||
-        (out.shape(1) > 1 && out.strides(1) != static_cast<py::ssize_t>(sizeof(double) * n_out))) {
-        throw std::runtime_error("decode_block: out must be a contiguous Fortran-order float64 array");
-    }
+    auto out = checked_out(out_any, n_out, n_rec);
     const int64_t* idx = sample_idx.data();
-    for (int64_t m = 0; m < n_out; ++m) {
-        if (idx[m] < 0 || idx[m] >= static_cast<int64_t>(n_samples_file)) {
-            throw std::runtime_error("decode_block: sample index out of range");
-        }
-    }
+    check_sample_idx(idx, n_out, n_samples_file);
 
     std::vector<const uint8_t*> ptr(n_rec);
     std::vector<size_t> len(n_rec);
@@ -237,14 +257,64 @@ inline py::list decode_block(py::list records,
             }
         }
     }
+    return meta_list(meta);
+}
 
-    py::list result;
-    for (int64_t r = 0; r < n_rec; ++r) {
-        const RecordMeta& m = meta[r];
-        result.append(py::make_tuple(static_cast<int>(m.status), m.rsid, m.chrom, m.pos,
-                                     m.allele0, m.allele1, m.error));
+// Same, but each thread preads its records from `fd` itself, so a block keeps
+// n_threads reads in flight: on a network filesystem a sparse selection of
+// records (e.g. HapMap3 out of the full imputed BGEN) is otherwise
+// latency-bound at one outstanding read.
+inline py::list decode_file_block(int fd,
+                                  py::array_t<int64_t, py::array::c_style | py::array::forcecast> offsets,
+                                  py::array_t<int64_t, py::array::c_style | py::array::forcecast> sizes,
+                                  py::array_t<int64_t, py::array::c_style | py::array::forcecast> sample_idx,
+                                  py::array out_any,
+                                  int compression, uint32_t n_samples_file, int n_threads) {
+    const int64_t n_rec = offsets.shape(0);
+    if (sizes.shape(0) != n_rec) throw std::runtime_error("bgen decode: offsets and sizes differ in length");
+    const int64_t n_out = sample_idx.shape(0);
+    auto out = checked_out(out_any, n_out, n_rec);
+    const int64_t* idx = sample_idx.data();
+    check_sample_idx(idx, n_out, n_samples_file);
+    const int64_t* off = offsets.data();
+    const int64_t* sz = sizes.data();
+    std::vector<RecordMeta> meta(n_rec);
+    double* out_ptr = out.mutable_data();
+
+    {
+        py::gil_scoped_release release;
+#ifdef _OPENMP
+        const int nt = n_threads > 0 ? n_threads : 1;
+#pragma omp parallel num_threads(nt)
+#endif
+        {
+            std::vector<uint8_t> raw, scratch;
+#ifdef _OPENMP
+#pragma omp for schedule(dynamic, 1)
+#endif
+            for (int64_t r = 0; r < n_rec; ++r) {
+                if (sz[r] <= 0 || off[r] < 0) {
+                    meta[r].status = REC_CORRUPT; meta[r].error = "bad .bgi offset/size"; continue;
+                }
+                raw.resize(static_cast<size_t>(sz[r]));
+                size_t got = 0;
+                bool io_ok = true;
+                while (got < raw.size()) {
+                    const ssize_t k = ::pread(fd, raw.data() + got, raw.size() - got,
+                                              static_cast<off_t>(off[r] + static_cast<int64_t>(got)));
+                    if (k < 0 && errno == EINTR) continue;
+                    if (k <= 0) { io_ok = false; break; }
+                    got += static_cast<size_t>(k);
+                }
+                if (!io_ok) {
+                    meta[r].status = REC_CORRUPT; meta[r].error = "short read"; continue;
+                }
+                decode_record(raw.data(), raw.size(), compression, n_samples_file, idx, n_out,
+                              out_ptr + static_cast<size_t>(r) * n_out, scratch, meta[r]);
+            }
+        }
     }
-    return result;
+    return meta_list(meta);
 }
 
 }  // namespace gmoq_bgen

@@ -46,6 +46,7 @@ from typing import Optional, List, Set
 
 import numpy as np
 
+from . import core as _core
 from .core import (
     compute_rif,
     compute_rif_nuisance,
@@ -1445,6 +1446,10 @@ def _decode_variants(variants, bgen_path, bgen_indices, skipped: _SkipCount):
         yield info, normalize_chr_label(variant.chrom), dosages
 
 
+# Per-SNP output is written with gzip level 6 (the gzip CLI default), not
+# Python's 9: same content, ~2% larger, about 4x less compression CPU.
+OUTPUT_GZIP_LEVEL = 6
+
 BGEN_DECODER_AUTO = "auto"
 BGEN_DECODER_NATIVE = "native"
 BGEN_DECODER_BGEN = "bgen"
@@ -1492,8 +1497,8 @@ def bgi_record_sizes(bgen_path: str, offsets: List[int]) -> dict:
 
 def native_bgen_decoder_reason(bgen_path: str, variants) -> Optional[str]:
     """Why the native decoder cannot be used for this input, or None if it can."""
-    if not HAVE_CPP or not hasattr(cpp_ext, "bgen_decode_block"):
-        return "the compiled extension has no bgen_decode_block"
+    if not _core.HAVE_CPP or not hasattr(_core.cpp_ext, "bgen_decode_file_block"):
+        return "the compiled extension has no native BGEN decoder"
     if not isinstance(variants, SeekingVariantGenerator):
         return "it needs indexed (.bgi) access to a --snps selection"
     _, compression, layout = bgen_header_info(bgen_path)
@@ -1512,12 +1517,14 @@ def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCoun
                             n_threads: int = 1, block_size: int = 256):
     """Native counterpart of :func:`_decode_variants`: same tuples, same order.
 
-    Each block of records is read with one ``pread`` per record on this (the
-    reader) thread, then inflated and decoded in parallel in C++ with the GIL
-    released.  Dosages are the exact float64 allele-1 expected count
+    Each block of records is read (one ``pread`` per record, n_threads in
+    flight), inflated and decoded in parallel in C++ with the GIL released.  Dosages are the exact float64 allele-1 expected count
     ``(2*v0 + v1) / (2^B - 1)``; the ``bgen`` path returns float32, so values
     differ from it by up to ~3e-7.  Records the native decoder does not handle
     (phased, non-diploid) raise rather than being silently dropped.
+
+    Each yielded dosage array is a view into a block buffer that is reused for
+    the next block: copy it before advancing the generator (the batch loop does).
     """
     n_samples, compression, _ = bgen_header_info(bgen_path)
     sample_idx = np.ascontiguousarray(bgen_indices, dtype=np.int64)
@@ -1529,9 +1536,10 @@ def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCoun
     try:
         for start in range(0, len(offsets), block_size):
             chunk = offsets[start:start + block_size]
-            raw = [os.pread(fd, sizes[off], off) for off in chunk]
-            meta = cpp_ext.bgen_decode_block(raw, sample_idx, out, compression,
-                                             n_samples, int(n_threads))
+            meta = _core.cpp_ext.bgen_decode_file_block(
+                fd, np.asarray(chunk, dtype=np.int64),
+                np.asarray([sizes[off] for off in chunk], dtype=np.int64),
+                sample_idx, out, compression, n_samples, int(n_threads))
             for j, (status, rsid, chrom, pos, a0, a1, err) in enumerate(meta):
                 if status == _NATIVE_STATUS_NON_BIALLELIC:
                     skipped.non_biallelic += 1
@@ -2399,21 +2407,21 @@ def main():
     write_cov_payload = args.cov_mode not in COV_MODES_NO_PAYLOAD
 
     with ExitStack() as stack:
-        f_tsv_list = [stack.enter_context(gzip.open(path, 'wt')) for path in out_tsv_list]
+        f_tsv_list = [stack.enter_context(gzip.open(path, 'wt', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_tsv_list]
         # Under --cov-mode pooled the per-SNP payload is not produced at all, so
         # its files are never created rather than created empty: an empty
         # .cov.gz would look to Stage 2 like a truncated jackknife payload.
         f_cov_list = (
-            [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_list]
+            [stack.enter_context(gzip.open(path, 'wb', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_cov_list]
             if write_cov_payload else [None for _ in out_cov_list]
         )
         f_cov_scale_list = (
-            [stack.enter_context(gzip.open(path, 'wb')) for path in out_cov_scale_list]
+            [stack.enter_context(gzip.open(path, 'wb', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_cov_scale_list]
             if (write_cov_payload and args.cov_dtype == 'int8')
             else [None for _ in out_cov_scale_list]
         )
         f_cov_ids_list = (
-            [stack.enter_context(gzip.open(path, 'wt')) for path in out_cov_ids_list]
+            [stack.enter_context(gzip.open(path, 'wt', compresslevel=OUTPUT_GZIP_LEVEL)) for path in out_cov_ids_list]
             if write_cov_payload else [None for _ in out_cov_ids_list]
         )
         for f_tsv in f_tsv_list:

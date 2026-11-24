@@ -1606,6 +1606,13 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("records"), py::arg("sample_idx"), py::arg("out"),
           py::arg("compression"), py::arg("n_samples"), py::arg("n_threads") = 1);
 
+    m.def("bgen_decode_file_block", &gmoq_bgen::decode_file_block,
+          "As bgen_decode_block, but each worker preads its records from fd at the\n"
+          "given .bgi offsets/sizes, keeping n_threads reads in flight.",
+          py::arg("fd"), py::arg("offsets"), py::arg("sizes"), py::arg("sample_idx"),
+          py::arg("out"), py::arg("compression"), py::arg("n_samples"),
+          py::arg("n_threads") = 1);
+
     py::class_<gmoq_pooled::PooledBinPlan>(m, "PooledBinPlan",
           "O(N) bin-prefix plan for pooled Stage 1: assigns each sample to one\n"
           "quantile bin and precomputes Q^T RIF and Sigma_0 without allocating\n"

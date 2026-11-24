@@ -418,8 +418,7 @@ def test_native_decoder_matches_bgen_package(tmp_path, compression):
         p[rng.random(n) < 0.05] = np.nan           # missing samples
         probs_list.append(p)
     path = tmp_path / "g.bgen"
-    _write_bgen(path, probs_list, bit_depths, compression)
-    _write_bgi(path)
+    _write_bgen(path, probs_list, bit_depths, compression)      # BgenWriter writes the .bgi too
 
     variants, _, handle = cli.get_variants_bgen(str(path), None, [f"rs{j}" for j in range(len(bit_depths))])
     assert isinstance(variants, cli.SeekingVariantGenerator)
@@ -432,8 +431,10 @@ def test_native_decoder_matches_bgen_package(tmp_path, compression):
         ref[v.rsid] = (bits, cli.extract_dosage(v, probability_bit_depth=bits)[idx])
 
     skipped = cli._SkipCount()
-    got = list(cli._decode_variants_native(variants.records, str(path), idx, skipped,
-                                           n_threads=2, block_size=3))
+    # Yielded columns are views into a reused block buffer: copy before the next item.
+    got = [(i, c, d.copy()) for i, c, d in
+           cli._decode_variants_native(variants.records, str(path), idx, skipped,
+                                       n_threads=2, block_size=3)]
     assert [g[0][0] for g in got] == sorted(ref, key=lambda r: int(r[2:]))
     for info, chrom, dos in got:
         bits, want = ref[info[0]]
@@ -457,8 +458,9 @@ def test_native_decoder_is_exact_for_hard_calls(data, tmp_path):
     local = _indexed_copy(data, tmp_path)
     variants, samples, _ = cli.get_variants_bgen(str(local["bgen"]), None, RSIDS)
     idx = np.arange(len(samples))
-    got = list(cli._decode_variants_native(variants.records, str(local["bgen"]), idx,
-                                           cli._SkipCount(), n_threads=2, block_size=4))
+    got = [(i, c, d.copy()) for i, c, d in
+           cli._decode_variants_native(variants.records, str(local["bgen"]), idx,
+                                       cli._SkipCount(), n_threads=2, block_size=4)]
     assert [g[0][0] for g in got] == RSIDS
     for j, (_, _, dos) in enumerate(got):
         assert np.array_equal(dos, data["G"][:, j])
