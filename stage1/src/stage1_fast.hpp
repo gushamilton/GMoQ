@@ -667,9 +667,15 @@ inline void run_fast(
         size_t STILE = stile_bytes / ((Crow + static_cast<size_t>(PBLK)) * sizeof(double));
         if (STILE < 8) STILE = 8;
 
+        const uint16_t* __restrict__ binv = bins ? plan.bin_sorted.data() : nullptr;
+        const size_t* tord = bins ? plan.tau_ord.data() : nullptr;
+        const double* __restrict__ cs = bins ? plan.c_sorted.data() : nullptr;
+        const double* __restrict__ ifs = bins ? plan.inv_f_sorted.data() : nullptr;
+        const double* __restrict__ QtR = bins ? plan.QtR_tk.data() : nullptr;
         #pragma omp parallel
         {
             std::vector<double> accm(Crow * static_cast<size_t>(PBLK), 0.0);
+            std::vector<double> hacc(bins ? (T + 1) * LD : 0), tot(bins ? LD : 0), cum(bins ? LD : 0);
             #pragma omp for schedule(static)
             for (int64_t b = 0; b < static_cast<int64_t>(NB); b++) {
                 const size_t bb = static_cast<size_t>(b);
@@ -679,39 +685,22 @@ inline void run_fast(
                 double* vbp = V + bb * P;
                 double* s2p = S2 + bb * P;
                 double* Wbp = (!bins && bb < n_blocks_sz) ? W + bb * P * T : nullptr;
+                // Bins are only needed for real blocks (the out-of-range bucket has no W).
+                const bool do_bins = bins && bb < n_blocks_sz;
+                if (do_bins) std::fill(hacc.begin(), hacc.end(), 0.0);
                 if (avx2) {
 #ifdef GMOQ_HAVE_AVX2_CLONE
                     sweep_block_avx2(Gt, LD, RQ, Crow, T_sweep, K, s0, s1, P, Ppad,
-                                     Wbp, ubp, vbp, s2p, accm.data(), STILE);
+                                     Wbp, ubp, vbp, s2p, accm.data(), STILE,
+                                     do_bins ? binv : nullptr, do_bins ? hacc.data() : nullptr);
 #endif
                 } else {
                     sweep_block_base(Gt, LD, RQ, Crow, T_sweep, K, s0, s1, P, Ppad,
-                                     Wbp, ubp, vbp, s2p, accm.data(), STILE);
+                                     Wbp, ubp, vbp, s2p, accm.data(), STILE,
+                                     do_bins ? binv : nullptr, do_bins ? hacc.data() : nullptr);
                 }
-            }
-        }
-
-        if (bins) {
-            // Pass 3b: W from per-(block, bin) sums of the packed (centred) genotypes.
-            const uint16_t* __restrict__ binv = plan.bin_sorted.data();
-            const size_t* tord = plan.tau_ord.data();
-            const double* __restrict__ cs = plan.c_sorted.data();
-            const double* __restrict__ ifs = plan.inv_f_sorted.data();
-            const double* __restrict__ QtR = plan.QtR_tk.data();
-            #pragma omp parallel
-            {
-                std::vector<double> hacc((T + 1) * LD), tot(LD), cum(LD);
-                #pragma omp for schedule(static)
-                for (int64_t b = 0; b < static_cast<int64_t>(n_blocks_sz); b++) {
-                    const size_t bb = static_cast<size_t>(b);
-                    const size_t s0 = static_cast<size_t>(plan.offsets[bb]);
-                    const size_t s1 = static_cast<size_t>(plan.offsets[bb + 1]);
-                    std::fill(hacc.begin(), hacc.end(), 0.0);
-                    for (size_t s = s0; s < s1; s++) {
-                        const double* __restrict__ g = Gt + s * LD;
-                        double* __restrict__ h = hacc.data() + static_cast<size_t>(binv[s]) * LD;
-                        for (size_t p = 0; p < LD; p++) h[p] += g[p];
-                    }
+                if (do_bins) {
+                    // W from the per-(block, bin) sums of the packed (centred) genotypes.
                     std::fill(tot.begin(), tot.end(), 0.0);
                     for (size_t st = 0; st <= T; st++) {
                         const double* __restrict__ h = hacc.data() + st * LD;
