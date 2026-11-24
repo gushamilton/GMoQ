@@ -327,10 +327,15 @@ if (se_mode == "diagonal") {
   SE_params <- sqrt(A2 %*% Vb)
   
   # Q statistic (naive, assumes independence across taus)
-  for (j in seq_len(P)) {
-    resid_j <- Q_slope[, j] - W %*% params[, j]
-    var_j   <- SE_tau[, j]^2
-    Q_stat[j] <- sum((resid_j^2) / pmax(var_j, 1e-12))
+  if (P > 0L) {
+    chunk_sz <- 50000L
+    for (j0 in seq.int(1L, P, by = chunk_sz)) {
+      j1 <- min(P, j0 + chunk_sz - 1L)
+      idx <- j0:j1
+      resid_blk <- Q_slope[, idx, drop = FALSE] - W %*% params[, idx, drop = FALSE]
+      var_blk   <- SE_tau[, idx, drop = FALSE]^2
+      Q_stat[idx] <- colSums((resid_blk * resid_blk) / pmax(var_blk, 1e-12))
+    }
   }
 
 } else if (se_mode == "plugin_cor") {
@@ -455,11 +460,16 @@ if (se_mode == "diagonal") {
   }
   
   if (is.null(cov_data) || tau_cov_estimator == "ols") {
-    # Q statistic (using diagonal approximation)
-    for (j in seq_len(P)) {
-      resid_j <- Q_slope[, j] - W %*% params[, j]
-      var_j   <- SE_tau[, j]^2
-      Q_stat[j] <- sum((resid_j^2) / pmax(var_j, 1e-12))
+    # Q statistic (using diagonal approximation), chunked BLAS instead of per-SNP R loop
+    if (P > 0L) {
+      chunk_sz <- 50000L
+      for (j0 in seq.int(1L, P, by = chunk_sz)) {
+        j1 <- min(P, j0 + chunk_sz - 1L)
+        idx <- j0:j1
+        resid_blk <- Q_slope[, idx, drop = FALSE] - W %*% params[, idx, drop = FALSE]
+        var_blk   <- SE_tau[, idx, drop = FALSE]^2
+        Q_stat[idx] <- colSums((resid_blk * resid_blk) / pmax(var_blk, 1e-12))
+      }
     }
     # The STATISTIC above is unchanged. What q_method changes is only the
     # reference distribution used to turn it into a p-value: the residuals

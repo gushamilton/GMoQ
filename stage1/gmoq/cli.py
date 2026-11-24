@@ -48,6 +48,7 @@ import numpy as np
 
 from .core import (
     compute_rif,
+    compute_rif_nuisance,
     residualize,
     compute_block_scores,
     compute_block_scores_multi,
@@ -55,6 +56,8 @@ from .core import (
     compute_block_scores_panel,
     compute_block_finalize_panel,
     compute_pooled_panel,
+    make_pooled_bin_plan,
+    compute_pooled_binned,
     compute_block_finalize_panel_fast,
     compute_block_scores_panel_fast,
     make_block_plan,
@@ -1399,17 +1402,21 @@ def write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
         with np.errstate(invalid='ignore', divide='ignore'):
             se_all = sd0[None, :] / np.sqrt(d_resid)[:, None]
 
+        lines = []
         for j, info in enumerate(batch_info):
             if not finite[j]:
                 continue
-            row = list(info)
+            row = [str(x) for x in info]
             for b, s in zip(betas[j], se_all[j]):
-                row.extend([f'{b:.6g}', f'{s:.6g}'])
+                row.append(f'{b:.6g}')
+                row.append(f'{s:.6g}')
             row.append(f'{float(d_resid[j]):.9g}')
-            f_tsv.write('\t'.join(map(str, row)) + '\n')
+            lines.append('\t'.join(row) + '\n')
 
             if args.output_rtau:
                 all_betas.append(np.asarray(betas[j]))
+        if lines:
+            f_tsv.write(''.join(lines))
 
 
 class _SkipCount:
@@ -1579,17 +1586,23 @@ def sample_match_verdict(match_frac, min_sample_match):
 def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_multi,
                    f_tsv_list, f_cov_list, f_cov_ids_list, f_cov_scale_list,
                    all_betas_list, n_cov_elements, T, sigma0_sd_list=None,
-                   kernel_state=None):
+                   kernel_state=None, pooled_plan_list=None):
     """Run the kernel over one batch and write it out. Returns (compute_s, write_s)."""
     if args.cov_mode == COV_MODE_POOLED_ONLY:
         # No block_ids, no n_blocks, no (n_blocks, panel, 1+T) accumulator: the
         # kernel returns the two things the pooled analysis needs.
         t_compute = time.perf_counter()
-        pooled_list = [
-            compute_pooled_panel(G_view, rif, Q, n_threads=args.threads,
-                                 panel_size=args.panel_size)
-            for rif in RIF_resid_list
-        ]
+        if pooled_plan_list is not None:
+            pooled_list = [
+                compute_pooled_binned(G_view, plan, n_threads=args.threads)
+                for plan in pooled_plan_list
+            ]
+        else:
+            pooled_list = [
+                compute_pooled_panel(G_view, rif, Q, n_threads=args.threads,
+                                     panel_size=args.panel_size)
+                for rif in RIF_resid_list
+            ]
         compute_s = time.perf_counter() - t_compute
         t_write = time.perf_counter()
         write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
@@ -1732,6 +1745,52 @@ def compute_chr_rif_residuals(pheno_cols: list[str], y_values_full: dict[str, np
         density_method=density_method
     )
     return rif_resid_list, q_chr, q_tau_list
+
+
+def compute_chr_pooled_plans(pheno_cols: list[str], y_values_full: dict[str, np.ndarray],
+                             X_full: np.ndarray, taus: np.ndarray,
+                             loco_predictions: Optional[dict[str, dict[str, np.ndarray]]],
+                             chrom: Optional[str], valid_mask: np.ndarray,
+                             loco_scales: Optional[dict[str, float]] = None,
+                             density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN,
+                             loco_mode: str = LOCO_MODE_SUBTRACT,
+                             n_threads: int = 1):
+    """Build O(N) bin-prefix PooledBinPlans for a chromosome without allocating RIF."""
+    if loco_predictions is None:
+        y_values_chr = {col: y_values_full[col][valid_mask] for col in pheno_cols}
+        X_chr = X_full[valid_mask]
+    elif loco_mode == LOCO_MODE_COVARIATE:
+        chrom_key = normalize_chr_label(chrom)
+        y_values_chr = {col: y_values_full[col][valid_mask] for col in pheno_cols}
+        loco_col = _loco_column_for_chr(loco_predictions, pheno_cols, chrom_key, valid_mask)
+        X_chr = np.column_stack([X_full[valid_mask], loco_col])
+    else:
+        chrom_key = normalize_chr_label(chrom)
+        y_values_chr = {}
+        for col in pheno_cols:
+            per_chr = loco_predictions[col]
+            if chrom_key not in per_chr:
+                raise ValueError(f"Chromosome {chrom_key} missing from LOCO predictions for phenotype '{col}'")
+            scale = 1.0 if loco_scales is None else loco_scales.get(col, 1.0)
+            y_values_chr[col] = y_values_full[col] - scale * per_chr[chrom_key]
+        y_values_chr = {col: y_values_chr[col][valid_mask] for col in pheno_cols}
+        X_chr = X_full[valid_mask]
+
+    log_mem(f"Building O(N) pooled bin-prefix plan on {X_chr.shape[1]} covariates...")
+    Q_chr, _ = np.linalg.qr(X_chr)
+    plan_list = []
+    q_tau_list = []
+    for col in pheno_cols:
+        t_plan = time.perf_counter()
+        y = np.asarray(y_values_chr[col], dtype=np.float64)
+        q_tau, fhat = compute_rif_nuisance(y, taus, density_method=density_method)
+        plan = make_pooled_bin_plan(
+            y, taus, Q_chr, q_tau=q_tau, fhat=fhat, n_threads=n_threads
+        )
+        log_mem(f"Pooled bin plan for {col}: {time.perf_counter() - t_plan:.2f}s")
+        plan_list.append(plan)
+        q_tau_list.append(q_tau)
+    return plan_list, Q_chr, q_tau_list
 
 
 def main():
@@ -2111,10 +2170,19 @@ def main():
     #
     # The --loco-preds path does the same via compute_chr_rif_residuals; the call
     # below is that same function with no LOCO adjustment.
-    RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
-        pheno_cols, y_values_full, X_full, taus, None, None, valid_mask,
-        density_method=args.density_method
-    )
+    use_pooled_bin = (args.cov_mode == COV_MODE_POOLED_ONLY and not args.exact_kernel)
+    if use_pooled_bin:
+        pooled_plan_list, Q, q_tau_list = compute_chr_pooled_plans(
+            pheno_cols, y_values_full, X_full, taus, None, None, valid_mask,
+            density_method=args.density_method, n_threads=args.threads
+        )
+        RIF_resid_list = None
+    else:
+        pooled_plan_list = None
+        RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
+            pheno_cols, y_values_full, X_full, taus, None, None, valid_mask,
+            density_method=args.density_method
+        )
 
     # Pooled cross-quantile covariance, Sigma_0 = Psi_r' Psi_r / n, accumulated
     # from the same residualised RIF the kernel is about to consume -- so it is
@@ -2137,8 +2205,12 @@ def main():
     sigma0_sd_list = None
     if args.sigma0 and loco_predictions is None:
         t_s0 = time.perf_counter()
-        for p_idx, rif in enumerate(RIF_resid_list):
-            sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM] = compute_sigma0(rif)
+        if use_pooled_bin:
+            for p_idx, plan in enumerate(pooled_plan_list):
+                sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM] = plan.sigma0()
+        else:
+            for p_idx, rif in enumerate(RIF_resid_list):
+                sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM] = compute_sigma0(rif)
         sigma0_sd_list = [np.sqrt(np.diag(sigma0_by_chr[p_idx][SIGMA0_ALL_CHROM]))
                           for p_idx in range(len(pheno_cols))]
         sigma0_seconds += time.perf_counter() - t_s0
@@ -2239,7 +2311,7 @@ def main():
                         G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                         args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                         f_cov_scale_list, all_betas_list, n_cov_elements, T,
-                        sigma0_sd_list, kernel_state
+                        sigma0_sd_list, kernel_state, pooled_plan_list
                     )
                     total_compute += compute_s
                     total_write += write_s
@@ -2259,15 +2331,27 @@ def main():
                             f"to the residualising basis")
                 else:
                     log_mem(f"Applying LOCO phenotype adjustment for chromosome {variant_chr}")
-                RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
-                    pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
-                    loco_scales, density_method=args.density_method,
-                    loco_mode=args.loco_mode
-                )
+                if use_pooled_bin:
+                    pooled_plan_list, Q, q_tau_list = compute_chr_pooled_plans(
+                        pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                        loco_scales, density_method=args.density_method,
+                        loco_mode=args.loco_mode, n_threads=args.threads
+                    )
+                    RIF_resid_list = None
+                else:
+                    RIF_resid_list, Q, q_tau_list = compute_chr_rif_residuals(
+                        pheno_cols, y_values_full, X_full, taus, loco_predictions, variant_chr, valid_mask,
+                        loco_scales, density_method=args.density_method,
+                        loco_mode=args.loco_mode
+                    )
                 if args.sigma0:
                     t_s0 = time.perf_counter()
-                    for p_idx, rif in enumerate(RIF_resid_list):
-                        sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
+                    if use_pooled_bin:
+                        for p_idx, plan in enumerate(pooled_plan_list):
+                            sigma0_by_chr[p_idx][variant_chr] = plan.sigma0()
+                    else:
+                        for p_idx, rif in enumerate(RIF_resid_list):
+                            sigma0_by_chr[p_idx][variant_chr] = compute_sigma0(rif)
                     sigma0_sd_list = [
                         np.sqrt(np.diag(sigma0_by_chr[p_idx][variant_chr]))
                         for p_idx in range(len(pheno_cols))
@@ -2287,7 +2371,7 @@ def main():
                     G_batch, RIF_resid_list, Q, block_ids, batch_info,
                     args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                     f_cov_scale_list, all_betas_list, n_cov_elements, T,
-                    sigma0_sd_list, kernel_state
+                    sigma0_sd_list, kernel_state, pooled_plan_list
                 )
                 total_compute += compute_s
                 total_write += write_s
@@ -2311,7 +2395,7 @@ def main():
                 G_batch[:, :idx_in_batch], RIF_resid_list, Q, block_ids, batch_info,
                 args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                 f_cov_scale_list, all_betas_list, n_cov_elements, T,
-                sigma0_sd_list, kernel_state
+                sigma0_sd_list, kernel_state, pooled_plan_list
             )
             total_compute += compute_s
             total_write += write_s
