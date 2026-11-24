@@ -347,3 +347,46 @@ def test_pooled_only_cli_fast_matches_exact(data, monkeypatch, tmp_path, loco_mo
                                rtol=1e-6, atol=1e-8)
     np.testing.assert_allclose([float(r["d_resid"]) for r in rows_fast],
                                [float(r["d_resid"]) for r in rows_exact], rtol=1e-8)
+
+
+def test_pooled_kernels_keep_mac_boundary_snp_at_large_n():
+    # 5 heterozygous carriers in N = 400k: MAC == min_mac must be kept, as the exact kernel does.
+    rng = np.random.default_rng(3)
+    n = 400_000
+    y = rng.normal(size=n)
+    taus = np.array([0.25, 0.5, 0.75])
+    G = np.zeros((n, 1))
+    # Carrier first: the one-pass sum is shifted by the first value, which is
+    # where g_mean * n stopped being exact.
+    G[np.r_[0, rng.choice(np.arange(1, n), 4, replace=False)], 0] = 1.0
+    Q = np.ones((n, 1)) / np.sqrt(n)
+    rif, q_tau, fhat = core.compute_rif(y, taus)
+    rif_resid = rif - Q @ (Q.T @ rif)
+    _, ref_d = core.cpp_ext.stage1_pooled_panel_exact(
+        np.asfortranarray(G), np.ascontiguousarray(rif_resid), np.ascontiguousarray(Q),
+        5.0, 1e-8, 1, 8)
+    _, fast_d = core.compute_pooled_panel(G, rif_resid, Q, n_threads=1)
+    plan = core.make_pooled_bin_plan(y, taus, Q, q_tau=q_tau, fhat=fhat)
+    _, bin_d = core.compute_pooled_binned(G, plan)
+    assert np.isfinite(ref_d[0]) and np.isfinite(fast_d[0]) and np.isfinite(bin_d[0])
+
+
+def test_pooled_kernels_exact_with_near_constant_column_and_no_intercept():
+    rng = np.random.default_rng(4)
+    n = 3000
+    y = rng.normal(size=n)
+    taus = np.linspace(0.1, 0.9, 9)
+    X = np.column_stack([1.0 + 1e-5 * rng.normal(size=n), rng.normal(size=n)])
+    Q, _ = np.linalg.qr(X)
+    G = rng.binomial(2, 0.3, size=(n, 6)).astype(float)
+    rif, q_tau, fhat = core.compute_rif(y, taus)
+    rif_resid = rif - Q @ (Q.T @ rif)
+    ref_b, _ = core.cpp_ext.stage1_pooled_panel_exact(
+        np.asfortranarray(G), np.ascontiguousarray(rif_resid), np.ascontiguousarray(Q),
+        5.0, 1e-8, 1, 8)
+    fast_b, _ = core.compute_pooled_panel(G, rif_resid, Q, n_threads=1)
+    plan = core.make_pooled_bin_plan(y, taus, Q, q_tau=q_tau, fhat=fhat)
+    bin_b, _ = core.compute_pooled_binned(G, plan)
+    scale = np.std(ref_b)
+    assert np.max(np.abs(fast_b - ref_b)) < 1e-9 * scale
+    assert np.max(np.abs(bin_b - ref_b)) < 1e-9 * scale

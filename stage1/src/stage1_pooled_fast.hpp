@@ -269,7 +269,7 @@ struct PooledBinPlan {
         double w2 = 0.0;
         for (size_t k = 0; k < K; k++) w2 += w[k] * w[k];
         e_norm2 = std::max(0.0, static_cast<double>(N) - w2);
-        has_intercept = (e_norm2 <= 1e-10 * static_cast<double>(N));
+        has_intercept = (e_norm2 <= 64.0 * std::numeric_limits<double>::epsilon() * static_cast<double>(N));
         if (has_intercept) e_norm2 = 0.0;
 
         // Prefix sums for cum_cnt and QtI_sorted.
@@ -458,7 +458,7 @@ inline py::tuple pooled_bin_fast(
             const double n_v = static_cast<double>(n_valid);
             const double d_mean = d_sum / n_v;
             const double g_mean = g0 + d_mean;
-            const double g_sum = g_mean * n_v;
+            const double g_sum = g0 * n_v + d_sum;   // exact for hard calls (MAC filter)
             const double mac = std::min(g_sum, 2.0 * n_v - g_sum);
             if (mac < min_mac) continue;
 
@@ -668,7 +668,7 @@ inline py::tuple pooled_panel_fast(
         const double n_v = static_cast<double>(n_valid);
         const double d_mean = d_sum / n_v;
         const double g_mean = g0 + d_mean;
-        const double g_sum = g_mean * n_v;
+        const double g_sum = g0 * n_v + d_sum;   // exact for hard calls (MAC filter)
         const double mac = std::min(g_sum, 2.0 * n_v - g_sum);
         if (mac < min_mac) continue;
         keep[jj] = 1;
@@ -705,7 +705,7 @@ inline py::tuple pooled_panel_fast(
     double w2 = 0.0;
     for (size_t k = 0; k < K; k++) w2 += w[k] * w[k];
     const double e_norm2 = std::max(0.0, static_cast<double>(N) - w2);
-    const bool has_intercept = (e_norm2 <= 1e-10 * static_cast<double>(N));
+    const bool has_intercept = (e_norm2 <= 64.0 * std::numeric_limits<double>::epsilon() * static_cast<double>(N));
     std::vector<double> e_dot_R(T, 0.0);
     if (!has_intercept) {
         for (size_t tt = 0; tt < T; tt++) {
