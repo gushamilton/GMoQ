@@ -1584,9 +1584,72 @@ def _decode_variants_native(records, bgen_path, bgen_indices, skipped: _SkipCoun
         os.close(fd)
 
 
+def _coalesced_record_reader(fd, offsets, sizes, max_gap: int, max_window: int,
+                             queue_records: int):
+    """Yield each record's bytes, in order, from large sequential window reads.
+
+    Records whose gap to the previous one is at most ``max_gap`` bytes are read in
+    one ``pread`` of up to ``max_window`` bytes (gaps included) and sliced out.  A
+    single background thread does the reading so it overlaps decoding.  On
+    network filesystems this is much faster than one read per record: measured
+    on BluePebble's NFS, 0.88 ms/record (1 MiB gap, 1 thread) against 1.41 for
+    single-record reads and 2.1-2.3 with 8-16 concurrent readers.
+    """
+    import queue
+    import threading
+
+    q = queue.Queue(maxsize=max(1, int(queue_records)))
+    stop = threading.Event()
+
+    def produce():
+        try:
+            n = len(offsets)
+            i = 0
+            while i < n and not stop.is_set():
+                start = offsets[i]
+                end = start + sizes[offsets[i]]
+                j = i + 1
+                while j < n:
+                    o = offsets[j]
+                    e = o + sizes[o]
+                    if o < start or o - end > max_gap or e - start > max_window:
+                        break
+                    end = max(end, e)
+                    j += 1
+                buf = os.pread(fd, end - start, start)
+                if len(buf) != end - start:
+                    raise OSError(f"short read at BGEN offset {start}")
+                mv = memoryview(buf)
+                for k in range(i, j):
+                    o = offsets[k] - start
+                    q.put(bytes(mv[o:o + sizes[offsets[k]]]))
+                    if stop.is_set():
+                        return
+                i = j
+        except BaseException as exc:          # surfaced on the consumer side
+            q.put(exc)
+
+    t = threading.Thread(target=produce, name="bgen-read", daemon=True)
+    t.start()
+    try:
+        for _ in range(len(offsets)):
+            item = q.get()
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stop.set()
+        while t.is_alive():                   # unblock a producer waiting on a full queue
+            try:
+                q.get_nowait()
+            except Exception:
+                pass
+            t.join(timeout=0.05)
+
+
 def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount,
                            n_threads: int, batch_size: int, get_buffer,
-                           io_threads: int = 16, read_ahead: int = 2):
+                           coalesce_gap: int = 1 << 20, max_window: int = 32 << 20):
     """Decode whole batches straight into the pipeline's genotype buffer.
 
     Yields ``(batch_info, chrom_label, k)`` with the batch's dosages already in
@@ -1614,28 +1677,13 @@ def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount
         spans.append((start, stop))
         start = stop
 
-    # Read-ahead: io_threads preads in flight (os.pread releases the GIL) for the
-    # next `read_ahead` batches while the current one decodes.  On a network
-    # filesystem a sparse record selection is latency-bound, not bandwidth-bound.
-    from concurrent.futures import ThreadPoolExecutor
     fd = os.open(bgen_path, os.O_RDONLY)
-    pool = ThreadPoolExecutor(max_workers=max(1, int(io_threads)),
-                              thread_name_prefix="bgen-read")
-
-    def _read(off):
-        return os.pread(fd, sizes[off], off)
-
-    def _fetch(span):
-        return [pool.submit(_read, off) for off in offsets[span[0]:span[1]]]
-
+    reader = _coalesced_record_reader(fd, offsets, sizes, max_gap=int(coalesce_gap),
+                                      max_window=int(max_window),
+                                      queue_records=3 * batch_size)
     try:
-        pending = [_fetch(sp) for sp in spans[:max(1, int(read_ahead))]]
-        for b_idx, (start, stop) in enumerate(spans):
-            futures = pending.pop(0)
-            nxt = b_idx + len(pending) + 1
-            if nxt < len(spans):
-                pending.append(_fetch(spans[nxt]))
-            raw = [fut.result() for fut in futures]
+        for start, stop in spans:
+            raw = [next(reader) for _ in range(stop - start)]
             chunk = offsets[start:stop]
             out = get_buffer()
             meta = _core.cpp_ext.bgen_decode_block(raw, sample_idx, out, compression,
@@ -1658,7 +1706,7 @@ def _decode_batches_native(records, bgen_path, bgen_indices, skipped: _SkipCount
             if keep:
                 yield batch_info, chroms[start], len(keep)
     finally:
-        pool.shutdown(wait=True, cancel_futures=True)
+        reader.close()
         os.close(fd)
 
 
@@ -2132,9 +2180,12 @@ def main():
                         help='Walk the BGEN record-by-record instead of seeking to .bgi file '
                              'offsets (slower; kept for validation and for BGENs with no index).')
     parser.set_defaults(seek_variants=True)
-    parser.add_argument('--bgen-io-threads', dest='bgen_io_threads', type=int, default=16,
-                        help='Concurrent BGEN record reads kept in flight by the native '
-                             'decoder (read-ahead; helps on network filesystems). Default 16.')
+    parser.add_argument('--bgen-coalesce-gap', dest='bgen_coalesce_gap', type=float, default=1.0,
+                        help='Native decoder: read selected BGEN records in sequential windows, '
+                             'merging records separated by at most this many MiB (gaps are read '
+                             'and discarded). 0 reads each record on its own. Default 1.0, '
+                             'tuned on an NFS mount where large sequential reads are ~8x '
+                             'faster than small random ones.')
     parser.add_argument('--bgen-decoder', dest='bgen_decoder', choices=list(BGEN_DECODERS),
                         default=BGEN_DECODER_AUTO,
                         help="How BGEN records are decoded. 'native' reads each selected "
@@ -2608,7 +2659,7 @@ def main():
                 native_records, args.bgen, bgen_indices, skip_counter,
                 n_threads=args.threads, batch_size=args.batch_size,
                 get_buffer=lambda: pipeline.batch_buffer,
-                io_threads=args.bgen_io_threads)
+                coalesce_gap=int(args.bgen_coalesce_gap * (1 << 20)))
             for batch_info, variant_chr, k in native_batches:
                 if loco_predictions is not None and variant_chr != active_chr:
                     _switch_chromosome(variant_chr)

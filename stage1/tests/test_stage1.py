@@ -467,7 +467,8 @@ def test_native_decoder_is_exact_for_hard_calls(data, tmp_path):
 
 
 @pytest.mark.parametrize("cov_mode", ["pooled", "pooled-only", "full"])
-@pytest.mark.parametrize("extra", [[], ["--batch-size", "2"], ["--batch-size", "4", "LOCO"]])
+@pytest.mark.parametrize("extra", [[], ["--batch-size", "2"], ["--batch-size", "4", "LOCO"],
+                                   ["--bgen-coalesce-gap", "0"], ["--bgen-coalesce-gap", "0.0002"]])
 def test_cli_native_and_bgen_decoders_agree(data, monkeypatch, tmp_path, cov_mode, extra):
     data = _indexed_copy(data, tmp_path)
     extra = [x for x in extra if x != "LOCO"] + (
