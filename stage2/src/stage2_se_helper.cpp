@@ -1,5 +1,6 @@
 #include <RcppArmadillo.h>
 #include <cmath>
+#include <limits>
 // [[Rcpp::depends(RcppArmadillo)]]
 // [[Rcpp::plugins(openmp)]]
 
@@ -39,9 +40,14 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }
   
+  // Cache base variances diag(A * Sigma_0 * A') when consecutive SNPs share a
+  // pooled Sigma_0 record (same start_idx, differing only by scalar cov_scales).
+  long long cached_start_idx = -1;
+  arma::vec base_var(n_params, arma::fill::value(NA_REAL));
+
   for (int i = 0; i < n_snps; i++) {
     double byte_offset = offsets[i];
-    
+
     // Convert byte offset to vector index (0-based)
     // dividing by 4 because floats are 4 bytes
     // R is 1-based, but C++ is 0-based.
@@ -56,38 +62,35 @@ NumericMatrix compute_calibrated_se(NumericVector cov_vec, NumericVector offsets
         continue;
       }
     }
-    
+
     if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) {
        // Index out of bounds, skip or produce NA
        for (int p=0; p<n_params; p++) out_se(i, p) = NA_REAL;
        continue;
     }
-    
-    // Fill Sigma upper triangle (row-major order)
-    // numpy: Sigma[np.triu_indices(K)] yields row-major order:
-    // Row 0: (0,0),(0,1),(0,2),...
-    // Row 1: (1,1),(1,2),...
-    int idx = 0;
-    for (int r = 0; r < K; r++) {
-      for (int c = r; c < K; c++) {
-        Sigma(r, c) = cov_vec[start_idx + idx] * scale;
-        idx++;
+
+    if (start_idx != cached_start_idx) {
+      int idx = 0;
+      for (int r = 0; r < K; r++) {
+        for (int c = r; c < K; c++) {
+          Sigma(r, c) = cov_vec[start_idx + idx];
+          idx++;
+        }
       }
-    }
-    // Symmetrize
-    for (int r = 0; r < K; r++) {
-      for (int c = r + 1; c < K; c++) {
-        Sigma(c, r) = Sigma(r, c);
+      for (int r = 0; r < K; r++) {
+        for (int c = r + 1; c < K; c++) {
+          Sigma(c, r) = Sigma(r, c);
+        }
       }
+      for (int p = 0; p < n_params; p++) {
+        arma::rowvec a_row = A_mat.row(p);
+        base_var[p] = arma::as_scalar(a_row * Sigma * a_row.t());
+      }
+      cached_start_idx = start_idx;
     }
-    
-    // V_param = A * Sigma * A.t()
-    // We only need the diagonal (variances)
-    // Optimization: V_j = (A.row(j)) * Sigma * (A.row(j)).t()
-    
+
     for (int p = 0; p < n_params; p++) {
-       arma::rowvec a_row = A_mat.row(p);
-       double var = arma::as_scalar(a_row * Sigma * a_row.t());
+       double var = base_var[p] * scale;
        if (std::isfinite(var) && var > 0.0) {
          out_se(i, p) = std::sqrt(var);
        } else {
@@ -126,6 +129,9 @@ NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets,
     stop("cov_scales must have at least one entry per SNP when supplied.");
   }
 
+  long long cached_start_idx = -1;
+  arma::vec base_vtheta_upper(n_cov_params, arma::fill::value(NA_REAL));
+
   for (int i = 0; i < n_snps; i++) {
     double byte_offset = offsets[i];
     long long start_idx = (long long)(byte_offset / 4);
@@ -144,27 +150,31 @@ NumericMatrix compute_param_cov(NumericVector cov_vec, NumericVector offsets,
       continue;
     }
 
-    int idx = 0;
-    for (int r = 0; r < K; r++) {
-      for (int c = r; c < K; c++) {
-        Sigma(r, c) = cov_vec[start_idx + idx] * scale;
-        idx++;
+    if (start_idx != cached_start_idx) {
+      int idx = 0;
+      for (int r = 0; r < K; r++) {
+        for (int c = r; c < K; c++) {
+          Sigma(r, c) = cov_vec[start_idx + idx];
+          idx++;
+        }
       }
-    }
-    for (int r = 0; r < K; r++) {
-      for (int c = r + 1; c < K; c++) {
-        Sigma(c, r) = Sigma(r, c);
+      for (int r = 0; r < K; r++) {
+        for (int c = r + 1; c < K; c++) {
+          Sigma(c, r) = Sigma(r, c);
+        }
       }
+      arma::mat Vtheta = A_mat * Sigma * A_mat.t();
+      int out_idx = 0;
+      for (int r = 0; r < n_params; r++) {
+        for (int c = r; c < n_params; c++) {
+          base_vtheta_upper[out_idx++] = Vtheta(r, c);
+        }
+      }
+      cached_start_idx = start_idx;
     }
 
-    arma::mat Vtheta = A_mat * Sigma * A_mat.t();
-
-    int out_idx = 0;
-    for (int r = 0; r < n_params; r++) {
-      for (int c = r; c < n_params; c++) {
-        out_cov(i, out_idx) = Vtheta(r, c);
-        out_idx++;
-      }
+    for (int out_idx = 0; out_idx < n_cov_params; out_idx++) {
+      out_cov(i, out_idx) = base_vtheta_upper[out_idx] * scale;
     }
   }
 
@@ -443,12 +453,29 @@ double saddlepoint_sf(double q, const arma::vec& lam) {
     if (++guard > 200) return -1.0;
   }
 
-  double zeta = 0.0;
+  // Safeguarded Newton-Raphson on (lo, hi): K' is strictly increasing and
+  // convex for positive eigenvalues; falls back to bisection whenever a
+  // Newton step would leave the current bracket.
+  double zeta = 0.5 * (lo + hi);
   for (int it = 0; it < 200; ++it) {
-    zeta = 0.5 * (lo + hi);
-    double v = kprime(zeta);
-    if (v > q) hi = zeta; else lo = zeta;
+    double kp = 0.0, kpp = 0.0;
+    for (arma::uword i = 0; i < n; ++i) {
+      const double li = lam[i];
+      const double inv_den = 1.0 / (1.0 - 2.0 * li * zeta);
+      const double term = li * inv_den;
+      kp += term;
+      kpp += 2.0 * term * term;
+    }
+    const double diff = kp - q;
+    if (diff > 0.0) hi = zeta; else lo = zeta;
     if (hi - lo < 1e-14 * std::max(1.0, std::fabs(hi))) break;
+    double cand = (kpp > 0.0) ? (zeta - diff / kpp) : (0.5 * (lo + hi));
+    if (!(cand > lo && cand < hi)) cand = 0.5 * (lo + hi);
+    if (std::fabs(cand - zeta) < 1e-14 * std::max(1.0, std::fabs(cand))) {
+      zeta = cand;
+      break;
+    }
+    zeta = cand;
   }
 
   double K = 0.0, K2 = 0.0;
@@ -505,79 +532,158 @@ NumericMatrix compute_q_calibration(NumericVector cov_vec, NumericVector offsets
   arma::mat M_mat(M.begin(), K, K, false);
   arma::mat D_mat(Dvar.begin(), K, n_snps, false);
   NumericMatrix out(n_snps, 6);
+  const double* cov_ptr = cov_vec.begin();
+  const double* off_ptr = offsets.begin();
+  const double* q_ptr = Qstat.begin();
+  const double* scale_ptr = (scales.size() != 0) ? scales.begin() : nullptr;
+  const long long cov_len = static_cast<long long>(cov_vec.size());
+  double* out_ptr = out.begin();
 
 #ifdef _OPENMP
   if (n_threads > 1) omp_set_num_threads(n_threads);
-#pragma omp parallel for schedule(dynamic, 256)
+#pragma omp parallel
 #endif
-  for (int i = 0; i < n_snps; i++) {
-    for (int p = 0; p < 6; p++) out(i, p) = NA_REAL;
-
-    long long start_idx = (long long)(offsets[i] / 4);
-    if (start_idx < 0 || start_idx + n_cov_elements > cov_vec.size()) continue;
-
-    double scale = 1.0;
-    if (scales.size() != 0) {
-      scale = scales[i];
-      if (!std::isfinite(scale) || scale <= 0.0) continue;
-    }
-
-    arma::mat Sigma(K, K, arma::fill::zeros);
-    int idx = 0;
-    for (int r = 0; r < K; r++)
-      for (int c = r; c < K; c++) Sigma(r, c) = cov_vec[start_idx + idx++] * scale;
-    for (int r = 0; r < K; r++)
-      for (int c = r + 1; c < K; c++) Sigma(c, r) = Sigma(r, c);
-
-    // C = D^-1/2 M ; B = C Sigma C'
-    arma::vec d = D_mat.col(i);
-    bool bad = false;
+  {
+    // Per-thread 1-entry cache for pooled covariance records: when consecutive
+    // SNPs share Sigma_0 (same start_idx) and Dvar[:, i] is proportional to
+    // scale * diag(Sigma_0), B = (1/r0) B_0 has eigenvalues lam_0 / r0, so the
+    // K x K eigendecomposition runs once per unique Sigma_0 instead of once per SNP.
+    long long cached_start = -1;
+    bool cached_sigma_ok = false;
+    bool cached_diag_pos = false;
+    bool cached_eig_ready = false;
+    bool cached_eig_ok = false;
+    arma::mat Sigma0(K, K, arma::fill::zeros);
+    arma::vec diag0(K, arma::fill::zeros);
+    arma::vec lam0;
+    double c1_0 = 0.0, c2_0 = 0.0, c3_0 = 0.0, c4_0 = 0.0;
     arma::vec inv_sqrt(K);
-    for (int t = 0; t < K; t++) {
-      double v = d[t];
-      if (!(v > 0.0) || !std::isfinite(v)) { bad = true; break; }
-      inv_sqrt[t] = 1.0 / std::sqrt(v);
+    arma::mat Sigma(K, K);
+
+#ifdef _OPENMP
+#pragma omp for schedule(dynamic, 256)
+#endif
+    for (int i = 0; i < n_snps; i++) {
+      for (int p = 0; p < 6; p++) out_ptr[i + static_cast<size_t>(p) * n_snps] = NA_REAL;
+
+      const long long start_idx = static_cast<long long>(off_ptr[i] / 4.0);
+      if (start_idx < 0 || start_idx + n_cov_elements > cov_len) continue;
+
+      double scale = 1.0;
+      if (scale_ptr != nullptr) {
+        scale = scale_ptr[i];
+        if (!std::isfinite(scale) || scale <= 0.0) continue;
+      }
+
+      if (start_idx != cached_start) {
+        int idx = 0;
+        for (int r = 0; r < K; r++) {
+          for (int c = r; c < K; c++) {
+            const double v = cov_ptr[start_idx + idx++];
+            Sigma0(r, c) = v;
+            Sigma0(c, r) = v;
+          }
+        }
+        cached_sigma_ok = Sigma0.is_finite();
+        cached_diag_pos = cached_sigma_ok;
+        for (int t = 0; t < K; t++) {
+          diag0[t] = Sigma0(t, t);
+          if (!(diag0[t] > 0.0) || !std::isfinite(diag0[t])) cached_diag_pos = false;
+        }
+        cached_eig_ready = false;
+        cached_eig_ok = false;
+        cached_start = start_idx;
+      }
+      if (!cached_sigma_ok) continue;
+
+      const double* d = D_mat.colptr(i);
+      bool bad = false;
+      bool prop_to_diag0 = cached_diag_pos;
+      double r_min = std::numeric_limits<double>::infinity();
+      double r_max = 0.0;
+      double r_sum = 0.0;
+      for (int t = 0; t < K; t++) {
+        const double v = d[t];
+        if (!(v > 0.0) || !std::isfinite(v)) { bad = true; break; }
+        if (prop_to_diag0) {
+          const double rt = v / (scale * diag0[t]);
+          if (rt < r_min) r_min = rt;
+          if (rt > r_max) r_max = rt;
+          r_sum += rt;
+        }
+      }
+      if (bad) continue;
+      // Match constant ratio within 1e-5 relative (absorbs %.6g TSV formatting of
+      // pooled se_tau while always missing jackknife se_tau, which varies by ~2-10%).
+      if (prop_to_diag0 && !(r_min > 0.0 && (r_max - r_min) <= 1e-5 * r_max)) {
+        prop_to_diag0 = false;
+      }
+
+      if (prop_to_diag0) {
+        if (!cached_eig_ready) {
+          cached_eig_ready = true;
+          for (int t = 0; t < K; t++) inv_sqrt[t] = 1.0 / std::sqrt(diag0[t]);
+          arma::mat C0 = arma::diagmat(inv_sqrt) * M_mat;
+          arma::mat B0 = C0 * Sigma0 * C0.t();
+          B0 = 0.5 * (B0 + B0.t());
+          arma::vec ev;
+          if (arma::eig_sym(ev, B0)) {
+            const double ev_tol = 1e-8;
+            const double emax = arma::abs(ev).max();
+            if (emax > 0.0) {
+              lam0 = ev.elem(arma::find(arma::abs(ev) > ev_tol * emax));
+              if (lam0.n_elem >= 2) {
+                c1_0 = c2_0 = c3_0 = c4_0 = 0.0;
+                for (arma::uword j = 0; j < lam0.n_elem; ++j) {
+                  const double l = lam0[j], l2 = l * l;
+                  c1_0 += l; c2_0 += l2; c3_0 += l2 * l; c4_0 += l2 * l2;
+                }
+                cached_eig_ok = true;
+              }
+            }
+          }
+        }
+        if (!cached_eig_ok) continue;
+        const double r0 = r_sum / static_cast<double>(K);
+        const double inv_r = 1.0 / r0;
+        const double inv_r2 = inv_r * inv_r;
+        out_ptr[i + static_cast<size_t>(0) * n_snps] = c1_0 * inv_r;
+        out_ptr[i + static_cast<size_t>(1) * n_snps] = c2_0 * inv_r2;
+        out_ptr[i + static_cast<size_t>(2) * n_snps] = c3_0 * inv_r2 * inv_r;
+        out_ptr[i + static_cast<size_t>(3) * n_snps] = c4_0 * inv_r2 * inv_r2;
+        out_ptr[i + static_cast<size_t>(4) * n_snps] = saddlepoint_sf(q_ptr[i] * r0, lam0);
+        out_ptr[i + static_cast<size_t>(5) * n_snps] = static_cast<double>(lam0.n_elem);
+        continue;
+      }
+
+      // General per-SNP path (jackknife covariance or non-proportional Dvar).
+      Sigma = Sigma0 * scale;
+      for (int t = 0; t < K; t++) inv_sqrt[t] = 1.0 / std::sqrt(d[t]);
+      arma::mat C = arma::diagmat(inv_sqrt) * M_mat;
+      arma::mat B = C * Sigma * C.t();
+      B = 0.5 * (B + B.t());
+
+      arma::vec ev;
+      if (!arma::eig_sym(ev, B)) continue;
+
+      const double ev_tol = 1e-8;
+      double emax = arma::abs(ev).max();          // spectral radius
+      if (!(emax > 0.0)) continue;
+      arma::vec lam = ev.elem(arma::find(arma::abs(ev) > ev_tol * emax));
+      if (lam.n_elem < 2) continue;
+
+      double c1 = 0, c2 = 0, c3 = 0, c4 = 0;
+      for (arma::uword j = 0; j < lam.n_elem; ++j) {
+        double l = lam[j], l2 = l * l;
+        c1 += l; c2 += l2; c3 += l2 * l; c4 += l2 * l2;
+      }
+      out_ptr[i + static_cast<size_t>(0) * n_snps] = c1;
+      out_ptr[i + static_cast<size_t>(1) * n_snps] = c2;
+      out_ptr[i + static_cast<size_t>(2) * n_snps] = c3;
+      out_ptr[i + static_cast<size_t>(3) * n_snps] = c4;
+      out_ptr[i + static_cast<size_t>(4) * n_snps] = saddlepoint_sf(q_ptr[i], lam);
+      out_ptr[i + static_cast<size_t>(5) * n_snps] = static_cast<double>(lam.n_elem);
     }
-    if (bad || !Sigma.is_finite()) continue;
-
-    arma::mat C = arma::diagmat(inv_sqrt) * M_mat;
-    arma::mat B = C * Sigma * C.t();
-    B = 0.5 * (B + B.t());
-
-    arma::vec ev;
-    if (!arma::eig_sym(ev, B)) continue;
-
-    // Drop the structural zeros of B and nothing else.
-    //
-    // B = G Sigma G' with G = D^-1/2 M and rank(M) = K - ncol(W), so exactly
-    // ncol(W) eigenvalues are structurally zero for ANY Sigma.  Those are the
-    // only ones that may be discarded.  NEGATIVE eigenvalues must be KEPT:
-    // the stored int8 Sigma is not positive definite for essentially every
-    // SNP, and its negative eigenvalues carry real negative mass in
-    // Q = sum_i lambda_i chi2_1.  Deleting them (as a one-sided `ev > tol`
-    // test does) biases tr(B) upward and the effective df c1^2/c2 roughly
-    // twice as much.  So select by MAGNITUDE against the spectral radius.
-    //
-    // Tolerance: the structural zeros come out of eig_sym at O(eps)*||B||,
-    // i.e. ~1e-16 to 1e-14 of the spectral radius for K = 45.  The smallest
-    // genuine eigenvalues of B are ~1e-4 of the radius and the negative ones
-    // produced by int8 quantisation are ~1e-1 of it.  1e-8 sits about six
-    // orders of magnitude above the numerical noise and four below the
-    // smallest real structure, in the middle of a very wide empty gap.
-    const double ev_tol = 1e-8;
-    double emax = arma::abs(ev).max();          // spectral radius
-    if (!(emax > 0.0)) continue;
-    arma::vec lam = ev.elem(arma::find(arma::abs(ev) > ev_tol * emax));
-    if (lam.n_elem < 2) continue;
-
-    double c1 = 0, c2 = 0, c3 = 0, c4 = 0;
-    for (arma::uword j = 0; j < lam.n_elem; ++j) {
-      double l = lam[j], l2 = l * l;
-      c1 += l; c2 += l2; c3 += l2 * l; c4 += l2 * l2;
-    }
-    out(i, 0) = c1; out(i, 1) = c2; out(i, 2) = c3; out(i, 3) = c4;
-    out(i, 4) = saddlepoint_sf(Qstat[i], lam);
-    out(i, 5) = (double)lam.n_elem;
   }
 
   return out;

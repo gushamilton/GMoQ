@@ -91,3 +91,34 @@ test_that("singular and mis-sized designs are refused", {
   expect_error(param_gwas(stage1, transform_args = list(W = W), se_mode = "tau_cov"),
                "requires cov_data")
 })
+
+test_that("cached pooled SE, param_cov, and Q calibration match uncached per-SNP path", {
+  # Build an uncached copy where every SNP has its own distinct offset in cov_vec.
+  n_cov <- Tt * (Tt + 1L) / 2L
+  s0_upper <- Sigma0[upper.tri(Sigma0, diag = TRUE)]
+  # row-major upper triangle matching stage2_se_helper.cpp
+  s0_rm <- numeric(n_cov)
+  k <- 1L
+  for (r in seq_len(Tt)) {
+    for (c in r:Tt) {
+      s0_rm[k] <- Sigma0[r, c]
+      k <- k + 1L
+    }
+  }
+  cov_uncached <- list(
+    cov_vec = as.numeric(outer(s0_rm, 1 / D)),
+    offsets = seq(0, by = n_cov * 4, length.out = n_snp),
+    cov_scales = NULL
+  )
+  fit_cached   <- suppressMessages(fit_ols(nu = 1e5, return_cov = "upper"))
+  fit_uncached <- suppressMessages(param_gwas(
+    stage1, transform_args = list(W = W), se_mode = "tau_cov",
+    cov_data = cov_uncached, nu = 1e5, return_cov = "upper"
+  ))
+  expect_equal(fit_cached$SE_params, fit_uncached$SE_params, tolerance = 1e-12)
+  expect_equal(fit_cached$param_cov_upper, fit_uncached$param_cov_upper, tolerance = 1e-12)
+  expect_equal(fit_cached$Q, fit_uncached$Q, tolerance = 1e-12)
+  expect_equal(fit_cached$Q_pval, fit_uncached$Q_pval, tolerance = 1e-11)
+  expect_equal(fit_cached$Q_df_eff, fit_uncached$Q_df_eff, tolerance = 1e-12)
+  expect_equal(fit_cached$Q_scale, fit_uncached$Q_scale, tolerance = 1e-12)
+})

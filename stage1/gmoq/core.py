@@ -287,6 +287,41 @@ def resolve_covar_cols(requested: Optional[list[str]], available: list[str]) -> 
     return requested
 
 
+def compute_rif_nuisance(Y: np.ndarray, taus: np.ndarray,
+                         density_floor: float = 1e-8,
+                         density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
+                         ) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute empirical quantiles ``q_tau`` and KDE densities ``fhat`` without allocating RIF."""
+    Y = np.asarray(Y, dtype=np.float64)
+    taus = np.asarray(taus, dtype=np.float64)
+    if density_method not in DENSITY_METHODS:
+        raise ValueError(
+            f"density_method must be one of {DENSITY_METHODS}, got {density_method!r}"
+        )
+    if not np.isfinite(density_floor) or density_floor <= 0:
+        raise ValueError(f"density_floor must be finite and positive, got {density_floor!r}")
+    if Y.ndim != 1 or Y.size < 2 or not np.all(np.isfinite(Y)):
+        raise ValueError("Y must be a finite one-dimensional array with at least two values")
+    if taus.ndim != 1 or taus.size == 0 or np.any(~np.isfinite(taus)) or np.any((taus <= 0) | (taus >= 1)):
+        raise ValueError("taus must be a non-empty one-dimensional array strictly inside (0, 1)")
+    N = len(Y)
+    T = len(taus)
+
+    q_tau = np.quantile(Y, taus, method='median_unbiased')
+
+    h = 1.06 * np.std(Y) * N ** (-0.2)
+    fhat = np.zeros(T)
+    normalizer = np.sqrt(2 * np.pi)
+    for t, q in enumerate(q_tau):
+        u = (Y - q) / h
+        kernel = np.exp(-0.5 * u ** 2)
+        if density_method == DENSITY_METHOD_FOURTH_ORDER_GAUSSIAN:
+            kernel *= 1.5 - 0.5 * u ** 2
+        fhat[t] = np.mean(kernel) / (h * normalizer)
+    fhat = np.maximum(fhat, density_floor)
+    return q_tau, fhat
+
+
 def compute_rif(Y: np.ndarray, taus: np.ndarray,
                 density_floor: float = 1e-8,
                 density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
@@ -316,44 +351,20 @@ def compute_rif(Y: np.ndarray, taus: np.ndarray,
     fhat : array (T,)
         Kernel density estimates at each quantile
     """
+    q_tau, fhat = compute_rif_nuisance(
+        Y, taus, density_floor=density_floor, density_method=density_method
+    )
     Y = np.asarray(Y, dtype=np.float64)
     taus = np.asarray(taus, dtype=np.float64)
-    if density_method not in DENSITY_METHODS:
-        raise ValueError(
-            f"density_method must be one of {DENSITY_METHODS}, got {density_method!r}"
-        )
-    if not np.isfinite(density_floor) or density_floor <= 0:
-        raise ValueError(f"density_floor must be finite and positive, got {density_floor!r}")
-    if Y.ndim != 1 or Y.size < 2 or not np.all(np.isfinite(Y)):
-        raise ValueError("Y must be a finite one-dimensional array with at least two values")
-    if taus.ndim != 1 or taus.size == 0 or np.any(~np.isfinite(taus)) or np.any((taus <= 0) | (taus >= 1)):
-        raise ValueError("taus must be a non-empty one-dimensional array strictly inside (0, 1)")
     N = len(Y)
     T = len(taus)
-    
-    # Empirical quantiles (type 8 for unbiased)
-    q_tau = np.quantile(Y, taus, method='median_unbiased')
-    
-    # Kernel density at each quantile
-    # Silverman's rule for bandwidth
-    h = 1.06 * np.std(Y) * N ** (-0.2)
-    
-    fhat = np.zeros(T)
-    normalizer = np.sqrt(2 * np.pi)
-    for t, q in enumerate(q_tau):
-        u = (Y - q) / h
-        kernel = np.exp(-0.5 * u ** 2)
-        if density_method == DENSITY_METHOD_FOURTH_ORDER_GAUSSIAN:
-            kernel *= 1.5 - 0.5 * u ** 2
-        fhat[t] = np.mean(kernel) / (h * normalizer)
-    fhat = np.maximum(fhat, density_floor)
-    
+
     # RIF = q + (tau - I(Y <= q)) / f(q)
     RIF = np.zeros((N, T))
     for t in range(T):
         indicator = (Y <= q_tau[t]).astype(float)
         RIF[:, t] = q_tau[t] + (taus[t] - indicator) / fhat[t]
-    
+
     return RIF, q_tau, fhat
 
 
@@ -540,6 +551,46 @@ def compute_pooled_panel(G: np.ndarray, Y_resid: np.ndarray, Q: np.ndarray,
     return cpp_ext.stage1_pooled_panel_static(
         G_f, Y_c, Q_c, min_mac, min_var, n_threads, panel_size,
     )
+
+
+def make_pooled_bin_plan(Y: np.ndarray, taus: np.ndarray, Q: np.ndarray,
+                         q_tau: Optional[np.ndarray] = None,
+                         fhat: Optional[np.ndarray] = None,
+                         density_floor: float = 1e-8,
+                         density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN,
+                         n_threads: int = 1):
+    """Build an O(N) bin-prefix plan for pooled Stage 1 without allocating RIF."""
+    check_orthonormal_basis(Q, context="make_pooled_bin_plan")
+    require_cpp_extension("Pooled bin-prefix computation")
+    if not HAVE_CPP or not hasattr(cpp_ext, 'PooledBinPlan'):
+        raise RuntimeError(
+            "The C++ extension does not export PooledBinPlan; "
+            "rebuild the extension (python setup.py build_ext --inplace)."
+        )
+    Y_c = np.ascontiguousarray(Y, dtype=np.float64)
+    taus_c = np.ascontiguousarray(taus, dtype=np.float64)
+    if q_tau is None or fhat is None:
+        q_tau, fhat = compute_rif_nuisance(
+            Y_c, taus_c, density_floor=density_floor, density_method=density_method
+        )
+    q_c = np.ascontiguousarray(q_tau, dtype=np.float64)
+    f_c = np.ascontiguousarray(fhat, dtype=np.float64)
+    Q_c = np.ascontiguousarray(Q, dtype=np.float64)
+    return cpp_ext.PooledBinPlan(Y_c, taus_c, q_c, f_c, Q_c, int(n_threads))
+
+
+def compute_pooled_binned(G: np.ndarray, plan,
+                          min_mac: float = 5.0, min_var: float = 1e-8,
+                          n_threads: int = 1):
+    """O(N) bin-prefix pooled Stage 1 kernel using a prebuilt :func:`make_pooled_bin_plan`."""
+    require_cpp_extension("Pooled bin-prefix computation")
+    if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_pooled_bin_fast'):
+        raise RuntimeError(
+            "The C++ extension does not export stage1_pooled_bin_fast; "
+            "rebuild the extension (python setup.py build_ext --inplace)."
+        )
+    G_f = np.asfortranarray(G, dtype=np.float64)
+    return cpp_ext.stage1_pooled_bin_fast(G_f, plan, min_mac, min_var, int(n_threads))
 
 
 def make_block_plan(Y_resid: np.ndarray, Q: np.ndarray, block_ids: np.ndarray,

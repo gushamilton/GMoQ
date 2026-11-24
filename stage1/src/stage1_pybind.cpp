@@ -17,6 +17,7 @@
 namespace py = pybind11;
 
 #include "stage1_fast.hpp"
+#include "stage1_pooled_fast.hpp"
 
 namespace {
 
@@ -1578,8 +1579,14 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1, py::arg("panel_size") = 16);
 
-    m.def("stage1_pooled_panel_static", &stage1_pooled_panel_impl<true>,
-          "Pooled-only panel kernel: beta and d_resid with no block accumulation",
+    m.def("stage1_pooled_panel_static", &gmoq_pooled::pooled_panel_fast,
+          "Pooled-only panel kernel (hoisted + AVX2): beta and d_resid with no block accumulation",
+          py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    m.def("stage1_pooled_panel_exact", &stage1_pooled_panel_impl<true>,
+          "Reference scalar pooled-only panel kernel",
           py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1, py::arg("panel_size") = 16);
@@ -1589,6 +1596,31 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           py::arg("G"), py::arg("RIF_resid"), py::arg("Q"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
           py::arg("n_threads") = 1, py::arg("panel_size") = 16);
+
+    py::class_<gmoq_pooled::PooledBinPlan>(m, "PooledBinPlan",
+          "O(N) bin-prefix plan for pooled Stage 1: assigns each sample to one\n"
+          "quantile bin and precomputes Q^T RIF and Sigma_0 without allocating\n"
+          "an (N, T) RIF matrix.")
+        .def(py::init<py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      int>(),
+             py::arg("y"), py::arg("taus"), py::arg("q_tau"), py::arg("fhat"),
+             py::arg("Q"), py::arg("n_threads") = 1)
+        .def("sigma0", &gmoq_pooled::PooledBinPlan::sigma0,
+             "Exact pooled covariance Sigma_0 = (1/N) (M RIF)^T (M RIF).")
+        .def_readonly("N", &gmoq_pooled::PooledBinPlan::N)
+        .def_readonly("T", &gmoq_pooled::PooledBinPlan::T)
+        .def_readonly("K", &gmoq_pooled::PooledBinPlan::K)
+        .def_readonly("has_intercept", &gmoq_pooled::PooledBinPlan::has_intercept);
+
+    m.def("stage1_pooled_bin_fast", &gmoq_pooled::pooled_bin_fast,
+          "O(N) bin-prefix pooled Stage 1 kernel using a prebuilt PooledBinPlan",
+          py::arg("G"), py::arg("plan"),
+          py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
+          py::arg("n_threads") = 1);
 
     m.def("stage1_finalize_block_scores_static", &stage1_finalize_block_scores_impl<true>,
           "Experimental fused stage1 finalization with static scheduling",
