@@ -88,6 +88,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <numeric>
 #include <vector>
 
 #ifdef _OPENMP
@@ -193,6 +194,30 @@ struct BlockPlan {
     // Consequence: one plan serves one kernel call at a time.  The CLI's batch
     // pipeline runs a single batch at a time; concurrent callers need a plan each.
     mutable Scratch gt_buf, w_buf, u_buf, s2_buf, v_buf;
+
+    // Optional bin-prefix data (set_bins).  RIF[i,t] = c_t - 1{y_i <= q_t}/f_t,
+    // so each sample falls in one quantile bin, and the O(N P T) cross-product
+    // W_b[p][t] = sum_{i in b} gc_ip RIF_resid[i,t] is recovered exactly from
+    // per-(block, bin) genotype sums plus the U_b the sweep already forms:
+    //
+    //   W_b[p][t] = c_t * sum_{i in b} gc_ip
+    //             - (1/f_t) * sum_{i in b, bin_i <= t} gc_ip
+    //             - sum_k U_b[p][k] * (Q^T RIF)[k][t]
+    //
+    // The sweep then runs over [Q | e] only (K+1 columns instead of T+K+1).
+    bool has_bins = false;
+    size_t Crow2 = 0;
+    std::vector<double> RQ2;           // (N, Crow2) [Q | e | 0 pad], sorted order
+    std::vector<uint16_t> bin_sorted;  // (N,) bin of each sorted sample, in [0, T]
+    std::vector<size_t> tau_ord;       // sorted-q position -> tau index
+    std::vector<double> c_sorted;      // q + tau/f, sorted-q order
+    std::vector<double> inv_f_sorted;  // 1/f, sorted-q order
+    std::vector<double> QtR_tk;        // (T, K): (Q^T RIF)[k][t] stored [t*K + k]
+
+    void set_bins(py::array_t<double, py::array::c_style | py::array::forcecast> y_arr,
+                  py::array_t<double, py::array::c_style | py::array::forcecast> taus_arr,
+                  py::array_t<double, py::array::c_style | py::array::forcecast> q_arr,
+                  py::array_t<double, py::array::c_style | py::array::forcecast> f_arr);
 
     size_t n_buckets() const { return static_cast<size_t>(n_blocks) + 1; }
 
@@ -345,6 +370,80 @@ inline BlockPlan::BlockPlan(
     }  // gil_release
 }
 
+inline void BlockPlan::set_bins(
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> taus_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> q_arr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> f_arr
+) {
+    if (y_arr.ndim() != 1 || static_cast<size_t>(y_arr.shape(0)) != N) {
+        throw std::runtime_error("set_bins: y must have N entries.");
+    }
+    if (taus_arr.shape(0) != static_cast<py::ssize_t>(T) || q_arr.shape(0) != static_cast<py::ssize_t>(T) ||
+        f_arr.shape(0) != static_cast<py::ssize_t>(T)) {
+        throw std::runtime_error("set_bins: taus, q_tau and fhat must have T entries.");
+    }
+    if (T >= 65535) throw std::runtime_error("set_bins requires T < 65535.");
+    const double* y = y_arr.data();
+    const double* taus = taus_arr.data();
+    const double* q = q_arr.data();
+    const double* f = f_arr.data();
+
+    tau_ord.resize(T);
+    std::iota(tau_ord.begin(), tau_ord.end(), size_t{0});
+    std::stable_sort(tau_ord.begin(), tau_ord.end(),
+                     [&](size_t a, size_t b) { return q[a] < q[b]; });
+    std::vector<double> q_sorted(T);
+    c_sorted.resize(T);
+    inv_f_sorted.resize(T);
+    for (size_t st = 0; st < T; st++) {
+        const size_t t = tau_ord[st];
+        if (!(f[t] > 0.0) || !std::isfinite(f[t])) throw std::runtime_error("set_bins: fhat must be positive.");
+        q_sorted[st] = q[t];
+        c_sorted[st] = q[t] + taus[t] / f[t];
+        inv_f_sorted[st] = 1.0 / f[t];
+    }
+
+    // Bins in sorted-sample order: y_i <= q_sorted[st]  <=>  bin_i <= st.
+    bin_sorted.assign(N, 0);
+    for (size_t s = 0; s < N; s++) {
+        const double yi = y[static_cast<size_t>(order[s])];
+        bin_sorted[s] = static_cast<uint16_t>(
+            std::lower_bound(q_sorted.begin(), q_sorted.end(), yi) - q_sorted.begin());
+    }
+
+    // Q^T RIF without the N x T RIF: per-bin sums of Q rows, then prefix sums.
+    std::vector<double> qbin((T + 1) * K, 0.0), w(K, 0.0), wc(K, 0.0);
+    for (size_t s = 0; s < N; s++) {
+        const double* qr = &RQ[s * Crow + T];
+        double* qb = &qbin[static_cast<size_t>(bin_sorted[s]) * K];
+        for (size_t k = 0; k < K; k++) {
+            qb[k] += qr[k];
+            const double x = qr[k], yv = w[k], tt = yv + x;   // Neumaier, as for e
+            wc[k] += (std::abs(yv) >= std::abs(x)) ? ((yv - tt) + x) : ((x - tt) + yv);
+            w[k] = tt;
+        }
+    }
+    for (size_t k = 0; k < K; k++) w[k] += wc[k];
+    QtR_tk.assign(T * K, 0.0);
+    std::vector<double> run(K, 0.0);
+    for (size_t st = 0; st < T; st++) {
+        for (size_t k = 0; k < K; k++) run[k] += qbin[st * K + k];
+        const size_t t = tau_ord[st];
+        for (size_t k = 0; k < K; k++) {
+            QtR_tk[t * K + k] = c_sorted[st] * w[k] - run[k] * inv_f_sorted[st];
+        }
+    }
+
+    // Slim sweep operand [Q | e | 0 pad].
+    Crow2 = ((K + 1 + CBLK - 1) / CBLK) * CBLK;
+    RQ2.assign(N * Crow2, 0.0);
+    for (size_t s = 0; s < N; s++) {
+        std::memcpy(&RQ2[s * Crow2], &RQ[s * Crow + T], (K + 1) * sizeof(double));
+    }
+    has_bins = true;
+}
+
 // ---------------------------------------------------------------------------
 // Per-pass wall clock of the last run_fast call, for profiling only.  Not part
 // of the numerical contract.
@@ -396,8 +495,10 @@ inline void run_fast(
     if (n_threads > 0) omp_set_num_threads(n_threads);
 #endif
 
-    const double* __restrict__ RQ = plan.RQ.data();
-    const size_t Crow = plan.Crow;
+    const bool bins = plan.has_bins;
+    const double* __restrict__ RQ = bins ? plan.RQ2.data() : plan.RQ.data();
+    const size_t Crow = bins ? plan.Crow2 : plan.Crow;
+    const size_t T_sweep = bins ? 0 : T;   // the sweep forms W only without bins
     const double* __restrict__ S_all = plan.S.data();
     const double* __restrict__ A_all = plan.A.data();
     const double* __restrict__ E_all = plan.E.data();
@@ -518,15 +619,60 @@ inline void run_fast(
                 double* ubp = U + bb * P * K;
                 double* vbp = V + bb * P;
                 double* s2p = S2 + bb * P;
-                double* Wbp = (bb < n_blocks_sz) ? W + bb * P * T : nullptr;
+                double* Wbp = (!bins && bb < n_blocks_sz) ? W + bb * P * T : nullptr;
                 if (avx2) {
 #ifdef GMOQ_HAVE_AVX2_CLONE
-                    sweep_block_avx2(Gt, LD, RQ, Crow, T, K, s0, s1, P, Ppad,
+                    sweep_block_avx2(Gt, LD, RQ, Crow, T_sweep, K, s0, s1, P, Ppad,
                                      Wbp, ubp, vbp, s2p, accm.data(), STILE);
 #endif
                 } else {
-                    sweep_block_base(Gt, LD, RQ, Crow, T, K, s0, s1, P, Ppad,
+                    sweep_block_base(Gt, LD, RQ, Crow, T_sweep, K, s0, s1, P, Ppad,
                                      Wbp, ubp, vbp, s2p, accm.data(), STILE);
+                }
+            }
+        }
+
+        if (bins) {
+            // Pass 3b: W from per-(block, bin) sums of the packed (centred) genotypes.
+            const uint16_t* __restrict__ binv = plan.bin_sorted.data();
+            const size_t* tord = plan.tau_ord.data();
+            const double* __restrict__ cs = plan.c_sorted.data();
+            const double* __restrict__ ifs = plan.inv_f_sorted.data();
+            const double* __restrict__ QtR = plan.QtR_tk.data();
+            #pragma omp parallel
+            {
+                std::vector<double> hacc((T + 1) * LD), tot(LD), cum(LD);
+                #pragma omp for schedule(static)
+                for (int64_t b = 0; b < static_cast<int64_t>(n_blocks_sz); b++) {
+                    const size_t bb = static_cast<size_t>(b);
+                    const size_t s0 = static_cast<size_t>(plan.offsets[bb]);
+                    const size_t s1 = static_cast<size_t>(plan.offsets[bb + 1]);
+                    std::fill(hacc.begin(), hacc.end(), 0.0);
+                    for (size_t s = s0; s < s1; s++) {
+                        const double* __restrict__ g = Gt + s * LD;
+                        double* __restrict__ h = hacc.data() + static_cast<size_t>(binv[s]) * LD;
+                        for (size_t p = 0; p < LD; p++) h[p] += g[p];
+                    }
+                    std::fill(tot.begin(), tot.end(), 0.0);
+                    for (size_t st = 0; st <= T; st++) {
+                        const double* __restrict__ h = hacc.data() + st * LD;
+                        for (size_t p = 0; p < LD; p++) tot[p] += h[p];
+                    }
+                    std::fill(cum.begin(), cum.end(), 0.0);
+                    double* __restrict__ Wb = W + bb * P * T;
+                    const double* __restrict__ Ub = U + bb * P * K;
+                    for (size_t st = 0; st < T; st++) {
+                        const double* __restrict__ h = hacc.data() + st * LD;
+                        for (size_t p = 0; p < LD; p++) cum[p] += h[p];
+                        const size_t t = tord[st];
+                        const double* __restrict__ qr = QtR + t * K;
+                        for (size_t p = 0; p < P; p++) {
+                            const double* __restrict__ up = Ub + p * K;
+                            double proj = 0.0;
+                            for (size_t k = 0; k < K; k++) proj += up[k] * qr[k];
+                            Wb[p * T + t] = cs[st] * tot[p] - cum[p] * ifs[st] - proj;
+                        }
+                    }
                 }
             }
         }

@@ -777,6 +777,12 @@ def load_analysis_inputs(pheno_file: str, pheno_cols: list[str], covar_file: Opt
     return sample_ids, sample_aliases, y_values, X, list(covar_cols)
 
 
+# id(RIF_resid) -> (y, taus, q_tau, fhat) for the bin-prefix block kernel.  The
+# block-plan cache holds a reference to the RIF_resid it was built from, which
+# keeps the id valid for as long as the entry is used.
+_RIF_NUISANCE: dict = {}
+
+
 def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_cols: list[str],
                         X: np.ndarray, taus: np.ndarray,
                         density_method: str = DENSITY_METHOD_SILVERMAN_GAUSSIAN
@@ -791,10 +797,14 @@ def build_rif_residuals(y_values: dict[str, list[float] | np.ndarray], pheno_col
         log_mem(f"Computing RIF matrix for {col}...")
         t_rif = time.perf_counter()
         y = np.asarray(y_values[col], dtype=np.float64)
-        rif, q_tau, _ = compute_rif(y, taus, density_method=density_method)
+        rif, q_tau, fhat = compute_rif(y, taus, density_method=density_method)
         log_mem(f"RIF build for {col}: {time.perf_counter() - t_rif:.2f}s")
-        rif_resid_list.append(rif - Q @ (Q.T @ rif))
+        rif_resid = rif - Q @ (Q.T @ rif)
+        rif_resid_list.append(rif_resid)
         q_tau_list.append(q_tau)
+        # The fast block kernel can rebuild the RIF cross-products exactly from
+        # (y, q_tau, fhat); keyed on the residual array's identity.
+        _RIF_NUISANCE[id(rif_resid)] = (y, np.asarray(taus, dtype=np.float64), q_tau, fhat)
 
     return rif_resid_list, Q, q_tau_list
 
@@ -1639,6 +1649,9 @@ def _get_block_plan(kernel_state, RIF_resid, Q, block_ids, args):
             and kernel_state.get('plan') is not None):
         return kernel_state['plan']
     plan = make_block_plan(RIF_resid, Q, block_ids, args.blocks, n_threads=args.threads)
+    nuisance = _RIF_NUISANCE.get(id(RIF_resid))
+    if getattr(args, 'bin_kernel', True) and nuisance is not None and hasattr(plan, 'set_bins'):
+        plan.set_bins(*nuisance)
     kernel_state['rif'] = RIF_resid
     kernel_state['q'] = Q
     kernel_state['plan'] = plan
@@ -1990,6 +2003,11 @@ def main():
                              'matrix is streamed once per panel instead of once per SNP. '
                              'Bit-identical output; single phenotype only.')
     parser.set_defaults(panel_kernel=True)
+    parser.add_argument('--no-bin-kernel', dest='bin_kernel', action='store_false',
+                        help='Form the block kernel\'s RIF cross-products with the dense '
+                             'O(N*T) sweep instead of the exact O(N) bin-prefix form '
+                             '(results agree to rounding; for A/B checks).')
+    parser.set_defaults(bin_kernel=True)
     parser.add_argument('--panel-size', dest='panel_size', type=int, default=16,
                         help='Number of SNPs per panel for the exact panel kernel '
                              '(--exact-kernel; default: 16). Ignored by the default fast '

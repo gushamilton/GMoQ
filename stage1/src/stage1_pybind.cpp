@@ -1670,6 +1670,11 @@ PYBIND11_MODULE(_stage1_cpp, m) {
                       py::array_t<int32_t>, int, int>(),
              py::arg("RIF_resid"), py::arg("Q"), py::arg("block_ids"),
              py::arg("n_blocks"), py::arg("n_threads") = 1)
+        .def("set_bins", &gmoq_fast::BlockPlan::set_bins,
+             "Switch the kernel to the exact bin-prefix form of the RIF cross-products\n"
+             "(y, taus, q_tau, fhat as used to build RIF).",
+             py::arg("y"), py::arg("taus"), py::arg("q_tau"), py::arg("fhat"))
+        .def_readonly("has_bins", &gmoq_fast::BlockPlan::has_bins)
         .def_readonly("N", &gmoq_fast::BlockPlan::N)
         .def_readonly("T", &gmoq_fast::BlockPlan::T)
         .def_readonly("K", &gmoq_fast::BlockPlan::K)

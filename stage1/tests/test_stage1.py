@@ -494,3 +494,40 @@ def test_batch_jackknife_matches_per_snp_reference():
         assert np.array_equal(beta[j], rb, equal_nan=True)
         np.testing.assert_allclose(se[j], rs, rtol=1e-13, equal_nan=True)
         assert d[j] == np.sum(stats[j, :, 0])
+
+
+@pytest.mark.parametrize("case", ["cov", "int_only", "tied", "unsorted", "no_int"])
+def test_block_kernel_bins_match_dense(case):
+    rng = np.random.default_rng({"cov": 1, "int_only": 2, "tied": 3, "unsorted": 4, "no_int": 5}[case])
+    n, m, B = 2500, 13, 40
+    taus = np.linspace(0.05, 0.95, 15)
+    if case == "unsorted":
+        taus = taus[rng.permutation(len(taus))]
+    y = rng.normal(size=n)
+    if case == "tied":
+        y = np.round(2 * y)
+    if case == "int_only":
+        X = np.ones((n, 1))
+    elif case == "no_int":
+        X = rng.normal(size=(n, 3))
+    else:
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 4))])
+    Q, _ = np.linalg.qr(X)
+    G = rng.binomial(2, 0.3, size=(n, m)).astype(float)
+    G[rng.random(G.shape) < 0.02] = np.nan
+    G[:, 0] = 0.0
+    block_ids = rng.integers(0, B, size=n).astype(np.int32)
+    rif, q_tau, fhat = core.compute_rif(y, taus)
+    rif_resid = rif - Q @ (Q.T @ rif)
+
+    dense = core.make_block_plan(rif_resid, Q, block_ids, B, n_threads=2)
+    binned = core.make_block_plan(rif_resid, Q, block_ids, B, n_threads=2)
+    binned.set_bins(y, taus, q_tau, fhat)
+    assert binned.has_bins and not dense.has_bins
+    ref = core.compute_block_scores_panel_fast(G, rif_resid, Q, block_ids, B, n_threads=2, plan=dense)
+    got = core.compute_block_scores_panel_fast(G, rif_resid, Q, block_ids, B, n_threads=2, plan=binned)
+    ref, got = np.asarray(ref), np.asarray(got)
+    assert np.array_equal(np.isnan(ref), np.isnan(got))
+    ok = ~np.isnan(ref)
+    scale = np.nanmax(np.abs(ref), axis=(0, 1), keepdims=True)
+    np.testing.assert_allclose((got / scale)[ok], (ref / scale)[ok], rtol=0, atol=1e-11)
