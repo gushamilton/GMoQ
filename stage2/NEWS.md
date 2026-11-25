@@ -1,3 +1,9 @@
+# gmoq 0.8.1
+
+* Stage 1 output is about a third smaller: `beta_tau_*` is written to 0.001 of its standard
+  error and `se_tau_*` to four significant digits. Values change by at most 0.0005 standard
+  errors; the file format is unchanged.
+
 # gmoq 0.8.0
 
 * Stage 1 is several times faster end to end. With a `.bgi` index and `--snps`, BGEN records
