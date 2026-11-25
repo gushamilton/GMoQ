@@ -22,6 +22,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov", "setuptools", "bgen-reader"]   # what the tests need
 
+[project.urls]
+Homepage = "https://github.com/gushamilton/GMoQ"
+Issues = "https://github.com/gushamilton/GMoQ/issues"
+
 [project.scripts]
 gmoq-stage1 = "gmoq.cli:main"
 

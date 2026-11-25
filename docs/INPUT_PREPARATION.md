@@ -7,8 +7,8 @@ of the phenotype you give it (see [ESTIMAND.md](ESTIMAND.md)).
 ## Genotypes
 
 BGEN v1.2 files with genotype probabilities (8-bit is enough). One file per chromosome is usual;
-run Stage 1 once per file. A `bgenix` index (`.bgen.bgi`) is optional; with one, `--snps` seeks
-directly to the requested variants instead of reading the whole file. Effects are per copy of the
+run Stage 1 once per file. Index each file with `bgenix -index` (`.bgen.bgi`): with an index and
+`--snps`, Stage 1 reads only the requested variants and decodes them in parallel. Effects are per copy of the
 first allele of each record ([ALLELE_CONVENTION.md](ALLELE_CONVENTION.md)).
 
 If the BGEN does not embed sample IDs, pass the `.sample` file with `--sample`.

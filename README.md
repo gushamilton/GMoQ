@@ -32,7 +32,7 @@ R CMD INSTALL stage2
 ```
 
 Without conda, install Armadillo (and libomp on macOS) first — `brew install armadillo libomp`
-or `apt install libarmadillo-dev` — then `pip install ./stage1` in a virtual environment.
+or `apt install libarmadillo-dev zlib1g-dev` — then `pip install ./stage1` in a virtual environment.
 Requirements, troubleshooting and running the tests: [docs/BUILD.md](docs/BUILD.md).
 
 ## Check it works

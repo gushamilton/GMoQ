@@ -2317,9 +2317,7 @@ def main(argv=None, geno_source=None):
                              'Bit-identical output; single phenotype only.')
     parser.set_defaults(panel_kernel=True)
     parser.add_argument('--no-bin-kernel', dest='bin_kernel', action='store_false',
-                        help='Form the block kernel\'s RIF cross-products with the dense '
-                             'O(N*T) sweep instead of the exact O(N) bin-prefix form '
-                             '(results agree to rounding; for A/B checks).')
+                        help=argparse.SUPPRESS)
     parser.set_defaults(bin_kernel=True)
     parser.add_argument('--panel-size', dest='panel_size', type=int, default=16,
                         help='Number of SNPs per panel for the exact panel kernel '
@@ -2356,20 +2354,10 @@ def main(argv=None, geno_source=None):
                              'Each record is read and decoded once for all jobs; every job\'s '
                              'output is identical to running it on its own.')
     parser.add_argument('--bgen-coalesce-gap', dest='bgen_coalesce_gap', type=float, default=1.0,
-                        help='Native decoder: read selected BGEN records in sequential windows, '
-                             'merging records separated by at most this many MiB (gaps are read '
-                             'and discarded). 0 reads each record on its own. Default 1.0, '
-                             'tuned on an NFS mount where large sequential reads are ~8x '
-                             'faster than small random ones.')
+                        help=argparse.SUPPRESS)
     parser.add_argument('--bgen-decoder', dest='bgen_decoder', choices=list(BGEN_DECODERS),
                         default=BGEN_DECODER_AUTO,
-                        help="How BGEN records are decoded. 'native' reads each selected "
-                             "record directly and inflates/decodes blocks of them in "
-                             "parallel in C++ (layout 2, zlib or uncompressed, unphased "
-                             "diploid), giving exact float64 dosages. 'bgen' uses the bgen "
-                             "package one record at a time (float32 dosages, the behaviour "
-                             "of earlier releases). 'auto' (default) uses native whenever "
-                             "the input supports it.")
+                        help=argparse.SUPPRESS)
     parser.add_argument('--allow-multiallelic-rsids', action='store_true',
                         help='Allow rsIDs that map to multiple BGEN records. By default these are excluded using the .bgi index.')
     

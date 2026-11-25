@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use G-MoQ, please cite it as below."
+title: "G-MoQ: Genomic Method of Quantiles"
+version: 0.8.0
+license: MIT
+repository-code: "https://github.com/gushamilton/GMoQ"
+authors:
+  - family-names: Nivard
+    given-names: Michel
+  - family-names: Hamilton
+    given-names: Fergus

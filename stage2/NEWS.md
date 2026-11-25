@@ -1,3 +1,16 @@
+# gmoq 0.8.0
+
+* Stage 1 is several times faster end to end. With a `.bgi` index and `--snps`, BGEN records
+  are read and decoded in parallel; the per-quantile cross-products no longer grow with the
+  number of quantiles; Stage 2 calibrates Q once per pooled covariance rather than
+  once per SNP.
+* Dosages are now the exact expected allele count of the stored probabilities (previously
+  rounded to single precision), so Stage 1 estimates differ from 0.7.0 in about the seventh
+  significant digit.
+* New `--jobs FILE`: several phenotypes, each with its own samples, covariates and LOCO file,
+  analysed in one pass over the genotypes; each output is identical to a separate run.
+* Building Stage 1 now needs zlib headers; libdeflate is used when available.
+
 # gmoq 0.7.0
 
 * Renamed from fungwas_stage1 / fungwasStage2 to gmoq. Releases up to 0.6.2 used the old names; results are unchanged.
