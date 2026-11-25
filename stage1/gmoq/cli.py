@@ -1269,6 +1269,16 @@ def _triu_indices_cached(n_taus: int):
 # far below sampling noise, and makes the gzipped output about a third smaller.
 BETA_SE_QUANTUM = 1e-3
 SE_SIG_DIGITS = 4
+# --cov-mode pooled-only writes z_tau = beta / se instead (se is implied by Sigma_0 and
+# d_resid), to the same 0.001-SE precision.
+Z_DECIMALS = 3
+
+
+def _z_fields(beta, se) -> list:
+    """z_tau strings (--cov-mode pooled-only), to Z_DECIMALS decimal places."""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        z = np.asarray(beta, dtype=np.float64) / np.asarray(se, dtype=np.float64)
+    return [f'{v:.{Z_DECIMALS}f}' for v in z.tolist()]
 
 
 def _beta_se_fields(beta, se) -> list:
@@ -1456,7 +1466,7 @@ def write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
             if not finite[j]:
                 continue
             row = [str(x) for x in info]
-            row.extend(_beta_se_fields(betas[j], se_all[j]))
+            row.extend(_z_fields(betas[j], se_all[j]))
             row.append(f'{float(d_resid[j]):.9g}')
             lines.append('\t'.join(row) + '\n')
 
@@ -2751,7 +2761,12 @@ def main(argv=None, geno_source=None):
     cols = ['snp_id', 'chr', 'bp', 'effect_allele', 'other_allele']
     for t in taus:
         # Use 3 decimals to avoid tau label collisions on dense grids (e.g. 100 taus).
-        cols.extend([f'beta_tau_{t:.3f}', f'se_tau_{t:.3f}'])
+        if args.cov_mode == COV_MODE_POOLED_ONLY:
+            # se_tau = sqrt(Sigma_0[t, t] / d_resid) exactly, so only z = beta / se is
+            # written; Stage 2 rebuilds beta and se from the Sigma_0 sidecar.
+            cols.append(f'z_tau_{t:.3f}')
+        else:
+            cols.extend([f'beta_tau_{t:.3f}', f'se_tau_{t:.3f}'])
     # Appended last so that anything parsing the beta/se block by position is
     # unaffected. This is the genotype's effective sample size, which Stage 2
     # turns into the per-SNP degrees of freedom of the covariance.

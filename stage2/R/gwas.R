@@ -763,6 +763,49 @@ if (se_mode == "diagonal") {
   if (file.exists(candidate)) candidate else NULL
 }
 
+# Quantile effects and their standard errors from a Stage 1 table.  Files from
+# --cov-mode pooled-only carry z_tau_* instead of beta_tau_* / se_tau_*: there
+# se_tau = sqrt(Sigma_0[t, t] / d_resid) exactly, so it is rebuilt from the
+# Sigma_0 sidecar and beta_tau = z_tau * se_tau.
+.stage1_effects <- function(stage1_dt, stage1_file, sigma0_file = NULL) {
+  nm <- names(stage1_dt)
+  beta_cols <- grep("^beta_tau_", nm, value = TRUE)
+  if (length(beta_cols)) {
+    se_cols <- grep("^se_tau_", nm, value = TRUE)
+    return(list(taus = as.numeric(sub("^beta_tau_", "", beta_cols)),
+                Q_slope = t(as.matrix(stage1_dt[, beta_cols, with = FALSE])),
+                SE_tau = t(as.matrix(stage1_dt[, se_cols, with = FALSE]))))
+  }
+  z_cols <- grep("^z_tau_", nm, value = TRUE)
+  if (!length(z_cols)) stop("Stage 1 file has neither beta_tau_* nor z_tau_* columns.", call. = FALSE)
+  if (is.null(sigma0_file)) sigma0_file <- .infer_sigma0_file(stage1_file)
+  if (is.null(sigma0_file)) {
+    stop("This Stage 1 file stores z_tau_* (--cov-mode pooled-only); its standard errors ",
+         "come from the .sigma0.tsv.gz sidecar, which was not found next to it. Pass ",
+         "sigma0_file.", call. = FALSE)
+  }
+  if (!(N_EFF_COLUMN %in% nm)) stop("z_tau_* columns need the ", N_EFF_COLUMN, " column.", call. = FALSE)
+  s0 <- read_sigma0(sigma0_file)
+  keys <- .normalize_chr(stage1_dt$chr)
+  if (length(s0$matrices) == 1L && names(s0$matrices)[1L] == SIGMA0_ALL_CHROM) keys[] <- SIGMA0_ALL_CHROM
+  missing <- setdiff(unique(keys), names(s0$matrices))
+  if (length(missing)) stop("Sigma_0 sidecar has no matrix for chromosome(s) ",
+                            paste(missing, collapse = ", "), ".", call. = FALSE)
+  d <- as.numeric(stage1_dt[[N_EFF_COLUMN]])
+  Z <- t(as.matrix(stage1_dt[, z_cols, with = FALSE]))
+  SE <- matrix(NA_real_, nrow(Z), ncol(Z))
+  for (k in unique(keys)) {
+    idx <- which(keys == k)
+    sd0 <- sqrt(diag(s0$matrices[[k]]))
+    if (length(sd0) != nrow(Z)) stop("Sigma_0 has ", length(sd0), " quantiles; the file has ", nrow(Z), ".", call. = FALSE)
+    SE[, idx] <- outer(sd0, 1 / sqrt(d[idx]))
+  }
+  Q <- Z * SE
+  dimnames(Q) <- list(sub("^z_tau_", "beta_tau_", z_cols), NULL)
+  dimnames(SE) <- list(sub("^z_tau_", "se_tau_", z_cols), NULL)
+  list(taus = as.numeric(sub("^z_tau_", "", z_cols)), Q_slope = Q, SE_tau = SE)
+}
+
 #' Parametric GWAS from Stage 1 files
 #'
 #' Convenience wrapper for \code{param_gwas()} that reads Stage 1 output files
@@ -890,14 +933,11 @@ param_gwas_from_file <- function(
   stage1_filter <- .filter_multiallelic_stage1(stage1_dt, drop_multiallelic)
   stage1_dt <- stage1_filter$dt
   
-  # Extract beta/SE columns
-  beta_cols <- grep("^beta_tau_", names(stage1_dt), value = TRUE)
-  se_cols <- grep("^se_tau_", names(stage1_dt), value = TRUE)
-  
-  taus <- as.numeric(sub("^beta_tau_", "", beta_cols))
-  
-  Q_slope <- t(as.matrix(stage1_dt[, beta_cols, with = FALSE]))
-  SE_tau <- t(as.matrix(stage1_dt[, se_cols, with = FALSE]))
+  # Quantile effects and standard errors (beta/se, or z rebuilt with Sigma_0)
+  eff <- .stage1_effects(stage1_dt, stage1_file, sigma0_file)
+  taus <- eff$taus
+  Q_slope <- eff$Q_slope
+  SE_tau <- eff$SE_tau
   
   # Build stage1 list
   stage1 <- list(
@@ -1207,12 +1247,10 @@ param_gwas_multi_from_file <- function(
   stage1_filter <- .filter_multiallelic_stage1(stage1_dt, drop_multiallelic)
   stage1_dt <- stage1_filter$dt
 
-  beta_cols <- grep("^beta_tau_", names(stage1_dt), value = TRUE)
-  se_cols <- grep("^se_tau_", names(stage1_dt), value = TRUE)
-  taus <- as.numeric(sub("^beta_tau_", "", beta_cols))
-
-  Q_slope <- t(as.matrix(stage1_dt[, beta_cols, with = FALSE]))
-  SE_tau <- t(as.matrix(stage1_dt[, se_cols, with = FALSE]))
+  eff <- .stage1_effects(stage1_dt, stage1_file, sigma0_file)
+  taus <- eff$taus
+  Q_slope <- eff$Q_slope
+  SE_tau <- eff$SE_tau
 
   stage1 <- list(
     taus = taus,

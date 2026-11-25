@@ -97,6 +97,15 @@ def _cols(rows, prefix):
     return np.array([[float(r[f"{prefix}_{t:.3f}"]) for t in TAUS] for r in rows])
 
 
+def _effects_from_z(rows, out):
+    """beta and se from a pooled-only file: se = sqrt(diag(Sigma_0) / d_resid), beta = z * se."""
+    _, mats = pooled_cov.read_sigma0(str(out))
+    sd0 = np.sqrt(np.diag(next(iter(mats.values()))))
+    d = np.array([float(r["d_resid"]) for r in rows])
+    se = sd0[None, :] / np.sqrt(d)[:, None]
+    return _cols(rows, "z_tau") * se, se
+
+
 def _assert_beta_at_output_precision(rows, beta):
     """beta_tau_* is written to 0.001 of its standard error."""
     got, se = _cols(rows, "beta_tau"), _cols(rows, "se_tau")
@@ -159,10 +168,10 @@ def test_pooled_covariance_matches_direct_computation(data, monkeypatch, tmp_pat
     assert meta["n_samples"] == N
     np.testing.assert_allclose(meta["taus"], TAUS)
 
-    # pooled-only: same slopes, and se_tau = sqrt(diag(Sigma0) / D)
-    _assert_beta_at_output_precision(rows, beta)
-    np.testing.assert_allclose(_cols(rows, "se_tau"),
-                               np.sqrt(np.diag(sigma0)[None, :] / D[:, None]), rtol=6e-4)
+    # pooled-only writes z_tau; beta and se_tau = sqrt(diag(Sigma0) / D) are rebuilt
+    got_beta, se = _effects_from_z(rows, out)
+    np.testing.assert_allclose(se, np.sqrt(np.diag(sigma0)[None, :] / D[:, None]), rtol=1e-8)
+    assert np.all(np.abs(got_beta - beta) <= 1e-3 * se)
 
 
 def test_pooled_covariance_reproduces_the_hc0_sandwich():
@@ -194,8 +203,9 @@ def test_loco_prediction_enters_as_a_covariate(data, monkeypatch, tmp_path):
                 "--loco-mode", "covariate", "--cov-mode", "pooled-only")
     X = np.column_stack([data["C"], data["L"]])
     beta, psi, D, _ = direct_fit(data["y"], data["G"], X, TAUS)
-    _assert_beta_at_output_precision(rows, beta)
     np.testing.assert_allclose([float(r["d_resid"]) for r in rows], D, rtol=1e-8)
+    got_beta, se = _effects_from_z(rows, tmp_path / "loco")
+    assert np.all(np.abs(got_beta - beta) <= 1e-3 * se)
     _, mats = pooled_cov.read_sigma0(str(tmp_path / "loco"))
     np.testing.assert_allclose(mats["22"], psi.T @ psi / N, rtol=1e-9)
 
@@ -301,8 +311,7 @@ def test_pooled_only_cli_fast_matches_exact(data, monkeypatch, tmp_path):
     rows_exact = _run(monkeypatch, data, tmp_path / "p_exact", "--cov-mode", "pooled-only",
                       "--exact-kernel", *loco)
     assert [r["snp_id"] for r in rows_fast] == [r["snp_id"] for r in rows_exact]
-    _assert_beta_at_output_precision(rows_fast, _cols(rows_exact, "beta_tau"))
-    np.testing.assert_allclose(_cols(rows_fast, "se_tau"), _cols(rows_exact, "se_tau"), rtol=6e-4)
+    assert np.max(np.abs(_cols(rows_fast, "z_tau") - _cols(rows_exact, "z_tau"))) <= 1e-3
     np.testing.assert_allclose([float(r["d_resid"]) for r in rows_fast],
                                [float(r["d_resid"]) for r in rows_exact], rtol=1e-8)
 
