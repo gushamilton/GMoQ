@@ -1,6 +1,6 @@
 Package: gmoq
 Title: Distributional GWAS by the Genomic Method of Quantiles
-Version: 0.7.0
+Version: 0.8.0
 Description: Stage 2 of the Genomic Method of Quantiles (G-MoQ). Maps the
     per-quantile SNP effects from an unconditional (RIF) quantile GWAS onto the
     parameters of a distributional model (means, variances, mixture components)
@@ -38,4 +38,5 @@ LinkingTo:
     RcppArmadillo
 VignetteBuilder: knitr
 URL: https://github.com/gushamilton/GMoQ
+BugReports: https://github.com/gushamilton/GMoQ/issues
 Config/testthat/edition: 3

@@ -191,12 +191,15 @@ tool applies; transform such phenotypes.
 
 ## Computation
 
-Stage 1's C++ kernel processes variants in batches and is multithreaded with OpenMP
-(`--threads`, set to the number of physical cores). The default fast kernel is algebraically
-identical to the reference kernel but sums in a different order, so results differ in the last
-bits; `--exact-kernel` reproduces the reference kernel bit for bit. `--cov-mode pooled` skips
-writing the per-variant jackknife covariance, and `--cov-mode pooled-only` also skips computing
-it; then `se_tau_*` are the pooled standard errors.
+Stage 1 is multithreaded with OpenMP (`--threads`, set to the number of physical cores). With a
+`.bgi` index and `--snps`, the selected BGEN records are read and decoded in parallel, and
+dosages are the exact expected allele count. The quantile cross-products are formed from each
+sample's quantile bin, so their cost does not grow with the number of quantiles. The fast
+kernels are algebraically identical to the reference kernel but sum in a different order, so
+results differ in the last bits; `--exact-kernel` reproduces the reference kernel bit for bit.
+`--cov-mode pooled` skips writing the per-variant jackknife covariance, and `--cov-mode
+pooled-only` also skips computing it; then `se_tau_*` are the pooled standard errors. Several
+phenotypes can share one pass over the genotypes (`--jobs`).
 
 ## Reference
 

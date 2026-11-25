@@ -27,7 +27,8 @@ gmoq-stage1 \
 ### Inputs
 
 - **`--bgen`**: BGEN v1.2 dosages. Effects are per copy of allele 1 (`effect_allele` in the
-  output). A `bgenix` index (`.bgen.bgi`) is optional; it speeds up `--snps`.
+  output). Index it with `bgenix -index` and pass `--snps`: Stage 1 then reads only those
+  variants and decodes them in parallel, which is much faster.
 - **`--pheno`**: space- or tab-delimited, header `FID IID <columns>`, the raw phenotype (Stage 1
   builds the RIF itself). The first column (FID) must equal the BGEN sample IDs. Only `NA` means
   missing.
@@ -52,6 +53,23 @@ BGEN. Read it.
 | `--loco-preds FILE` | | REGENIE step 1 `.loco` or `_pred.list`; added to the covariate basis |
 
 `gmoq-stage1 --help` lists every option.
+
+### Several phenotypes in one pass
+
+Each phenotype can have its own sample list, covariates and LOCO file. Put one analysis per
+line in a text file, with the options that differ, and give the shared options once:
+
+```text
+--pheno pheno.txt --pheno-col bmi --keep keep_bmi.txt --covar covar.txt --out results/bmi_chr22
+--pheno pheno.txt --pheno-col ldl --keep keep_ldl.txt --covar covar.txt --out results/ldl_chr22
+```
+
+```bash
+gmoq-stage1 --jobs jobs.txt --bgen data/chr22.bgen --snps hm3_chr22.txt --threads 8
+```
+
+The genotypes are read once for all lines; each output is the same as running that line on its
+own.
 
 ### Outputs
 

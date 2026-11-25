@@ -2,8 +2,10 @@
 
 ## Requirements
 
-- **Stage 1:** Python >= 3.10, a C++ compiler with OpenMP, and Armadillo. The conda
-  environment (`stage1/environment.yml`) provides all of them, on Linux and macOS.
+- **Stage 1:** Python >= 3.10, a C++ compiler with OpenMP, Armadillo and zlib (headers
+  included: `zlib1g-dev` on Debian/Ubuntu). libdeflate is used if present, for faster BGEN
+  decoding. The conda environment (`stage1/environment.yml`) provides all of them, on Linux and
+  macOS.
 - **Stage 2:** R >= 4.1 with `Rcpp`, `RcppArmadillo` and `data.table`.
 
 ## Stage 1 (Python package `gmoq`, command `gmoq-stage1`)
