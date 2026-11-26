@@ -122,3 +122,26 @@ test_that("cached pooled SE, param_cov, and Q calibration match uncached per-SNP
   expect_equal(fit_cached$Q_df_eff, fit_uncached$Q_df_eff, tolerance = 1e-12)
   expect_equal(fit_cached$Q_scale, fit_uncached$Q_scale, tolerance = 1e-12)
 })
+
+test_that("pooled-only z_tau files give the same effects as beta/se files", {
+  taus <- c(0.25, 0.5, 0.75)
+  set.seed(3)
+  S0 <- crossprod(matrix(rnorm(9), 3)) + diag(3)
+  d <- c(100, 400)
+  se <- outer(1 / sqrt(d), sqrt(diag(S0)))          # SNP x tau
+  beta <- matrix(rnorm(6), 2) * se
+  lab <- sprintf("%.3f", taus)
+  base <- data.table::data.table(chr = "22", d_resid = d)
+  bs <- data.table::copy(base); zt <- data.table::copy(base)
+  for (k in seq_along(taus)) {
+    bs[[paste0("beta_tau_", lab[k])]] <- beta[, k]
+    bs[[paste0("se_tau_", lab[k])]] <- se[, k]
+    zt[[paste0("z_tau_", lab[k])]] <- beta[, k] / se[, k]
+  }
+  local_mocked_bindings(read_sigma0 = function(sigma0_file) list(meta = list(), matrices = list(ALL = S0)))
+  from_bs <- gmoq:::.stage1_effects(bs, "x.stage1.tsv.gz")
+  from_z <- gmoq:::.stage1_effects(zt, "x.stage1.tsv.gz", sigma0_file = "x.sigma0.tsv.gz")
+  expect_equal(from_z$taus, from_bs$taus)
+  expect_equal(from_z$SE_tau, from_bs$SE_tau, tolerance = 1e-12)
+  expect_equal(from_z$Q_slope, from_bs$Q_slope, tolerance = 1e-12)
+})

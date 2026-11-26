@@ -1263,6 +1263,39 @@ def _triu_indices_cached(n_taus: int):
     return np.triu_indices(n_taus)
 
 
+# Output precision.  beta_tau_* is written to the nearest BETA_SE_QUANTUM of its own
+# standard error (never more than 6 significant digits, as before) and se_tau_* to
+# SE_SIG_DIGITS significant digits.  Rounding beta to 0.001 SE adds at most 0.0005 SE,
+# far below sampling noise, and makes the gzipped output about a third smaller.
+BETA_SE_QUANTUM = 1e-3
+SE_SIG_DIGITS = 4
+# --cov-mode pooled-only writes z_tau = beta / se instead (se is implied by Sigma_0 and
+# d_resid), to the same 0.001-SE precision.
+Z_DECIMALS = 3
+
+
+def _z_fields(beta, se) -> list:
+    """z_tau strings (--cov-mode pooled-only), to Z_DECIMALS decimal places."""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        z = np.asarray(beta, dtype=np.float64) / np.asarray(se, dtype=np.float64)
+    return [f'{v:.{Z_DECIMALS}f}' for v in z.tolist()]
+
+
+def _beta_se_fields(beta, se) -> list:
+    """Interleaved beta_tau / se_tau strings for one SNP, at the output precision."""
+    b = np.asarray(beta, dtype=np.float64)
+    s = np.asarray(se, dtype=np.float64)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        nd = (np.floor(np.log10(np.abs(b))) - np.floor(np.log10(BETA_SE_QUANTUM * s)) + 1)
+    ok = np.isfinite(nd) & (s > 0)
+    nd = np.where(ok, np.clip(nd, 1, 6), 6).astype(int)
+    out = []
+    for bv, sv, n in zip(b.tolist(), s.tolist(), nd.tolist()):
+        out.append(f'{bv:.{n}g}')
+        out.append(f'{sv:.{SE_SIG_DIGITS}g}')
+    return out
+
+
 def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_cov_ids_list,
                       f_cov_scale_list, all_betas_list, n_cov_elements, n_taus, jk_list=None):
     """Write one processed batch to the stage1 outputs.
@@ -1295,9 +1328,7 @@ def write_stats_batch(stats_list, batch_info, args, f_tsv_list, f_cov_list, f_co
 
             beta, se = betas_b[j], ses_b[j]
             row = [str(x) for x in info]
-            for b, s in zip(beta.tolist(), se.tolist()):
-                row.append(f'{b:.6g}')
-                row.append(f'{s:.6g}')
+            row.extend(_beta_se_fields(beta, se))
             # Exactly the denominator the jackknife divides by, summed over blocks.
             row.append(f'{float(d_b[j]):.9g}')
             lines.append('\t'.join(row) + '\n')
@@ -1366,8 +1397,7 @@ def write_stats_batch_fused(fused_list, batch_info, args, f_tsv_list, f_cov_list
             cov_upper = cov_all[j]
 
             row = list(info)
-            for b, s in zip(beta, se):
-                row.extend([f'{b:.6g}', f'{s:.6g}'])
+            row.extend(_beta_se_fields(beta, se))
             d_resid = float(d_resid_batch[j]) if d_resid_batch is not None else float('nan')
             row.append(f'{d_resid:.9g}')
             f_tsv.write('\t'.join(map(str, row)) + '\n')
@@ -1436,9 +1466,7 @@ def write_stats_batch_pooled(pooled_list, batch_info, args, f_tsv_list,
             if not finite[j]:
                 continue
             row = [str(x) for x in info]
-            for b, s in zip(betas[j], se_all[j]):
-                row.append(f'{b:.6g}')
-                row.append(f'{s:.6g}')
+            row.extend(_z_fields(betas[j], se_all[j]))
             row.append(f'{float(d_resid[j]):.9g}')
             lines.append('\t'.join(row) + '\n')
 
@@ -2733,7 +2761,12 @@ def main(argv=None, geno_source=None):
     cols = ['snp_id', 'chr', 'bp', 'effect_allele', 'other_allele']
     for t in taus:
         # Use 3 decimals to avoid tau label collisions on dense grids (e.g. 100 taus).
-        cols.extend([f'beta_tau_{t:.3f}', f'se_tau_{t:.3f}'])
+        if args.cov_mode == COV_MODE_POOLED_ONLY:
+            # se_tau = sqrt(Sigma_0[t, t] / d_resid) exactly, so only z = beta / se is
+            # written; Stage 2 rebuilds beta and se from the Sigma_0 sidecar.
+            cols.append(f'z_tau_{t:.3f}')
+        else:
+            cols.extend([f'beta_tau_{t:.3f}', f'se_tau_{t:.3f}'])
     # Appended last so that anything parsing the beta/se block by position is
     # unaffected. This is the genotype's effective sample size, which Stage 2
     # turns into the per-SNP degrees of freedom of the covariance.

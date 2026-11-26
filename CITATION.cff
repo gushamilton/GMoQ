@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use G-MoQ, please cite it as below."
 title: "G-MoQ: Genomic Method of Quantiles"
-version: 0.8.0
+version: 0.8.1
 license: MIT
 repository-code: "https://github.com/gushamilton/GMoQ"
 authors:

@@ -75,7 +75,7 @@ own.
 
 | file | contents |
 |---|---|
-| `{out}.stage1.tsv.gz` | per SNP: `snp_id chr bp effect_allele other_allele`, `beta_tau_*` and `se_tau_*` for each quantile, and `d_resid` |
+| `{out}.stage1.tsv.gz` | per SNP: `snp_id chr bp effect_allele other_allele`, `beta_tau_*` and `se_tau_*` for each quantile, and `d_resid`. With `--cov-mode pooled-only`, `z_tau_*` instead (`se_tau = sqrt(diag(Sigma_0) / d_resid)`, `beta_tau = z_tau * se_tau`; Stage 2 does this for you) |
 | `{out}.sigma0.tsv.gz`, `{out}.sigma0.meta.json` | pooled cross-quantile covariance, used by Stage 2 by default |
 | `{out}.cov.gz`, `{out}.cov.scale.gz`, `{out}.cov.ids.tsv.gz`, `{out}.cov.meta.json` | per-SNP jackknife covariance, for Stage 2's `cov_source = "jackknife"` |
 

@@ -1,3 +1,12 @@
+# gmoq 0.8.1
+
+* Smaller Stage 1 output. `beta_tau_*` is written to 0.001 of its standard error and `se_tau_*`
+  to four significant digits (about a third smaller). With `--cov-mode pooled-only`, where the
+  standard errors follow exactly from Sigma_0 and `d_resid`, Stage 1 writes `z_tau_*` (to three
+  decimals) instead of `beta_tau_*` and `se_tau_*`, about three times smaller; Stage 2 rebuilds
+  the effects and standard errors from the `.sigma0` sidecar. Estimates change by at most
+  0.0005 standard errors.
+
 # gmoq 0.8.0
 
 * Stage 1 is several times faster end to end. With a `.bgi` index and `--snps`, BGEN records
