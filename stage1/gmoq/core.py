@@ -581,8 +581,13 @@ def make_pooled_bin_plan(Y: np.ndarray, taus: np.ndarray, Q: np.ndarray,
 
 def compute_pooled_binned(G: np.ndarray, plan,
                           min_mac: float = 5.0, min_var: float = 1e-8,
-                          n_threads: int = 1):
-    """O(N) bin-prefix pooled Stage 1 kernel using a prebuilt :func:`make_pooled_bin_plan`."""
+                          n_threads: int = 1,
+                          rowmap: Optional[np.ndarray] = None):
+    """O(N) bin-prefix pooled Stage 1 kernel using a prebuilt :func:`make_pooled_bin_plan`.
+
+    ``rowmap`` (optional) gives, for each of the plan's samples, its row in ``G``,
+    so a ``G`` decoded for a superset of samples is read in place, without a copy.
+    """
     require_cpp_extension("Pooled bin-prefix computation")
     if not HAVE_CPP or not hasattr(cpp_ext, 'stage1_pooled_bin_fast'):
         raise RuntimeError(
@@ -590,7 +595,8 @@ def compute_pooled_binned(G: np.ndarray, plan,
             "rebuild the extension (python setup.py build_ext --inplace)."
         )
     G_f = np.asfortranarray(G, dtype=np.float64)
-    return cpp_ext.stage1_pooled_bin_fast(G_f, plan, min_mac, min_var, int(n_threads))
+    rm = None if rowmap is None else np.ascontiguousarray(rowmap, dtype=np.int64)
+    return cpp_ext.stage1_pooled_bin_fast(G_f, plan, min_mac, min_var, int(n_threads), rm)
 
 
 def make_block_plan(Y_resid: np.ndarray, Q: np.ndarray, block_ids: np.ndarray,

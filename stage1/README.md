@@ -68,8 +68,8 @@ line in a text file, with the options that differ, and give the shared options o
 gmoq-stage1 --jobs jobs.txt --bgen data/chr22.bgen --snps hm3_chr22.txt --threads 8
 ```
 
-The genotypes are read once for all lines; each output is the same as running that line on its
-own.
+Stage 1 reads each variant once and stores dosages only for samples matched to at least one
+analysis. Each line uses its own matched samples and produces the same output as running it alone.
 
 ### Outputs
 

@@ -42,7 +42,7 @@ import time
 import zlib
 from collections import Counter
 from pathlib import Path
-from typing import Optional, List, Set
+from typing import Callable, Iterator, NamedTuple, Optional, List, Set
 
 import numpy as np
 
@@ -1885,15 +1885,14 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
                    kernel_state=None, pooled_plan_list=None, rowmap=None):
     """Run the kernel over one batch and write it out. Returns (compute_s, write_s).
 
-    ``rowmap`` (``--jobs``): ``G_view`` holds every BGEN sample and row
-    ``rowmap[i]`` is this analysis's sample ``i``.  The fast jackknife kernel
-    reads those rows in place; every other path gets them gathered first.
+    With --jobs, rowmap gives each analysis sample's row in the shared batch.
+    The binned pooled and fast jackknife kernels read those rows directly.
     """
     jk_list = None
     fast_jk = (args.cov_mode != COV_MODE_POOLED_ONLY and not use_multi
                and not args.fused_finalize and args.panel_kernel and not args.exact_kernel
                and hasattr(_core.cpp_ext, 'stage1_block_jackknife_fast'))
-    if rowmap is not None and not fast_jk:
+    if rowmap is not None and not fast_jk and pooled_plan_list is None:
         G_view = np.asfortranarray(np.take(G_view, rowmap, axis=0))
         rowmap = None
     if args.cov_mode == COV_MODE_POOLED_ONLY:
@@ -1902,7 +1901,7 @@ def _process_batch(G_view, RIF_resid_list, Q, block_ids, batch_info, args, use_m
         t_compute = time.perf_counter()
         if pooled_plan_list is not None:
             pooled_list = [
-                compute_pooled_binned(G_view, plan, n_threads=args.threads)
+                compute_pooled_binned(G_view, plan, n_threads=args.threads, rowmap=rowmap)
                 for plan in pooled_plan_list
             ]
         else:
@@ -2124,12 +2123,17 @@ def _strip_jobs_option(argv: list) -> list:
     return out
 
 
+class _JobGenotypes(NamedTuple):
+    samples: list
+    batches_for: Callable[[np.ndarray], Iterator]
+
+
 def run_jobs(argv: list, args) -> None:
     """``--jobs``: decode the BGEN once and feed every batch to several analyses.
 
     Each line of ``args.jobs`` is one analysis's own options; the command-line
-    options are shared.  One reader decodes each batch for all BGEN samples into
-    a ring of buffers; every job runs the ordinary single-analysis pipeline on
+    options are shared.  One reader decodes the union of matched samples into
+    a ring of buffers. Every job runs the ordinary single-analysis pipeline on
     those batches (its fast kernel reads its own sample rows in place), so each
     output is exactly what that job would produce run alone.  A buffer is
     reused only once every job has released it.
@@ -2137,6 +2141,7 @@ def run_jobs(argv: list, args) -> None:
     import shlex
     import threading
     import queue as _queue
+    from concurrent.futures import CancelledError, Future
 
     shared = _strip_jobs_option(argv)
     with open(args.jobs) as fh:
@@ -2165,23 +2170,20 @@ def run_jobs(argv: list, args) -> None:
             f"({per_job_threads} kernel thread(s) each, {args.threads} decode threads)")
 
     R = 3
-    ring = [np.empty((n_file, args.batch_size), dtype=np.float64, order='F') for _ in range(R)]
     refs = [0] * R
     cond = threading.Condition()
     abort = threading.Event()
     queues = [_queue.Queue() for _ in range(J)]
     errors = [None] * J
     next_slot = [0]
-    reader_alive = threading.Event()
-    reader_alive.set()
+    matched = [Future() for _ in range(J)]
 
     def get_buffer():
         slot = next_slot[0]
         with cond:
-            while refs[slot] > 0 and not abort.is_set():
-                cond.wait(0.1)
+            cond.wait_for(lambda: refs[slot] == 0 or abort.is_set())
         if abort.is_set():
-            raise RuntimeError("a --jobs analysis failed")
+            raise CancelledError
         return ring[slot]
 
     def make_release(slot):
@@ -2191,46 +2193,31 @@ def run_jobs(argv: list, args) -> None:
                 cond.notify_all()
         return release
 
-    def source(j):
-        q = queues[j]
-        done = False
-        try:
-            while True:
-                item = q.get()
-                if item is None:
-                    done = True
-                    return
-                yield item
-        finally:
-            # On early exit (error) keep releasing so the reader never blocks.
-            while not done:
-                item = q.get()
-                if item is None:
-                    break
-                item[4]()
+    def source(j, indices):
+        # Each job reaches this point after all phenotype, covariate, LOCO and
+        # BGEN matching. Its order is the order used to build its RIF and basis.
+        matched[j].set_result(indices)
+        for batch in iter(queues[j].get, None):
+            if abort.is_set():
+                raise CancelledError
+            yield batch
+        if abort.is_set():
+            raise CancelledError
 
     def run_one(j, line):
         job_argv = shared + shlex.split(line) + ['--threads', str(per_job_threads)]
-        src = source(j)
         try:
-            main(job_argv, geno_source=src)
+            main(job_argv, geno_source=_JobGenotypes(bgen_samples, functools.partial(source, j)))
+        except CancelledError:
+            pass  # The failing job or reader reports the cause.
         except BaseException as exc:
             errors[j] = exc
-            abort.set()
+            with cond:
+                abort.set()
+                cond.notify_all()
+            if not matched[j].done():
+                matched[j].set_result(None)
             logger.exception(f"--jobs analysis {j + 1} failed: {line}")
-        finally:
-            src.close()
-            # If the generator never started, nothing above drained its queue.
-            while True:
-                try:
-                    item = queues[j].get(timeout=0.05)
-                except _queue.Empty:
-                    if not reader_alive.is_set():
-                        break
-                    continue
-                if item is None:
-                    break
-                item[4]()
 
     threads = [threading.Thread(target=run_one, args=(j, ln), name=f"job{j + 1}")
                for j, ln in enumerate(job_lines)]
@@ -2239,8 +2226,20 @@ def run_jobs(argv: list, args) -> None:
 
     skipped = _SkipCount()
     try:
+        rows_by_job = [future.result() for future in matched]
+        if abort.is_set():
+            raise CancelledError
+        used = np.zeros(n_file, dtype=bool)
+        for rows in rows_by_job:
+            used[rows] = True
+        union = np.flatnonzero(used)
+        rowmaps = [None if np.array_equal(rows, union) else np.searchsorted(union, rows)
+                   for rows in rows_by_job]
+        log_mem(f"--jobs: decoding {len(union)} of {n_file} BGEN sample rows")
+        ring = [np.empty((len(union), args.batch_size), dtype=np.float64, order='F')
+                for _ in range(R)]
         batches = _decode_batches_native(
-            variants.records, args.bgen, np.arange(n_file), skipped,
+            variants.records, args.bgen, union, skipped,
             n_threads=args.threads, batch_size=args.batch_size, get_buffer=get_buffer,
             coalesce_gap=int(args.bgen_coalesce_gap * (1 << 20)))
         for batch_info, chrom, k in batches:
@@ -2248,13 +2247,17 @@ def run_jobs(argv: list, args) -> None:
             with cond:
                 refs[slot] = J
             release = make_release(slot)
-            for q in queues:
-                q.put((batch_info, chrom, ring[slot], k, release))
+            for q, rowmap in zip(queues, rowmaps):
+                q.put((batch_info, chrom, ring[slot], k, rowmap, release))
             next_slot[0] = (slot + 1) % R
+    except CancelledError:
+        pass  # Report the failed job after all workers have joined.
+    except BaseException:
+        abort.set()
+        raise
     finally:
         for q in queues:
             q.put(None)
-        reader_alive.clear()
         for t in threads:
             t.join()
     failed = [(j, e) for j, e in enumerate(errors) if e is not None]
@@ -2594,36 +2597,37 @@ def main(argv=None, geno_source=None):
     out_dir = os.path.dirname(args.out) or '.'
     os.makedirs(out_dir, exist_ok=True)
     
-    # Load SNP list if provided
-    snp_list = None
-    if args.snps:
-        snp_list = load_snps_list(args.snps)
-        log_mem(f"Loaded {len(snp_list)} SNPs from {args.snps}")
-    
-    # Open BGEN and get variants
-    variants, bgen_samples, bfile_handle = get_variants_bgen(
-        args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
-        seek_variants=args.seek_variants
-    )
-
-    # bgen does not expose bit depth on its Python variant object.  It is a per-record
-    # field, so each selected variant gets a bounded preamble probe; production 8-bit
-    # records still use the native vectorised dosage path after that small check.
-    native_reason = None
     if geno_source is not None:
-        args.bgen_decoder = BGEN_DECODER_BGEN       # this job decodes nothing itself
-    if args.bgen_decoder != BGEN_DECODER_BGEN:
-        native_reason = native_bgen_decoder_reason(args.bgen, variants)
-        if native_reason is not None and args.bgen_decoder == BGEN_DECODER_NATIVE:
-            raise ValueError(f"--bgen-decoder native is unavailable: {native_reason}")
-    use_native_bgen = args.bgen_decoder != BGEN_DECODER_BGEN and native_reason is None
-    if use_native_bgen:
-        log_mem("Decoding BGEN records natively (parallel zlib + exact float64 dosages)")
-    elif args.bgen_decoder == BGEN_DECODER_AUTO:
-        log_mem(f"Decoding BGEN records with the bgen package: {native_reason}")
-    native_records = variants.records if use_native_bgen else None
-    variants = iter(variants)
-    
+        bgen_samples = geno_source.samples
+    else:
+        # Load SNP list if provided
+        snp_list = None
+        if args.snps:
+            snp_list = load_snps_list(args.snps)
+            log_mem(f"Loaded {len(snp_list)} SNPs from {args.snps}")
+
+        # Open BGEN and get variants
+        variants, bgen_samples, bfile_handle = get_variants_bgen(
+            args.bgen, args.sample, snp_list, args.allow_multiallelic_rsids,
+            seek_variants=args.seek_variants
+        )
+
+        # bgen does not expose bit depth on its Python variant object.  It is a per-record
+        # field, so each selected variant gets a bounded preamble probe; production 8-bit
+        # records still use the native vectorised dosage path after that small check.
+        native_reason = None
+        if args.bgen_decoder != BGEN_DECODER_BGEN:
+            native_reason = native_bgen_decoder_reason(args.bgen, variants)
+            if native_reason is not None and args.bgen_decoder == BGEN_DECODER_NATIVE:
+                raise ValueError(f"--bgen-decoder native is unavailable: {native_reason}")
+        use_native_bgen = args.bgen_decoder != BGEN_DECODER_BGEN and native_reason is None
+        if use_native_bgen:
+            log_mem("Decoding BGEN records natively (parallel zlib + exact float64 dosages)")
+        elif args.bgen_decoder == BGEN_DECODER_AUTO:
+            log_mem(f"Decoding BGEN records with the bgen package: {native_reason}")
+        native_records = variants.records if use_native_bgen else None
+        variants = iter(variants)
+
     # Match samples
     valid_mask, bgen_indices = match_samples(bgen_samples, sample_ids)
     N_matched = len(bgen_indices)
@@ -2864,9 +2868,7 @@ def main(argv=None, geno_source=None):
         idx_in_batch = 0
 
         if geno_source is not None:
-            # Shared decoder (--jobs): every batch holds all BGEN samples; this
-            # job's kernel reads its own rows (bgen_indices) in place.
-            for batch_info, variant_chr, G_all, k, release in geno_source:
+            for batch_info, variant_chr, G_all, k, rowmap, release in geno_source.batches_for(bgen_indices):
                 try:
                     if loco_predictions is not None and variant_chr != active_chr:
                         _switch_chromosome(variant_chr)
@@ -2876,7 +2878,7 @@ def main(argv=None, geno_source=None):
                         args, use_multi, f_tsv_list, f_cov_list, f_cov_ids_list,
                         f_cov_scale_list, all_betas_list, n_cov_elements, T,
                         sigma0_sd_list, kernel_state, pooled_plan_list,
-                        rowmap=bgen_indices,
+                        rowmap=rowmap,
                     )
                 finally:
                     release()
