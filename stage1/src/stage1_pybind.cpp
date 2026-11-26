@@ -1639,7 +1639,7 @@ PYBIND11_MODULE(_stage1_cpp, m) {
           "O(N) bin-prefix pooled Stage 1 kernel using a prebuilt PooledBinPlan",
           py::arg("G"), py::arg("plan"),
           py::arg("min_mac") = 5.0, py::arg("min_var") = 1e-8,
-          py::arg("n_threads") = 1);
+          py::arg("n_threads") = 1, py::arg("rowmap") = py::none());
 
     m.def("stage1_finalize_block_scores_static", &stage1_finalize_block_scores_impl<true>,
           "Experimental fused stage1 finalization with static scheduling",

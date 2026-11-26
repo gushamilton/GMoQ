@@ -366,13 +366,28 @@ inline py::tuple pooled_bin_fast(
     const PooledBinPlan& plan,
     double min_mac,
     double min_var,
-    int n_threads
+    int n_threads,
+    py::object rowmap_obj
 ) {
     auto G_buf = G_arr.request();
     if (G_buf.ndim != 2) throw std::runtime_error("G must be 2-D.");
-    const size_t N = static_cast<size_t>(G_buf.shape[0]);
+    const size_t N_src = static_cast<size_t>(G_buf.shape[0]);
     const size_t M = static_cast<size_t>(G_buf.shape[1]);
-    if (N != plan.N) {
+    const size_t N = plan.N;
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> rowmap_arr;
+    const int64_t* rowmap = nullptr;
+    if (!rowmap_obj.is_none()) {
+        rowmap_arr = rowmap_obj.cast<py::array_t<int64_t, py::array::c_style | py::array::forcecast>>();
+        if (rowmap_arr.ndim() != 1 || static_cast<size_t>(rowmap_arr.shape(0)) != N) {
+            throw std::runtime_error("rowmap must have one entry per plan sample.");
+        }
+        rowmap = rowmap_arr.data();
+        for (size_t i = 0; i < N; i++) {
+            if (rowmap[i] < 0 || static_cast<size_t>(rowmap[i]) >= N_src) {
+                throw std::runtime_error("rowmap entry out of range of G's rows.");
+            }
+        }
+    } else if (N_src != N) {
         throw std::runtime_error("G has a different number of rows than PooledBinPlan.");
     }
     const size_t T = plan.T;
@@ -425,13 +440,17 @@ inline py::tuple pooled_bin_fast(
         #pragma omp for schedule(static)
         for (int64_t j = 0; j < static_cast<int64_t>(M); j++) {
             const size_t jj = static_cast<size_t>(j);
-            const double* __restrict__ col = G_ptr + jj * N;
+            const double* __restrict__ col = G_ptr + jj * N_src;
 
             // Find first finite value for shift-stable one-pass variance.
             size_t first = 0;
-            while (first < N && !std::isfinite(col[first])) first++;
+            if (rowmap == nullptr) {
+                while (first < N && !std::isfinite(col[first])) first++;
+            } else {
+                while (first < N && !std::isfinite(col[rowmap[first]])) first++;
+            }
             if (N - first < 100) continue;
-            const double g0 = col[first];
+            const double g0 = col[rowmap == nullptr ? first : static_cast<size_t>(rowmap[first])];
 
             std::fill(bsum.begin(), bsum.end(), 0.0);
             std::fill(bmiss.begin(), bmiss.end(), 0u);
@@ -440,8 +459,7 @@ inline py::tuple pooled_bin_fast(
             size_t n_valid = 0;
             double d_sum = 0.0;
             double d_sum2 = 0.0;
-            for (size_t i = first; i < N; i++) {
-                const double v = col[i];
+            const auto accumulate = [&](size_t i, double v) {
                 const size_t b = static_cast<size_t>(bin_ptr[i]);
                 if (std::isfinite(v)) {
                     const double dv = v - g0;
@@ -452,6 +470,11 @@ inline py::tuple pooled_bin_fast(
                 } else {
                     bmiss[b]++;
                 }
+            };
+            if (rowmap == nullptr) {
+                for (size_t i = first; i < N; i++) accumulate(i, col[i]);
+            } else {
+                for (size_t i = first; i < N; i++) accumulate(i, col[rowmap[i]]);
             }
             if (n_valid < 100) continue;
 
@@ -526,12 +549,20 @@ inline py::tuple pooled_bin_fast(
                         std::fill(gt.begin(), gt.begin() + rlen * PBLK, 0.0);
                     }
                     for (size_t p = 0; p < np; p++) {
-                        const double* __restrict__ col = G_ptr + cols_p[p] * N + i0;
                         const double gm = gm_p[p];
                         double* __restrict__ dst = gt.data() + p;
-                        for (size_t r = 0; r < rlen; r++) {
-                            const double v = col[r];
-                            dst[r * PBLK] = std::isfinite(v) ? (v - gm) : 0.0;
+                        if (rowmap == nullptr) {
+                            const double* __restrict__ col = G_ptr + cols_p[p] * N_src + i0;
+                            for (size_t r = 0; r < rlen; r++) {
+                                const double v = col[r];
+                                dst[r * PBLK] = std::isfinite(v) ? (v - gm) : 0.0;
+                            }
+                        } else {
+                            const double* __restrict__ col = G_ptr + cols_p[p] * N_src;
+                            for (size_t r = 0; r < rlen; r++) {
+                                const double v = col[rowmap[i0 + r]];
+                                dst[r * PBLK] = std::isfinite(v) ? (v - gm) : 0.0;
+                            }
                         }
                     }
                     const double* __restrict__ qchunk = Q_pad + i0 * Kpad;
